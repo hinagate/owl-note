@@ -36,14 +36,14 @@ export function renderSidebar(
   makeDropTarget(allRow, rootId); // drop a note or a notebook here → moves it to the top level
   container.appendChild(allRow);
 
-  // ASCII-tree guide: each ancestor contributes "│  " (its subtree continues) or
-  // "   " (it was the last child), then "├─"/"└─" for this node, then the chevron
-  // (▸/▾) or a space for leaves. Rendered in a monospace span so the connectors line up.
-  const guideText = (ancestorLasts, isLast, hasKids, isCollapsed) => {
+  // ASCII-tree connector: each ancestor contributes "│  " (its subtree continues)
+  // or "   " (it was the last child), then "├─"/"└─" for this node. Rendered in a
+  // monospace span so the connectors line up. The expand/collapse toggle is a
+  // SEPARATE, larger control (see below) rather than a tiny char in this string.
+  const connectorText = (ancestorLasts, isLast) => {
     let s = '';
     for (const last of ancestorLasts) s += last ? '   ' : '│  ';
     s += isLast ? '└─' : '├─';
-    s += hasKids ? (isCollapsed ? '▸' : '▾') : ' ';
     return s;
   };
 
@@ -59,11 +59,22 @@ export function renderSidebar(
     });
     row.addEventListener('click', () => onSelect(node.id));
 
+    // Light monospace connectors for structure + a separate, prominent toggle.
+    const guideWrap = document.createElement('span');
+    guideWrap.className = 'nb-guidewrap';
     const guide = document.createElement('span');
-    guide.className = 'nb-guide' + (hasKids ? ' toggle' : '');
-    guide.textContent = guideText(ancestorLasts, isLast, hasKids, isCollapsed);
-    if (hasKids) guide.addEventListener('click', (e) => { e.stopPropagation(); if (onToggleCollapse) onToggleCollapse(node.id); });
-    row.appendChild(guide);
+    guide.className = 'nb-guide';
+    guide.textContent = connectorText(ancestorLasts, isLast);
+    guideWrap.appendChild(guide);
+    const toggle = document.createElement('span');
+    toggle.className = 'nb-toggle' + (hasKids ? '' : ' leaf');
+    if (hasKids) {
+      toggle.textContent = isCollapsed ? '▶' : '▼';
+      toggle.title = isCollapsed ? 'Expand' : 'Collapse';
+      toggle.addEventListener('click', (e) => { e.stopPropagation(); if (onToggleCollapse) onToggleCollapse(node.id); });
+    }
+    guideWrap.appendChild(toggle);
+    row.appendChild(guideWrap);
 
     const label = document.createElement('span');
     label.className = 'nb-label';

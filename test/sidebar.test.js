@@ -151,30 +151,32 @@ describe('nested notebooks', () => {
   };
 
   const guideOf = (folder) => folder.querySelector('.nb-guide').textContent;
+  const toggleOf = (folder) => folder.querySelector('.nb-toggle');
 
-  it('draws ASCII connectors: a chevron on parents, none on leaves, children deeper', () => {
+  it('draws ASCII connectors with a clear toggle on parents and none on leaves', () => {
     const el = make({ collapsed: new Set() });
     const folders = [...el.querySelectorAll('.item.folder')];
     expect(folders.map((f) => f.querySelector('.nb-label').textContent)).toEqual(['A', 'A1', 'B']);
-    expect(guideOf(folders[0])).toContain('▾');                 // A is an expanded parent
-    expect(/[▸▾]/.test(guideOf(folders[2]))).toBe(false);       // B is a leaf — no chevron
-    expect(guideOf(folders[1]).length).toBeGreaterThan(guideOf(folders[0]).length); // child guide is longer (deeper)
+    expect(toggleOf(folders[0]).textContent).toBe('▼');               // A is an expanded parent
+    expect(toggleOf(folders[2]).classList.contains('leaf')).toBe(true); // B is a leaf
+    expect(toggleOf(folders[2]).textContent).toBe('');                // leaf has no toggle glyph
+    expect(guideOf(folders[1]).length).toBeGreaterThan(guideOf(folders[0]).length); // child connector is deeper
     expect(guideOf(folders[1])).toContain('│'); // A still has a sibling (B), so the child shows a continuation bar
   });
 
-  it('clicking a parent connector toggles collapse, not select', () => {
+  it('clicking a parent toggle collapses, not selects', () => {
     const onToggleCollapse = vi.fn();
     const onSelect = vi.fn();
     const el = make({ collapsed: new Set(), onToggleCollapse, onSelect });
-    el.querySelector('.item.folder .nb-guide').click(); // first folder = A (a parent)
+    el.querySelector('.item.folder .nb-toggle').click(); // first folder = A (a parent)
     expect(onToggleCollapse).toHaveBeenCalledWith('a');
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it('hides children of a collapsed notebook and shows a ▸ marker', () => {
+  it('hides children of a collapsed notebook and shows a ▶ marker', () => {
     const el = make({ collapsed: new Set(['a']) });
     expect([...el.querySelectorAll('.item.folder .nb-label')].map((l) => l.textContent)).toEqual(['A', 'B']);
-    expect(el.querySelector('.item.folder .nb-guide').textContent).toContain('▸');
+    expect(el.querySelector('.item.folder .nb-toggle').textContent).toBe('▶');
   });
 
   it('dropping a notebook onto another calls onMoveNotebook(child, target)', () => {
