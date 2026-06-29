@@ -9,7 +9,7 @@ describe('sidebar', () => {
     const el = document.getElementById('sidebar');
     renderSidebar(el, {
       rootId: 'r', activeId: 'nb1',
-      notebooks: [{ id: 'nb1', title: 'Code Base' }, { id: 'nb2', title: 'Recipes' }],
+      notebooks: [{ id: 'nb1', title: 'Code Base', parentId: 'r' }, { id: 'nb2', title: 'Recipes', parentId: 'r' }],
       onSelect, onNewNotebook: vi.fn(),
     });
     const rows = el.querySelectorAll('.item');
@@ -26,7 +26,7 @@ describe('sidebar', () => {
     const el = document.getElementById('sidebar');
     renderSidebar(el, {
       rootId: 'r', activeId: 'r',
-      notebooks: [{ id: 'nb1', title: 'Code Base' }],
+      notebooks: [{ id: 'nb1', title: 'Code Base', parentId: 'r' }],
       onSelect, onNewNotebook: vi.fn(), onDeleteNotebook,
     });
     const del = el.querySelector('.nb-delete');
@@ -40,7 +40,7 @@ describe('sidebar', () => {
     const el = document.getElementById('sidebar');
     renderSidebar(el, {
       rootId: 'r', activeId: 'r',
-      notebooks: [{ id: 'nb1', title: 'Code Base' }],
+      notebooks: [{ id: 'nb1', title: 'Code Base', parentId: 'r' }],
       onSelect: vi.fn(), onNewNotebook: vi.fn(),
     });
     expect(el.querySelector('.nb-delete')).toBeNull();
@@ -52,7 +52,7 @@ describe('sidebar', () => {
     const el = document.getElementById('sidebar');
     renderSidebar(el, {
       rootId: 'r', activeId: 'r',
-      notebooks: [{ id: 'nb1', title: 'Code Base' }],
+      notebooks: [{ id: 'nb1', title: 'Code Base', parentId: 'r' }],
       onSelect, onNewNotebook: vi.fn(), onRenameNotebook,
     });
     const rename = el.querySelector('.nb-rename');
@@ -67,7 +67,7 @@ describe('sidebar', () => {
     const el = document.getElementById('sidebar');
     renderSidebar(el, {
       rootId: 'r', activeId: 'r',
-      notebooks: [{ id: 'nb1', title: 'Recipes' }],
+      notebooks: [{ id: 'nb1', title: 'Recipes', parentId: 'r' }],
       onSelect: vi.fn(), onNewNotebook: vi.fn(), onRenameNotebook,
     });
     el.querySelector('.nb-label').dispatchEvent(new Event('dblclick', { bubbles: true }));
@@ -78,7 +78,7 @@ describe('sidebar', () => {
     const el = document.getElementById('sidebar');
     renderSidebar(el, {
       rootId: 'r', activeId: 'r',
-      notebooks: [{ id: 'nb1', title: 'Code Base' }],
+      notebooks: [{ id: 'nb1', title: 'Code Base', parentId: 'r' }],
       onSelect: vi.fn(), onNewNotebook: vi.fn(),
     });
     expect(el.querySelector('.nb-rename')).toBeNull();
@@ -89,12 +89,12 @@ describe('sidebar', () => {
     const el = document.getElementById('sidebar');
     renderSidebar(el, {
       rootId: 'r', activeId: 'r',
-      notebooks: [{ id: 'nb1', title: 'Code Base' }],
+      notebooks: [{ id: 'nb1', title: 'Code Base', parentId: 'r' }],
       onSelect: vi.fn(), onNewNotebook: vi.fn(), onDropNote,
     });
     const row = el.querySelector('.item.folder');
     const ev = new Event('drop', { bubbles: true });
-    ev.dataTransfer = { getData: () => 'b1' };
+    ev.dataTransfer = { getData: (k) => (k === 'text/plain' ? 'b1' : '') };
     let prevented = false;
     ev.preventDefault = () => { prevented = true; };
     row.dispatchEvent(ev);
@@ -107,12 +107,12 @@ describe('sidebar', () => {
     const el = document.getElementById('sidebar');
     renderSidebar(el, {
       rootId: 'r', activeId: 'nb1',
-      notebooks: [{ id: 'nb1', title: 'X' }],
+      notebooks: [{ id: 'nb1', title: 'X', parentId: 'r' }],
       onSelect: vi.fn(), onNewNotebook: vi.fn(), onDropNote,
     });
     const allRow = el.querySelector('.item'); // first .item is "All notes"
     const ev = new Event('drop', { bubbles: true });
-    ev.dataTransfer = { getData: () => 'b2' };
+    ev.dataTransfer = { getData: (k) => (k === 'text/plain' ? 'b2' : '') };
     ev.preventDefault = () => {};
     allRow.dispatchEvent(ev);
     expect(onDropNote).toHaveBeenCalledWith('r', 'b2');
@@ -123,14 +123,65 @@ describe('sidebar', () => {
     const el = document.getElementById('sidebar');
     renderSidebar(el, {
       rootId: 'r', activeId: 'r',
-      notebooks: [{ id: 'nb1', title: 'X' }],
+      notebooks: [{ id: 'nb1', title: 'X', parentId: 'r' }],
       onSelect: vi.fn(), onNewNotebook: vi.fn(), onDropNote,
     });
     const row = el.querySelector('.item.folder');
     const ev = new Event('drop', { bubbles: true });
-    ev.dataTransfer = { getData: () => '__draft__' };
+    ev.dataTransfer = { getData: (k) => (k === 'text/plain' ? '__draft__' : '') };
     ev.preventDefault = () => {};
     row.dispatchEvent(ev);
     expect(onDropNote).not.toHaveBeenCalled();
+  });
+});
+
+describe('nested notebooks', () => {
+  const make = (extra) => {
+    const el = document.getElementById('sidebar');
+    renderSidebar(el, {
+      rootId: 'r', activeId: 'r',
+      notebooks: [
+        { id: 'a', title: 'A', parentId: 'r' },
+        { id: 'a1', title: 'A1', parentId: 'a' },
+        { id: 'b', title: 'B', parentId: 'r' },
+      ],
+      onSelect: vi.fn(), onNewNotebook: vi.fn(), ...extra,
+    });
+    return el;
+  };
+
+  it('renders children indented under their parent, with a chevron only on parents', () => {
+    const el = make({ collapsed: new Set() });
+    const folders = [...el.querySelectorAll('.item.folder')];
+    expect(folders.map((f) => f.querySelector('.nb-label').textContent)).toEqual(['A', 'A1', 'B']);
+    expect(folders[0].querySelector('.nb-twisty').classList.contains('leaf')).toBe(false); // A has a child
+    expect(folders[2].querySelector('.nb-twisty').classList.contains('leaf')).toBe(true);  // B is a leaf
+    expect(parseInt(folders[1].style.paddingLeft)).toBeGreaterThan(parseInt(folders[0].style.paddingLeft));
+  });
+
+  it('clicking a chevron toggles collapse, not select', () => {
+    const onToggleCollapse = vi.fn();
+    const onSelect = vi.fn();
+    const el = make({ collapsed: new Set(), onToggleCollapse, onSelect });
+    el.querySelector('.item.folder .nb-twisty').click();
+    expect(onToggleCollapse).toHaveBeenCalledWith('a');
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('hides children of a collapsed notebook', () => {
+    const el = make({ collapsed: new Set(['a']) });
+    expect([...el.querySelectorAll('.item.folder .nb-label')].map((l) => l.textContent)).toEqual(['A', 'B']);
+    expect(el.querySelector('.item.folder .nb-twisty').textContent).toBe('▸');
+  });
+
+  it('dropping a notebook onto another calls onMoveNotebook(child, target)', () => {
+    const onMoveNotebook = vi.fn();
+    const el = make({ collapsed: new Set(), onMoveNotebook });
+    const b = [...el.querySelectorAll('.item.folder')].find((f) => f.querySelector('.nb-label').textContent === 'B');
+    const ev = new Event('drop', { bubbles: true });
+    ev.dataTransfer = { getData: (k) => (k === 'application/x-owl-notebook' ? 'a' : '') };
+    ev.preventDefault = () => {};
+    b.dispatchEvent(ev);
+    expect(onMoveNotebook).toHaveBeenCalledWith('a', 'b');
   });
 });

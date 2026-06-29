@@ -59,6 +59,23 @@ describe('app integration', () => {
     expect(crumbs).toEqual(['📓 Notes', 'Work']);
   });
 
+  it('creates a sub-notebook under the selected notebook', async () => {
+    const app = await import('../src/app/app.js');
+    const bm = await import('../src/lib/bookmarks.js');
+    window.prompt = () => 'Child';
+    const root = await bm.ensureRoot();
+    const parent = await bm.createNotebook(root, 'Parent');
+    await app.initUI(root);
+    [...document.querySelectorAll('#sidebar .item.folder')]
+      .find((x) => x.querySelector('.nb-label')?.textContent === 'Parent').click();
+    await new Promise((r) => setTimeout(r, 10));
+    document.querySelector('#sidebar button.new-notebook').click();
+    await new Promise((r) => setTimeout(r, 15));
+    const child = (await bm.listNotebooks(root)).find((n) => n.title === 'Child');
+    expect(child).toBeTruthy();
+    expect(child.parentId).toBe(parent); // nested under the selected notebook, not root
+  });
+
   it('shows a note created outside the app (Save-selection context menu) without a manual refresh', async () => {
     const app = await import('../src/app/app.js');
     const bm = await import('../src/lib/bookmarks.js');

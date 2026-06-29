@@ -150,6 +150,11 @@ export async function moveNote(bookmarkId, folderId) {
   await chrome.bookmarks.move(bookmarkId, { parentId: folderId });
 }
 
+// Re-parent a notebook folder (used by drag-to-re-nest in the sidebar).
+export async function moveNotebook(id, parentId) {
+  await chrome.bookmarks.move(id, { parentId });
+}
+
 export async function deleteNote(bookmarkId) {
   await chrome.bookmarks.remove(bookmarkId);
 }

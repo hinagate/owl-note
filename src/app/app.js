@@ -19,6 +19,7 @@ import { docxToMarkdown } from '../lib/docx-import.js';
 import { saveNote, urlByteLength, MAX_URL_BYTES, WARN_URL_BYTES } from '../lib/save-note.js';
 import { ensureTrash, trashNotes, restoreNotes, deleteForever } from '../lib/trash.js';
 import { rangeHandles } from '../lib/list-selection.js';
+import { isSelfOrDescendant } from '../lib/notebook-tree.js';
 
 export { saveNote, MAX_URL_BYTES, WARN_URL_BYTES }; // moved to ../lib/save-note.js
 
@@ -48,7 +49,7 @@ export function toast(message, isWarn = false) {
 
 const recentIds = []; // ids of notes created this session — float to the top until reload (in-memory)
 
-const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, query: '', notes: [], notebooks: [], hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1 };
+const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1 };
 
 export function resetUI() {
   ui.rootId = null;
@@ -62,6 +63,7 @@ export function resetUI() {
   ui.query = '';
   ui.notes = [];
   ui.notebooks = [];
+  ui.collapsed = new Set();
   ui.hashWired = false;
   ui.isNew = false;
   ui.selected = new Set(); ui.anchor = null; ui.focus = -1;
@@ -71,6 +73,9 @@ export async function initUI(rootId) {
   ui.rootId = rootId;
   ui.activeFolder = rootId;
   ui.trashId = await ensureTrash(rootId);
+  // Per-device sidebar collapse state (bookmark ids differ per device, so don't sync it).
+  const storedCollapsed = (await chrome.storage.local.get('owl:collapsed'))['owl:collapsed'];
+  ui.collapsed = new Set(Array.isArray(storedCollapsed) ? storedCollapsed : []);
   // Repair notes whose bookmark URL embeds an old/foreign extension id (e.g. created
   // by an unpacked dev build) so clicking them opens this extension instead of being
   // blocked by Chrome. No-op once every note already uses the current id.
@@ -242,6 +247,10 @@ function wireLiveRefresh() {
   c.bookmarks.onRemoved?.addListener(liveRefreshNoteList);
 }
 
+async function persistCollapsed() {
+  try { await chrome.storage.local.set({ 'owl:collapsed': [...ui.collapsed] }); } catch { /* best-effort */ }
+}
+
 async function refreshPanes() {
   ui.notebooks = await bm.listNotebooks(ui.rootId); // cached for the editor breadcrumb (sync path lookup)
   const notebooks = ui.notebooks.filter((nb) => nb.id !== ui.trashId);
@@ -250,11 +259,16 @@ async function refreshPanes() {
     rootId: ui.rootId,
     notebooks,
     activeId: ui.activeFolder,
+    collapsed: ui.collapsed,
     onSelect: async (id) => { ui.selected = new Set(); ui.anchor = null; ui.focus = -1; ui.activeFolder = id; await refreshPanes(); },
     onNewNotebook: async () => {
       const title = prompt('Notebook name?');
       if (!title) return;
-      const id = await bm.createNotebook(ui.rootId, title);
+      // Create under the selected notebook (a sub-notebook), or at the top level
+      // when "All notes (root)" or Trash is selected.
+      const parent = (ui.activeFolder && ui.activeFolder !== ui.trashId) ? ui.activeFolder : ui.rootId;
+      const id = await bm.createNotebook(parent, title);
+      if (parent !== ui.rootId) { ui.collapsed.delete(parent); await persistCollapsed(); } // reveal the new child
       ui.activeFolder = id; // select + focus the new notebook immediately
       await refreshPanes();
     },
@@ -264,6 +278,19 @@ async function refreshPanes() {
       await dropNote(bookmarkId, folderId);
       await refreshPanes();
       toast('Note moved');
+    },
+    onMoveNotebook: async (childId, newParentId) => {
+      if (childId === newParentId) return;
+      if (isSelfOrDescendant(ui.notebooks, childId, newParentId)) { toast("Can't move a notebook into itself", true); return; }
+      await bm.moveNotebook(childId, newParentId);
+      if (newParentId !== ui.rootId) { ui.collapsed.delete(newParentId); await persistCollapsed(); } // reveal the moved notebook
+      await refreshPanes();
+      toast('Notebook moved');
+    },
+    onToggleCollapse: async (id) => {
+      if (ui.collapsed.has(id)) ui.collapsed.delete(id); else ui.collapsed.add(id);
+      await persistCollapsed();
+      await refreshPanes();
     },
     trashId: ui.trashId,
     trashCount,
@@ -381,7 +408,11 @@ async function renameNotebook(id, current) {
 }
 
 async function deleteNotebook(id) {
-  if (!confirm('Delete this notebook and all its notes? This cannot be undone.')) return;
+  const hasSubs = (ui.notebooks || []).some((nb) => nb.id !== id && isSelfOrDescendant(ui.notebooks, id, nb.id));
+  const msg = hasSubs
+    ? 'Delete this notebook, its sub-notebooks, and all their notes? This cannot be undone.'
+    : 'Delete this notebook and all its notes? This cannot be undone.';
+  if (!confirm(msg)) return;
   const notes = await bm.allNotes(id);
   const deleted = new Set(notes.map((n) => n.bookmarkId));
   for (const n of notes) {

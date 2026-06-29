@@ -84,6 +84,9 @@ body.resizing { user-select: none; cursor: col-resize; }
 #sidebar .item:hover { background: #e9ebef; }
 #sidebar .item.active { background: rgba(45, 190, 96, 0.14); color: var(--accent-dark); font-weight: 600; }
 #sidebar .item.folder .nb-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#sidebar .nb-twisty { flex: 0 0 auto; width: 14px; text-align: center; font-size: 9px; color: var(--muted); cursor: pointer; user-select: none; }
+#sidebar .nb-twisty:hover { color: var(--accent-dark); }
+#sidebar .nb-twisty.leaf { cursor: default; }
 #sidebar .nb-rename,
 #sidebar .nb-delete {
   border: none; background: transparent; cursor: pointer; opacity: 0;
