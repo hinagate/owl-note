@@ -44,6 +44,21 @@ describe('app integration', () => {
     expect(titles).toEqual(['Third', 'Second', 'First']);
   });
 
+  it("shows the open note's notebook path in the editor breadcrumb", async () => {
+    const app = await import('../src/app/app.js');
+    const bm = await import('../src/lib/bookmarks.js');
+    const { encode } = await import('../src/lib/codec.js');
+    const root = await bm.ensureRoot();
+    const work = await bm.createNotebook(root, 'Work');
+    await bm.createNote(work, 'Spec', await encode({ id: 'n1', title: 'Spec', body: 'x', version: 1, hash: 'h' }));
+    await app.initUI(root); // root view lists every note, incl. the one inside Work
+    const card = [...document.querySelectorAll('#note-list .item.card')].find((c) => c.textContent.includes('Spec'));
+    card.click();
+    await new Promise((r) => setTimeout(r, 0)); // let openBookmark settle
+    const crumbs = [...document.querySelectorAll('#editor .editor-breadcrumb .crumb')].map((c) => c.textContent);
+    expect(crumbs).toEqual(['📓 Notes', 'Work']);
+  });
+
   it('shows a note created outside the app (Save-selection context menu) without a manual refresh', async () => {
     const app = await import('../src/app/app.js');
     const bm = await import('../src/lib/bookmarks.js');

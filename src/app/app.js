@@ -48,7 +48,7 @@ export function toast(message, isWarn = false) {
 
 const recentIds = []; // ids of notes created this session — float to the top until reload (in-memory)
 
-const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, query: '', notes: [], hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1 };
+const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, query: '', notes: [], notebooks: [], hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1 };
 
 export function resetUI() {
   ui.rootId = null;
@@ -61,6 +61,7 @@ export function resetUI() {
   ui.editor = null;
   ui.query = '';
   ui.notes = [];
+  ui.notebooks = [];
   ui.hashWired = false;
   ui.isNew = false;
   ui.selected = new Set(); ui.anchor = null; ui.focus = -1;
@@ -242,7 +243,8 @@ function wireLiveRefresh() {
 }
 
 async function refreshPanes() {
-  const notebooks = (await bm.listNotebooks(ui.rootId)).filter((nb) => nb.id !== ui.trashId);
+  ui.notebooks = await bm.listNotebooks(ui.rootId); // cached for the editor breadcrumb (sync path lookup)
+  const notebooks = ui.notebooks.filter((nb) => nb.id !== ui.trashId);
   const trashCount = (await loadNotes(ui.trashId)).length;
   renderSidebar(document.getElementById('sidebar'), {
     rootId: ui.rootId,
@@ -281,7 +283,30 @@ async function refreshPanes() {
   // interactions never clobber in-progress edits or steal search focus.
 }
 
+// Build the clickable notebook path (root → the note's folder) for the editor breadcrumb.
+function folderPath(folderId) {
+  if (folderId === ui.trashId) return [{ id: ui.trashId, title: '🗑 Trash' }];
+  const byId = new Map((ui.notebooks || []).map((n) => [n.id, n]));
+  const chain = [];
+  let cur = folderId;
+  while (cur && cur !== ui.rootId && byId.has(cur)) {
+    chain.unshift({ id: cur, title: byId.get(cur).title });
+    cur = byId.get(cur).parentId;
+  }
+  chain.unshift({ id: ui.rootId, title: bm.ROOT_TITLE });
+  return chain;
+}
+
+async function navigateToFolder(id) {
+  ui.selected = new Set(); ui.anchor = null; ui.focus = -1;
+  ui.activeFolder = id;
+  await refreshPanes();
+}
+
 function renderCurrentEditor(opts = {}) {
+  const noteFolderId = ui.activeLocalId
+    ? (ui.activeLocalFolderId ?? ui.activeFolder)
+    : (ui.current?.folderId ?? ui.activeFolder);
   ui.editor = renderEditor(document.getElementById('editor'), {
     title: ui.current ? ui.current.title : '',
     body: ui.current ? ui.current.body : '',
@@ -318,6 +343,8 @@ function renderCurrentEditor(opts = {}) {
       else await refreshPanes();
     },
     onDelete: ui.current ? () => deleteCurrentNote() : null,
+    breadcrumb: ui.current ? folderPath(noteFolderId) : [],
+    onNavigate: (id) => navigateToFolder(id),
   });
 }
 

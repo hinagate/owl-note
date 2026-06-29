@@ -6,7 +6,7 @@ import * as panes from './panes.js';
 
 export function renderEditor(
   container,
-  { title = '', body = '', attachments = [], onChange = () => {}, onSave = () => {}, onDelete = null, focusTitle = false, measure = null },
+  { title = '', body = '', attachments = [], onChange = () => {}, onSave = () => {}, onDelete = null, focusTitle = false, measure = null, breadcrumb = [], onNavigate = () => {} },
 ) {
   container.innerHTML = '';
   // Images live in `atts` (as data: URIs); the body only carries short owl-img refs.
@@ -110,7 +110,21 @@ export function renderEditor(
   content.className = 'preview-content';
   preview.appendChild(content);
 
-  container.append(bar, split);
+  // Clickable notebook path for the open note (📓 Notes › Work › Research). Empty
+  // when no note is open — CSS hides the row via :empty.
+  const crumbs = document.createElement('nav');
+  crumbs.className = 'editor-breadcrumb';
+  breadcrumb.forEach((c, i) => {
+    if (i) { const sep = document.createElement('span'); sep.className = 'sep'; sep.textContent = '›'; crumbs.appendChild(sep); }
+    const cb = document.createElement('button');
+    cb.type = 'button';
+    cb.className = 'crumb';
+    cb.textContent = c.title;
+    cb.addEventListener('click', () => onNavigate(c.id));
+    crumbs.appendChild(cb);
+  });
+
+  container.append(crumbs, bar, split);
   growTitle(); // size the title to its content now that it's in the DOM
 
   let sizeSeq = 0; // guards against an older keystroke's measurement landing last
