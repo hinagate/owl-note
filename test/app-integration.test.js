@@ -76,6 +76,61 @@ describe('app integration', () => {
     expect(child.parentId).toBe(parent); // nested under the selected notebook, not root
   });
 
+  it('resolves the breadcrumb path for a note opened via its bookmark URL (hash)', async () => {
+    const app = await import('../src/app/app.js');
+    const bm = await import('../src/lib/bookmarks.js');
+    const { encode } = await import('../src/lib/codec.js');
+    const root = await bm.ensureRoot();
+    const work = await bm.createNotebook(root, 'Work');
+    const payload = await encode({ id: 'h1', title: 'Deep', body: 'x', version: 1, hash: 'h' });
+    await bm.createNote(work, 'Deep', payload);
+    location.hash = '#' + payload; // simulate clicking the note's bookmark (fresh boot)
+    await app.initUI(root);
+    location.hash = ''; // reset so it doesn't leak into other tests
+    const crumbs = [...document.querySelectorAll('#editor .editor-breadcrumb .crumb')].map((c) => c.textContent);
+    expect(crumbs).toEqual(['📓 Notes', 'Work']); // full path, not just the root
+  });
+
+  it('reveals a new sub-notebook even when an ancestor was collapsed', async () => {
+    const app = await import('../src/app/app.js');
+    const bm = await import('../src/lib/bookmarks.js');
+    window.prompt = () => 'Leaf';
+    const root = await bm.ensureRoot();
+    const g = await bm.createNotebook(root, 'Grand');
+    await bm.createNotebook(g, 'Child');
+    await app.initUI(root);
+    const row = (name) => [...document.querySelectorAll('#sidebar .item.folder')].find((x) => x.querySelector('.nb-label')?.textContent === name);
+    row('Child').click(); // select Child
+    await new Promise((r) => setTimeout(r, 10));
+    row('Grand').querySelector('.nb-toggle').click(); // collapse Grand -> Child hidden
+    await new Promise((r) => setTimeout(r, 10));
+    expect(row('Child')).toBeUndefined();
+    document.querySelector('#sidebar button.new-notebook').click(); // create under still-selected Child
+    await new Promise((r) => setTimeout(r, 15));
+    expect(row('Leaf')).toBeTruthy(); // visible: ancestors auto-expanded
+    expect(row('Child')).toBeTruthy();
+  });
+
+  it('updates the open note breadcrumb when its notebook is renamed', async () => {
+    const app = await import('../src/app/app.js');
+    const bm = await import('../src/lib/bookmarks.js');
+    const { encode } = await import('../src/lib/codec.js');
+    const root = await bm.ensureRoot();
+    await bm.createNotebook(root, 'Work');
+    const work = (await bm.listNotebooks(root)).find((n) => n.title === 'Work').id;
+    await bm.createNote(work, 'Note', await encode({ id: 'r1', title: 'Note', body: 'x', version: 1, hash: 'h' }));
+    await app.initUI(root);
+    [...document.querySelectorAll('#note-list .item.card')].find((c) => c.textContent.includes('Note')).click();
+    await new Promise((r) => setTimeout(r, 10));
+    const crumbs = () => [...document.querySelectorAll('#editor .editor-breadcrumb .crumb')].map((c) => c.textContent);
+    expect(crumbs()).toEqual(['📓 Notes', 'Work']);
+    window.prompt = () => 'Job';
+    [...document.querySelectorAll('#sidebar .item.folder')].find((x) => x.querySelector('.nb-label')?.textContent === 'Work')
+      .querySelector('.nb-rename').click();
+    await new Promise((r) => setTimeout(r, 15));
+    expect(crumbs()).toEqual(['📓 Notes', 'Job']); // breadcrumb refreshed in place
+  });
+
   it('shows a note created outside the app (Save-selection context menu) without a manual refresh', async () => {
     const app = await import('../src/app/app.js');
     const bm = await import('../src/lib/bookmarks.js');

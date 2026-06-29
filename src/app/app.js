@@ -268,7 +268,7 @@ async function refreshPanes() {
       // when "All notes (root)" or Trash is selected.
       const parent = (ui.activeFolder && ui.activeFolder !== ui.trashId) ? ui.activeFolder : ui.rootId;
       const id = await bm.createNotebook(parent, title);
-      if (parent !== ui.rootId) { ui.collapsed.delete(parent); await persistCollapsed(); } // reveal the new child
+      if (parent !== ui.rootId) { expandToReveal(parent); await persistCollapsed(); } // reveal the new child + its ancestors
       ui.activeFolder = id; // select + focus the new notebook immediately
       await refreshPanes();
     },
@@ -283,8 +283,9 @@ async function refreshPanes() {
       if (childId === newParentId) return;
       if (isSelfOrDescendant(ui.notebooks, childId, newParentId)) { toast("Can't move a notebook into itself", true); return; }
       await bm.moveNotebook(childId, newParentId);
-      if (newParentId !== ui.rootId) { ui.collapsed.delete(newParentId); await persistCollapsed(); } // reveal the moved notebook
+      if (newParentId !== ui.rootId) { expandToReveal(newParentId); await persistCollapsed(); } // reveal the moved notebook + ancestors
       await refreshPanes();
+      refreshEditorIfFolderAffected(childId); // the open note's breadcrumb path may have changed
       toast('Notebook moved');
     },
     onToggleCollapse: async (id) => {
@@ -325,9 +326,29 @@ function folderPath(folderId) {
 }
 
 async function navigateToFolder(id) {
+  // Guard against a stale breadcrumb crumb pointing at a deleted folder — fall back
+  // to root instead of letting chrome.bookmarks throw "Can't find bookmark for id".
+  if (id !== ui.rootId && id !== ui.trashId) {
+    try { const [n] = await chrome.bookmarks.get(id); if (!n || n.url) id = ui.rootId; } catch { id = ui.rootId; }
+  }
   ui.selected = new Set(); ui.anchor = null; ui.focus = -1;
   ui.activeFolder = id;
   await refreshPanes();
+}
+
+// Un-collapse a folder and all its ancestors so a child placed there is visible.
+function expandToReveal(folderId) {
+  const byId = new Map((ui.notebooks || []).map((n) => [n.id, n]));
+  let cur = folderId;
+  while (cur && cur !== ui.rootId) { ui.collapsed.delete(cur); cur = byId.get(cur)?.parentId; }
+}
+
+// Re-render the editor (refreshing its breadcrumb) only when the open note's folder
+// chain includes `folderId` — e.g. after that notebook is renamed or re-nested.
+function refreshEditorIfFolderAffected(folderId) {
+  if (!ui.current) return;
+  const openFolder = ui.activeLocalId ? ui.activeLocalFolderId : ui.current.folderId;
+  if (openFolder && isSelfOrDescendant(ui.notebooks, folderId, openFolder)) renderCurrentEditor();
 }
 
 function renderCurrentEditor(opts = {}) {
@@ -404,6 +425,7 @@ async function renameNotebook(id, current) {
   if (!trimmed || trimmed === current) return; // empty or unchanged — nothing to do
   await bm.renameFolder(id, trimmed);
   await refreshPanes();
+  refreshEditorIfFolderAffected(id); // update the open note's breadcrumb if it shows this notebook
   toast('Notebook renamed');
 }
 
@@ -418,12 +440,20 @@ async function deleteNotebook(id) {
   for (const n of notes) {
     try { const note = await decode(n.payload); await mirror.removeBackup(note.id); } catch { /* skip malformed */ }
   }
+  // Does the open note live in the deleted subtree? Covers bookmark notes (by id) and
+  // local-only notes (by folder), so a deleted folder can't linger in the breadcrumb.
+  // Computed before deleteFolder, while ui.notebooks still reflects the old tree.
+  const openFolder = ui.activeLocalId ? ui.activeLocalFolderId : (ui.current && ui.current.folderId);
+  const openNoteDeleted = (ui.activeBookmarkId && deleted.has(ui.activeBookmarkId))
+    || (openFolder && (openFolder === id || isSelfOrDescendant(ui.notebooks, id, openFolder)));
+  const activeInSubtree = ui.activeFolder === id || (ui.activeFolder && isSelfOrDescendant(ui.notebooks, id, ui.activeFolder));
   await bm.deleteFolder(id);
-  if (ui.activeFolder === id) ui.activeFolder = ui.rootId;
-  if (ui.activeBookmarkId && deleted.has(ui.activeBookmarkId)) {
+  if (activeInSubtree) ui.activeFolder = ui.rootId;
+  if (openNoteDeleted) {
     ui.current = null;
     ui.activeBookmarkId = null;
     ui.activeLocalId = null;
+    ui.activeLocalFolderId = null;
     renderCurrentEditor();
   }
   await refreshPanes();
@@ -480,8 +510,13 @@ export async function openByHash() {
   const payload = location.hash.replace(/^#/, '');
   if (!payload) return;
   try {
-    ui.current = await decode(payload);
-    ui.activeBookmarkId = null;
+    const note = await decode(payload);
+    // The decoded payload carries no folderId/bookmarkId. Resolve them from the real
+    // bookmark so the breadcrumb shows the right path and edits update it (not duplicate it).
+    let match = null;
+    try { match = (await bm.allNotes(ui.rootId)).find((r) => r.payload === payload); } catch { /* tree read failed */ }
+    ui.current = match ? { ...note, folderId: match.folderId } : note;
+    ui.activeBookmarkId = match ? match.bookmarkId : null;
     ui.activeLocalId = null;
     ui.isNew = false; // an opened note is not a new-note draft
     renderCurrentEditor();
