@@ -147,6 +147,7 @@ body.resizing { user-select: none; cursor: col-resize; }
 .editor-bar { display: flex; gap: 8px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); }
 .editor-bar button { border: 1px solid var(--border); background: #fff; padding: 6px 12px; border-radius: 8px; font-size: 13px; cursor: pointer; }
 .editor-bar button:hover { background: #f1f3f5; }
+.editor-bar .save-status { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .editor-bar .toggle-edit { font-weight: 700; font-size: 15px; line-height: 1; padding: 6px 11px; }
 .editor-bar .reading-hint { font-size: 12px; color: var(--muted); background: #eef0f2; padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
 .editor-bar button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }

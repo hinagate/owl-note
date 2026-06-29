@@ -147,3 +147,81 @@ describe('title lives in the edit pane and stays single-line', () => {
     expect(changes[changes.length - 1]).toBe('one two');
   });
 });
+
+describe('auto-save (debounced)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const typeBody = (text) => {
+    const ta = document.querySelector('#editor textarea.note-body');
+    ta.value = text;
+    ta.dispatchEvent(new Event('input'));
+    return ta;
+  };
+
+  it('saves ~2.5s after typing stops, flagged auto:true', async () => {
+    const onSave = vi.fn().mockResolvedValue({});
+    render({ onSave });
+    typeBody('hello world');
+    expect(onSave).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2600);
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][1]).toEqual({ auto: true });
+  });
+
+  it('coalesces rapid edits into a single save', async () => {
+    const onSave = vi.fn().mockResolvedValue({});
+    render({ onSave });
+    typeBody('a');
+    await vi.advanceTimersByTimeAsync(1500);
+    typeBody('ab'); // resets the debounce window
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(onSave).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it('never auto-creates an empty new note', async () => {
+    const onSave = vi.fn().mockResolvedValue({});
+    renderEditor(document.getElementById('editor'), { title: '', body: '', onSave });
+    typeBody('   '); // whitespace only
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('flushes immediately on blur', async () => {
+    const onSave = vi.fn().mockResolvedValue({});
+    render({ onSave });
+    typeBody('draft').dispatchEvent(new Event('blur'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][1]).toEqual({ auto: true });
+  });
+
+  it('flush() (tab-hide hook) saves the current content', async () => {
+    const onSave = vi.fn().mockResolvedValue({});
+    const api = render({ onSave });
+    typeBody('via flush');
+    await api.flush();
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it('manual Save is flagged auto:false', async () => {
+    const onSave = vi.fn().mockResolvedValue({});
+    render({ onSave });
+    document.querySelector('#editor button.save').click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][1]).toEqual({ auto: false });
+  });
+
+  it('shows a subtle status (Unsaved… → Saved ✓), not a toast', async () => {
+    const onSave = vi.fn().mockResolvedValue({});
+    render({ onSave });
+    const status = document.querySelector('.editor-bar .save-status');
+    typeBody('x');
+    expect(status.textContent).toBe('Unsaved…');
+    await vi.advanceTimersByTimeAsync(2600);
+    expect(status.textContent).toBe('Saved ✓');
+  });
+});

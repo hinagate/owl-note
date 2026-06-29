@@ -48,7 +48,7 @@ export function toast(message, isWarn = false) {
 
 const recentIds = []; // ids of notes created this session — float to the top until reload (in-memory)
 
-const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, query: '', notes: [], hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1 };
+const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, query: '', notes: [], hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1 };
 
 export function resetUI() {
   ui.rootId = null;
@@ -58,6 +58,7 @@ export function resetUI() {
   ui.activeLocalId = null;
   ui.activeLocalFolderId = null;
   ui.current = null;
+  ui.editor = null;
   ui.query = '';
   ui.notes = [];
   ui.hashWired = false;
@@ -79,6 +80,9 @@ export async function initUI(rootId) {
   await openByHash();
   if (!ui.hashWired) {
     window.addEventListener('hashchange', openByHash);
+    // Flush a pending auto-save when the tab is hidden/closed — focus can stay in the
+    // textarea on a tab switch, so the blur flush alone won't always catch it.
+    document.addEventListener('visibilitychange', () => { if (document.hidden) ui.editor?.flush?.(); });
     ui.hashWired = true;
   }
   wireLiveRefresh();
@@ -278,7 +282,7 @@ async function refreshPanes() {
 }
 
 function renderCurrentEditor(opts = {}) {
-  renderEditor(document.getElementById('editor'), {
+  ui.editor = renderEditor(document.getElementById('editor'), {
     title: ui.current ? ui.current.title : '',
     body: ui.current ? ui.current.body : '',
     attachments: ui.current ? (ui.current.attachments || []) : [],
@@ -287,7 +291,7 @@ function renderCurrentEditor(opts = {}) {
     onChange: ({ title, body, attachments }) => {
       if (ui.current) { ui.current.title = title; ui.current.body = body; ui.current.attachments = attachments; }
     },
-    onSave: async ({ title, body, attachments }) => {
+    onSave: async ({ title, body, attachments }, { auto = false } = {}) => {
       const existing = ui.current && (ui.activeBookmarkId || ui.activeLocalId);
       const note = existing
         ? withUpdatedContent(ui.current, { title, body, attachments })
@@ -302,10 +306,16 @@ function renderCurrentEditor(opts = {}) {
       ui.activeLocalId = res.bookmarkId ? null : note.id;
       ui.activeLocalFolderId = res.bookmarkId ? null : folder;
       ui.isNew = false;
-      if (res.status === 'capped') toast('Too large to sync — saved locally only', true);
-      else if (res.status === 'warn') toast('Large note — may not sync across devices', true);
-      else toast('Saved');
-      await refreshPanes();
+      // Auto-saves stay quiet — the editor's inline status confirms them and the size
+      // meter already flags oversized notes. Only manual saves pop a toast.
+      if (!auto) {
+        if (res.status === 'capped') toast('Too large to sync — saved locally only', true);
+        else if (res.status === 'warn') toast('Large note — may not sync across devices', true);
+        else toast('Saved');
+      }
+      // Auto-save only needs the list (snippet/title) refreshed, not the whole shell.
+      if (auto) await refreshNoteList();
+      else await refreshPanes();
     },
     onDelete: ui.current ? () => deleteCurrentNote() : null,
   });
