@@ -19,6 +19,9 @@ export function renderEditor(
   save.className = 'save primary';
   save.textContent = 'Save';
 
+  const status = document.createElement('span'); // subtle auto-save status: Unsaved… / Saving… / Saved ✓
+  status.className = 'save-status';
+
   const codeBtn = document.createElement('button');
   codeBtn.className = 'code-block';
   codeBtn.textContent = '</> Code';
@@ -52,7 +55,7 @@ export function renderEditor(
   readingHint.textContent = '📖 Reading mode';
 
   // viewBtn (« / ») sits to the LEFT of Save — a quick "preview only" reading toggle.
-  bar.append(viewBtn, save, codeBtn, imgBtn, imgInput, listBtn, readingHint);
+  bar.append(viewBtn, save, status, codeBtn, imgBtn, imgInput, listBtn, readingHint);
 
   if (onDelete) {
     const del = document.createElement('button');
@@ -145,7 +148,39 @@ export function renderEditor(
   const fireChange = () => {
     refresh();
     onChange({ title: titleInput.value, body: ta.value, attachments: atts });
+    scheduleAutoSave();
   };
+
+  // --- Auto-save: persist ~2.5s after the user stops editing, and flush on blur /
+  // tab-hide. Subtle status only (no toast spam); empty new notes are never auto-created. ---
+  const SAVE_DELAY = 2500;
+  let saveTimer = null;
+  let saving = false;
+  let resaveQueued = false;
+  const setStatus = (s) => { status.textContent = s; };
+  function scheduleAutoSave() {
+    setStatus('Unsaved…');
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => doSave({ auto: true }), SAVE_DELAY);
+  }
+  async function doSave({ auto }) {
+    clearTimeout(saveTimer);
+    const title = titleInput.value;
+    const body = ta.value;
+    if (auto && !title.trim() && !body.trim()) { setStatus(''); return; } // never auto-create an empty note
+    if (saving) { resaveQueued = true; return; } // a save is already in flight — coalesce edits made during it
+    saving = true;
+    setStatus('Saving…');
+    try {
+      await onSave({ title, body, attachments: pruneAttachments(ta.value, atts) }, { auto });
+      setStatus('Saved ✓');
+    } catch {
+      setStatus("Couldn't save — will retry");
+    } finally {
+      saving = false;
+      if (resaveQueued) { resaveQueued = false; scheduleAutoSave(); }
+    }
+  }
 
   refresh();
   ta.addEventListener('input', fireChange);
@@ -158,8 +193,9 @@ export function renderEditor(
     growTitle();
     fireChange();
   });
-  save.addEventListener('click', () =>
-    onSave({ title: titleInput.value, body: ta.value, attachments: pruneAttachments(ta.value, atts) }));
+  ta.addEventListener('blur', () => doSave({ auto: true }));
+  titleInput.addEventListener('blur', () => doSave({ auto: true }));
+  save.addEventListener('click', () => doSave({ auto: false }));
 
   codeBtn.addEventListener('click', () => {
     const start = ta.selectionStart ?? ta.value.length;
@@ -222,7 +258,7 @@ export function renderEditor(
     titleInput.select();
   }
 
-  return { getBody: () => ta.value, getTitle: () => titleInput.value, getAttachments: () => atts };
+  return { getBody: () => ta.value, getTitle: () => titleInput.value, getAttachments: () => atts, flush: () => doSave({ auto: true }) };
 }
 
 // Add a hover "Copy" button to every rendered code block.

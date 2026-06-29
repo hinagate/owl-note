@@ -14,7 +14,7 @@ describe('editor', () => {
     ta.dispatchEvent(new Event('input'));
     expect(el.querySelector('.preview').innerHTML).toContain('Changed');
     el.querySelector('button.save').click();
-    expect(onSave).toHaveBeenCalledWith({ title: '', body: '# Changed', attachments: [] });
+    expect(onSave).toHaveBeenCalledWith({ title: '', body: '# Changed', attachments: [] }, { auto: false });
     expect(api.getBody()).toBe('# Changed');
   });
 
@@ -25,7 +25,7 @@ describe('editor', () => {
     expect(el.querySelector('.note-title').value).toBe('My Title');
     expect(el.querySelector('.preview-title').textContent).toBe('My Title');
     el.querySelector('button.save').click();
-    expect(onSave).toHaveBeenCalledWith({ title: 'My Title', body: 'x', attachments: [] });
+    expect(onSave).toHaveBeenCalledWith({ title: 'My Title', body: 'x', attachments: [] }, { auto: false });
   });
 
   it('adds a Copy button to code blocks that copies the code text', () => {
