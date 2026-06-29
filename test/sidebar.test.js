@@ -150,28 +150,31 @@ describe('nested notebooks', () => {
     return el;
   };
 
-  it('renders children indented under their parent, with a chevron only on parents', () => {
+  const guideOf = (folder) => folder.querySelector('.nb-guide').textContent;
+
+  it('draws ASCII connectors: a chevron on parents, none on leaves, children deeper', () => {
     const el = make({ collapsed: new Set() });
     const folders = [...el.querySelectorAll('.item.folder')];
     expect(folders.map((f) => f.querySelector('.nb-label').textContent)).toEqual(['A', 'A1', 'B']);
-    expect(folders[0].querySelector('.nb-twisty').classList.contains('leaf')).toBe(false); // A has a child
-    expect(folders[2].querySelector('.nb-twisty').classList.contains('leaf')).toBe(true);  // B is a leaf
-    expect(parseInt(folders[1].style.paddingLeft)).toBeGreaterThan(parseInt(folders[0].style.paddingLeft));
+    expect(guideOf(folders[0])).toContain('▾');                 // A is an expanded parent
+    expect(/[▸▾]/.test(guideOf(folders[2]))).toBe(false);       // B is a leaf — no chevron
+    expect(guideOf(folders[1]).length).toBeGreaterThan(guideOf(folders[0]).length); // child guide is longer (deeper)
+    expect(guideOf(folders[1])).toContain('│'); // A still has a sibling (B), so the child shows a continuation bar
   });
 
-  it('clicking a chevron toggles collapse, not select', () => {
+  it('clicking a parent connector toggles collapse, not select', () => {
     const onToggleCollapse = vi.fn();
     const onSelect = vi.fn();
     const el = make({ collapsed: new Set(), onToggleCollapse, onSelect });
-    el.querySelector('.item.folder .nb-twisty').click();
+    el.querySelector('.item.folder .nb-guide').click(); // first folder = A (a parent)
     expect(onToggleCollapse).toHaveBeenCalledWith('a');
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it('hides children of a collapsed notebook', () => {
+  it('hides children of a collapsed notebook and shows a ▸ marker', () => {
     const el = make({ collapsed: new Set(['a']) });
     expect([...el.querySelectorAll('.item.folder .nb-label')].map((l) => l.textContent)).toEqual(['A', 'B']);
-    expect(el.querySelector('.item.folder .nb-twisty').textContent).toBe('▸');
+    expect(el.querySelector('.item.folder .nb-guide').textContent).toContain('▸');
   });
 
   it('dropping a notebook onto another calls onMoveNotebook(child, target)', () => {

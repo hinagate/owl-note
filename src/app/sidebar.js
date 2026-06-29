@@ -36,10 +36,22 @@ export function renderSidebar(
   makeDropTarget(allRow, rootId); // drop a note or a notebook here → moves it to the top level
   container.appendChild(allRow);
 
-  const renderNode = (node, depth) => {
+  // ASCII-tree guide: each ancestor contributes "│  " (its subtree continues) or
+  // "   " (it was the last child), then "├─"/"└─" for this node, then the chevron
+  // (▸/▾) or a space for leaves. Rendered in a monospace span so the connectors line up.
+  const guideText = (ancestorLasts, isLast, hasKids, isCollapsed) => {
+    let s = '';
+    for (const last of ancestorLasts) s += last ? '   ' : '│  ';
+    s += isLast ? '└─' : '├─';
+    s += hasKids ? (isCollapsed ? '▸' : '▾') : ' ';
+    return s;
+  };
+
+  const renderNode = (node, ancestorLasts, isLast) => {
+    const hasKids = node.children.length > 0;
+    const isCollapsed = collapsed.has(node.id);
     const row = document.createElement('div');
     row.className = 'item folder' + (node.id === activeId ? ' active' : '');
-    row.style.paddingLeft = `${10 + depth * 14}px`; // indent by depth
     row.draggable = true;
     row.addEventListener('dragstart', (e) => {
       e.dataTransfer.setData('application/x-owl-notebook', node.id);
@@ -47,14 +59,11 @@ export function renderSidebar(
     });
     row.addEventListener('click', () => onSelect(node.id));
 
-    const hasKids = node.children.length > 0;
-    const twisty = document.createElement('span');
-    twisty.className = 'nb-twisty' + (hasKids ? '' : ' leaf');
-    if (hasKids) {
-      twisty.textContent = collapsed.has(node.id) ? '▸' : '▾';
-      twisty.addEventListener('click', (e) => { e.stopPropagation(); if (onToggleCollapse) onToggleCollapse(node.id); });
-    }
-    row.appendChild(twisty);
+    const guide = document.createElement('span');
+    guide.className = 'nb-guide' + (hasKids ? ' toggle' : '');
+    guide.textContent = guideText(ancestorLasts, isLast, hasKids, isCollapsed);
+    if (hasKids) guide.addEventListener('click', (e) => { e.stopPropagation(); if (onToggleCollapse) onToggleCollapse(node.id); });
+    row.appendChild(guide);
 
     const label = document.createElement('span');
     label.className = 'nb-label';
@@ -83,11 +92,12 @@ export function renderSidebar(
     makeDropTarget(row, node.id);
     container.appendChild(row);
 
-    if (hasKids && !collapsed.has(node.id)) {
-      for (const child of node.children) renderNode(child, depth + 1);
+    if (hasKids && !isCollapsed) {
+      node.children.forEach((c, i) => renderNode(c, [...ancestorLasts, isLast], i === node.children.length - 1));
     }
   };
-  for (const top of buildNotebookTree(notebooks, rootId)) renderNode(top, 0);
+  const tops = buildNotebookTree(notebooks, rootId);
+  tops.forEach((t, i) => renderNode(t, [], i === tops.length - 1));
 
   const btn = document.createElement('button');
   btn.className = 'new-notebook';
