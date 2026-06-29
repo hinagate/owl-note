@@ -1,0 +1,14 @@
+# Brainstorming visual-companion session files
+.superpowers/
+
+# OS / editor
+Thumbs.db
+.DS_Store
+*.swp
+
+# Node (for when implementation starts)
+node_modules/
+dist/
+*.log
+screenshots/
+docs/

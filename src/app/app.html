@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>OWL-Note</title>
+  <link rel="stylesheet" href="katex.css" />
+  <link rel="stylesheet" href="github.css" />
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <div id="toolbar"></div>
+  <div id="panes">
+    <aside id="sidebar"></aside>
+    <section id="note-list"></section>
+    <main id="editor"></main>
+  </div>
+  <div id="toast" hidden></div>
+  <!-- Vendored official mammoth (DOCX import) — separate file, not bundled, so it stays
+       hash-matchable and its bluebird new Function code is isolated from app.js. -->
+  <script src="mammoth.browser.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

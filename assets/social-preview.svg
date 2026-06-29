@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640"
+     font-family="-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <!-- GitHub social preview, 1280x640. Open in a browser and screenshot (or use a
+       browser-based SVG->PNG) so the owl emoji renders in color. -->
+  <rect width="1280" height="640" fill="#ffffff"/>
+  <rect width="1280" height="10" fill="#2dbe60"/>
+
+  <!-- faint owl watermark -->
+  <text x="1130" y="450" font-size="300" text-anchor="middle" opacity="0.05">🦉</text>
+
+  <!-- wordmark -->
+  <text x="80" y="112" font-size="40" font-weight="700" fill="#1d2125">🦉 OWL-Note</text>
+
+  <!-- hero -->
+  <text x="80" y="300" font-size="60" font-weight="800" fill="#1d2125">Your notes are browser bookmarks.</text>
+
+  <!-- subtitle -->
+  <text x="80" y="366" font-size="30" fill="#4b5563">Free, private Markdown — code &amp; math — synced by your browser.</text>
+  <text x="80" y="408" font-size="30" font-weight="600" fill="#1d2125">No server. No account. No subscription.</text>
+
+  <!-- pills -->
+  <g font-size="24" font-weight="600" fill="#1fa34e" text-anchor="middle">
+    <rect x="80"  y="496" width="200" height="52" rx="26" fill="#eafaf0" stroke="#2dbe60" stroke-width="2"/>
+    <text x="180" y="530">No backend</text>
+    <rect x="300" y="496" width="214" height="52" rx="26" fill="#eafaf0" stroke="#2dbe60" stroke-width="2"/>
+    <text x="407" y="530">Open source</text>
+    <rect x="534" y="496" width="252" height="52" rx="26" fill="#eafaf0" stroke="#2dbe60" stroke-width="2"/>
+    <text x="660" y="530">Chrome &amp; Edge</text>
+  </g>
+</svg>
