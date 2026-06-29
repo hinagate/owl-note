@@ -52,20 +52,21 @@ describe('pin + new-note-on-top', () => {
     await app.saveNote({ id: 'a', title: 'Alpha', body: 'aaa', attachments: [], version: 1, hash: 'h' }, root, undefined);
     await app.saveNote({ id: 'b', title: 'Bravo', body: 'bbb', attachments: [], version: 1, hash: 'h' }, root, undefined);
     await app.initUI(root);
-    const bravo = [...document.querySelectorAll('#note-list .item.card')].find((c) => c.textContent.includes('Bravo'));
-    bravo.querySelector('.pin').click();
-    // wait until the pin took effect: Bravo re-rendered to the top (which the
+    // Bravo is newer, so it already sorts on top; Alpha (older) sits below. Pin Alpha — it should float up.
+    const alpha = [...document.querySelectorAll('#note-list .item.card')].find((c) => c.textContent.includes('Alpha'));
+    alpha.querySelector('.pin').click();
+    // wait until the pin took effect: Alpha re-rendered to the top (which the
     // save path reaches only AFTER updating the bookmark payload).
-    await waitFor(() => document.querySelector('#note-list .item.card .card-title')?.textContent.includes('Bravo'));
-    // Bravo's bookmark now decodes to pinned:true
+    await waitFor(() => document.querySelector('#note-list .item.card .card-title')?.textContent.includes('Alpha'));
+    // Alpha's bookmark now decodes to pinned:true
     const raw = await bm.allNotes(root);
     const decoded = await Promise.all(raw.map((r) => decode(r.payload)));
-    const bravoDecoded = decoded.find((d) => d.id === 'b');
-    expect(bravoDecoded.pinned).toBe(true);
-    expect('bookmarkId' in bravoDecoded).toBe(false); // device-local UI fields not baked into the synced payload
-    expect('folderId' in bravoDecoded).toBe(false);
-    // and Bravo is now the first card
-    expect(document.querySelector('#note-list .item.card .card-title').textContent).toContain('Bravo');
+    const alphaDecoded = decoded.find((d) => d.id === 'a');
+    expect(alphaDecoded.pinned).toBe(true);
+    expect('bookmarkId' in alphaDecoded).toBe(false); // device-local UI fields not baked into the synced payload
+    expect('folderId' in alphaDecoded).toBe(false);
+    // and Alpha is now the first card
+    expect(document.querySelector('#note-list .item.card .card-title').textContent).toContain('Alpha');
   });
 
   it('pins a local-only (oversized) note: it stays local-only and gains pinned', async () => {

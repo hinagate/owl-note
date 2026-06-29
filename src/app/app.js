@@ -92,7 +92,7 @@ export async function loadNotes(folderId) {
   for (const r of visible) {
     try {
       const note = await decode(r.payload);
-      decoded.push({ ...note, bookmarkId: r.bookmarkId, folderId: r.folderId || folderId });
+      decoded.push({ ...note, bookmarkId: r.bookmarkId, folderId: r.folderId || folderId, dateAdded: r.dateAdded });
       if (note.id) seen.add(note.id);
     } catch { /* skip malformed */ }
   }

@@ -28,6 +28,7 @@ export function installFakeChrome(opts = {}) {
     if (n.url !== undefined) out.url = n.url;
     if (n.folderType) out.folderType = n.folderType;
     if (n.children) out.children = n.children.map((cid) => toNode(nodes.get(cid)));
+    if (n.dateAdded !== undefined) out.dateAdded = n.dateAdded;
     return out;
   }
 
@@ -56,7 +57,7 @@ export function installFakeChrome(opts = {}) {
     async create({ parentId, title = '', url, index }) {
       const id = String(++seq);
       const parent = nodes.get(parentId);
-      const node = { id, parentId, title, index: parent.children.length };
+      const node = { id, parentId, title, index: parent.children.length, dateAdded: seq };
       if (url !== undefined) node.url = url; else node.children = [];
       nodes.set(id, node);
       if (index === undefined) parent.children.push(id);

@@ -30,6 +30,20 @@ describe('app integration', () => {
     expect(notes[0].title).toBe('Hello list');
   });
 
+  it('lists notes newest-first across reloads (older notes ordered by bookmark dateAdded)', async () => {
+    const app = await import('../src/app/app.js');
+    const bm = await import('../src/lib/bookmarks.js');
+    const { encode } = await import('../src/lib/codec.js');
+    const root = await bm.ensureRoot();
+    // Prior-session notes (no `created` field) created in chronological order.
+    for (const t of ['First', 'Second', 'Third']) {
+      await bm.createNote(root, t, await encode({ id: t, title: t, body: t, version: 1, hash: 'h' }));
+    }
+    await app.initUI(root); // recentIds is empty -> pure persistent order, newest first
+    const titles = [...document.querySelectorAll('#note-list .item.card .card-title')].map((e) => e.textContent.trim());
+    expect(titles).toEqual(['Third', 'Second', 'First']);
+  });
+
   it('shows a note created outside the app (Save-selection context menu) without a manual refresh', async () => {
     const app = await import('../src/app/app.js');
     const bm = await import('../src/lib/bookmarks.js');

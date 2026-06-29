@@ -25,6 +25,7 @@ export function createNote({ title, body = '', attachments = [] } = {}) {
     title: (typeof title === 'string' && title.trim()) ? title : extractTitle(body),
     body,
     attachments,
+    created: Date.now(), // recency key for newest-first sorting (survives reloads)
     version: 1,
     hash: contentHash(body),
   };
@@ -59,10 +60,12 @@ export function withPinned(note, pinned) {
   return { ...note, pinned: !!pinned };
 }
 
-// Stable 3-tier order for the note list: pinned first, then notes created this session
-// (most-recent first, per recentIds), then the rest in their given order. Pure.
+// 3-tier order for the note list: pinned first, then notes created this session
+// (most-recent first, per recentIds), then the rest NEWEST-FIRST by recency
+// (note.created, falling back to the bookmark's dateAdded for older notes). Pure.
 export function orderNotes(notes, recentIds = []) {
   const rank = (n) => (n.pinned ? 0 : (recentIds.includes(n.id) ? 1 : 2));
+  const recency = (n) => n.created ?? n.dateAdded ?? 0; // newest first
   return notes
     .map((n, i) => ({ n, i }))
     .sort((a, b) => {
@@ -70,7 +73,8 @@ export function orderNotes(notes, recentIds = []) {
       const rb = rank(b.n);
       if (ra !== rb) return ra - rb;
       if (ra === 1) return recentIds.indexOf(a.n.id) - recentIds.indexOf(b.n.id);
-      return a.i - b.i;
+      const byRecency = recency(b.n) - recency(a.n);
+      return byRecency !== 0 ? byRecency : a.i - b.i; // stable tiebreak when equal
     })
     .map((x) => x.n);
 }

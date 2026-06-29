@@ -102,7 +102,7 @@ export async function listNotes(folderId) {
   const children = await chrome.bookmarks.getChildren(folderId);
   return children
     .filter((c) => isNoteUrl(c.url))
-    .map((c) => ({ bookmarkId: c.id, title: c.title, url: c.url, payload: payloadFromUrl(c.url) }));
+    .map((c) => ({ bookmarkId: c.id, title: c.title, url: c.url, payload: payloadFromUrl(c.url), dateAdded: c.dateAdded }));
 }
 
 export async function allNotes(rootId) {
@@ -110,7 +110,7 @@ export async function allNotes(rootId) {
   async function walk(id) {
     for (const c of await chrome.bookmarks.getChildren(id)) {
       if (c.url) {
-        if (isNoteUrl(c.url)) out.push({ bookmarkId: c.id, folderId: id, title: c.title, url: c.url, payload: payloadFromUrl(c.url) });
+        if (isNoteUrl(c.url)) out.push({ bookmarkId: c.id, folderId: id, title: c.title, url: c.url, payload: payloadFromUrl(c.url), dateAdded: c.dateAdded });
       } else {
         await walk(c.id);
       }

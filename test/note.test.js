@@ -76,4 +76,19 @@ describe('orderNotes', () => {
     orderNotes(input, []);
     expect(input.map((n) => n.id)).toEqual(['a', 'b']);
   });
+  it('orders the rest newest-first by created (desc)', () => {
+    const out = orderNotes([{ id: 'old', created: 100 }, { id: 'new', created: 300 }, { id: 'mid', created: 200 }], []);
+    expect(out.map((n) => n.id)).toEqual(['new', 'mid', 'old']);
+  });
+  it('falls back to bookmark dateAdded when a note has no created (existing notes)', () => {
+    const out = orderNotes([{ id: 'a', dateAdded: 100 }, { id: 'c', dateAdded: 300 }, { id: 'b', dateAdded: 200 }], []);
+    expect(out.map((n) => n.id)).toEqual(['c', 'b', 'a']);
+  });
+  it('keeps pinned on top, with each group newest-first', () => {
+    const out = orderNotes([
+      { id: 'a', created: 100 }, { id: 'p1', created: 150, pinned: true },
+      { id: 'b', created: 400 }, { id: 'p2', created: 500, pinned: true },
+    ], []);
+    expect(out.map((n) => n.id)).toEqual(['p2', 'p1', 'b', 'a']);
+  });
 });
