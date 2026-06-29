@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OWL-Note",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Free Markdown notes with code & math in browser bookmarks. Syncs via Google/Microsoft. Private, no subscriptions or lock-in.",
   "permissions": ["bookmarks", "storage", "unlimitedStorage", "contextMenus"],
   "action": { "default_title": "Open OWL-Note" },
