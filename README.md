@@ -43,7 +43,7 @@ Note apps keep getting heavier and pricier — more features you never asked for
 - **Import & export, no lock-in** — bring in Word (`.docx`), Evernote (`.enex`), and Markdown; export everything to a zip of plain `.md` files anytime.
 - **Bulk actions, with a safety net** — multi-select like files (Ctrl/Cmd-click, Shift+↑/↓) and a **Trash** you can restore from.
 - **Private by design** — no backend, no telemetry; we run no server and never see your notes. Minimal permissions, built on Manifest V3.
-- **Local backup** — a compressed copy is kept on each device, so your work is safe even if a bookmark goes missing.
+- **Your work is safe** — auto-saves as you type, with a compressed local backup on every device, so nothing is lost even if a bookmark goes missing.
 
 <p align="center">
   <img src="assets/save-selection.png" alt="Right-clicking a selection on a web page shows 'Save selection to OWL-Note' in the context menu" width="640">
