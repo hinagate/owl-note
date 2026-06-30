@@ -46,10 +46,12 @@ export function inlineImages(body, attachments = []) {
   });
 }
 
-// Drop attachments whose `owl-img:<id>` reference no longer appears in the body.
+// Drop attachments whose reference (owl-img:<id> or owl-file:<id>) no longer appears in the body.
 export function pruneAttachments(body, attachments = []) {
   const used = new Set();
-  for (const m of String(body ?? '').matchAll(REF_IMG)) used.add(m[2]);
+  const s = String(body ?? '');
+  for (const m of s.matchAll(REF_IMG)) used.add(m[2]);
+  for (const m of s.matchAll(REF_FILE)) used.add(m[2]);
   return (attachments || []).filter((a) => used.has(a.id));
 }
 

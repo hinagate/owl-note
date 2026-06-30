@@ -1,7 +1,7 @@
 import { connect, disconnect } from './drive/auth.js';
 
 const ENABLED = 'drive:enabled';
-const ORIGINS = ['https://www.googleapis.com/*'];
+const ORIGINS = ['https://www.googleapis.com/*', 'https://oauth2.googleapis.com/*'];
 
 export async function isEnabled() {
   return !!(await chrome.storage.local.get(ENABLED))[ENABLED];

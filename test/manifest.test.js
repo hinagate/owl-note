@@ -6,5 +6,6 @@ describe('manifest', () => {
     expect(manifest.permissions).toContain('identity');
     expect(manifest.host_permissions || []).not.toContain('https://www.googleapis.com/*'); // not at install
     expect(manifest.optional_host_permissions).toContain('https://www.googleapis.com/*');
+    expect(manifest.optional_host_permissions).toContain('https://oauth2.googleapis.com/*');
   });
 });

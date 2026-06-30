@@ -164,10 +164,11 @@ export function renderEditor(
       chip.className = 'attach-chip';
       chip.textContent = `📎 ${a.name}`;
       chip.addEventListener('click', async () => {
+        const win = window.open();                 // sync: keep the user gesture
         const uri = await getBytes(a);
-        if (!uri) { chip.classList.add('unavailable'); return; }
-        const win = window.open();
-        if (win) win.location = uri;
+        if (!uri) { if (win) win.close(); chip.classList.add('unavailable'); return; }
+        const blob = await (await fetch(uri)).blob();
+        if (win) win.location = URL.createObjectURL(blob);
       });
       attachBar.appendChild(chip);
     }

@@ -16,7 +16,7 @@ describe('drive-sync', () => {
 
   it('enable requests host permission, connects, and sets the flag', async () => {
     await enable();
-    expect(chrome.permissions.request).toHaveBeenCalledWith({ origins: ['https://www.googleapis.com/*'] });
+    expect(chrome.permissions.request).toHaveBeenCalledWith({ origins: ['https://www.googleapis.com/*', 'https://oauth2.googleapis.com/*'] });
     expect(auth.connect).toHaveBeenCalled();
     expect(await isEnabled()).toBe(true);
   });

@@ -5,6 +5,9 @@ const ID = typeof __OWL_DRIVE_CLIENT_ID__ !== 'undefined' ? __OWL_DRIVE_CLIENT_I
 const SECRET = typeof __OWL_DRIVE_CLIENT_SECRET__ !== 'undefined' ? __OWL_DRIVE_CLIENT_SECRET__ : '';
 
 export const OAUTH_CLIENT_ID = ID;
+// Intentionally shipped: an installed-app + PKCE + drive.file secret is not truly
+// confidential (blast radius = API-quota abuse, not user-file access). See OAuth 2.0
+// for Installed Applications — this is expected and documented by Google.
 export const OAUTH_CLIENT_SECRET = SECRET;
 export const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 export const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';

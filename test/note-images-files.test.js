@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { attachFile, listFileRefs, inlineImagesAsync } from '../src/lib/note-images.js';
+import { attachFile, listFileRefs, inlineImagesAsync, pruneAttachments } from '../src/lib/note-images.js';
 
 const PNG = 'data:image/png;base64,iVBORw0KGgo=';
 
@@ -26,5 +26,21 @@ describe('note-images file attachments', () => {
     const body = '![x](owl-img:h1)';
     const out = await inlineImagesAsync(body, [{ id: 'h1' }], async () => null);
     expect(out).toBe('![x](owl-img:h1)');
+  });
+
+  it('pruneAttachments keeps file (owl-file) attachments still referenced in the body', () => {
+    const body = 'doc [report.pdf](owl-file:abc) end';
+    const atts = [
+      { id: 'abc', name: 'report.pdf', mime: 'application/pdf', driveFileId: 'F' },
+      { id: 'dead', name: 'old.zip', mime: 'application/zip', driveFileId: 'G' },
+    ];
+    const kept = pruneAttachments(body, atts);
+    expect(kept.map((a) => a.id)).toEqual(['abc']);
+  });
+
+  it('pruneAttachments drops an owl-file attachment no longer referenced', () => {
+    const body = 'no attachments here';
+    const atts = [{ id: 'abc', name: 'report.pdf', mime: 'application/pdf', driveFileId: 'F' }];
+    expect(pruneAttachments(body, atts)).toEqual([]);
   });
 });
