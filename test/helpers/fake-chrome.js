@@ -13,10 +13,29 @@ export function installFakeChrome(opts = {}) {
   // for Other Bookmarks, but Edge/Brave/some profiles differ. Tests can override.
   const otherId = opts.otherBookmarksId || '2';
   const ft = opts.folderType === false; // set true to mimic legacy browsers w/o folderType
-  const nodes = new Map(); // id -> { id, parentId, title, url, index, children? }
-  nodes.set('0', { id: '0', title: '', children: ['1', otherId] });
-  nodes.set('1', { id: '1', parentId: '0', title: 'Bookmarks Bar', index: 0, children: [], folderType: ft ? undefined : 'bookmarks-bar' });
-  nodes.set(otherId, { id: otherId, parentId: '0', title: 'Other Bookmarks', index: 1, children: [], folderType: ft ? undefined : 'other' });
+  const nodes = new Map(); // id -> { id, parentId, title, url, index, children?, folderType?, syncing? }
+  if (opts.dualTree) {
+    // Chrome's 2025 identity split: an account (syncing) subtree and a local
+    // (non-syncing) subtree, each with its own permanent Bookmarks Bar / Other
+    // Bookmarks. Every node carries a `syncing` boolean. Which subtree Chrome
+    // lists first is not guaranteed, so it's configurable; default is local-first
+    // to exercise the failure mode where a first-match pick lands non-syncing.
+    const account = [
+      { id: 'ab', title: 'Bookmarks Bar', folderType: 'bookmarks-bar', syncing: true },
+      { id: 'ao', title: 'Other Bookmarks', folderType: 'other', syncing: true },
+    ];
+    const local = [
+      { id: 'lb', title: 'Bookmarks Bar', folderType: 'bookmarks-bar', syncing: false },
+      { id: 'lo', title: 'Other Bookmarks', folderType: 'other', syncing: false },
+    ];
+    const order = opts.accountFirst ? [...account, ...local] : [...local, ...account];
+    nodes.set('0', { id: '0', title: '', children: order.map((r) => r.id) });
+    order.forEach((r, i) => nodes.set(r.id, { ...r, parentId: '0', index: i, children: [] }));
+  } else {
+    nodes.set('0', { id: '0', title: '', children: ['1', otherId] });
+    nodes.set('1', { id: '1', parentId: '0', title: 'Bookmarks Bar', index: 0, children: [], folderType: ft ? undefined : 'bookmarks-bar' });
+    nodes.set(otherId, { id: otherId, parentId: '0', title: 'Other Bookmarks', index: 1, children: [], folderType: ft ? undefined : 'other' });
+  }
 
   const onCreated = makeHub();
   const onChanged = makeHub();
@@ -27,6 +46,7 @@ export function installFakeChrome(opts = {}) {
     const out = { id: n.id, parentId: n.parentId, title: n.title, index: n.index };
     if (n.url !== undefined) out.url = n.url;
     if (n.folderType) out.folderType = n.folderType;
+    if (n.syncing !== undefined) out.syncing = n.syncing;
     if (n.children) out.children = n.children.map((cid) => toNode(nodes.get(cid)));
     if (n.dateAdded !== undefined) out.dateAdded = n.dateAdded;
     return out;
@@ -59,6 +79,7 @@ export function installFakeChrome(opts = {}) {
       const parent = nodes.get(parentId);
       const node = { id, parentId, title, index: parent.children.length, dateAdded: seq };
       if (url !== undefined) node.url = url; else node.children = [];
+      if (parent.syncing !== undefined) node.syncing = parent.syncing; // inherit subtree
       nodes.set(id, node);
       if (index === undefined) parent.children.push(id);
       else parent.children.splice(index, 0, id);
@@ -77,6 +98,12 @@ export function installFakeChrome(opts = {}) {
       old.children = old.children.filter((c) => c !== id);
       n.parentId = dest.parentId;
       nodes.get(dest.parentId).children.push(id);
+      // A moved node takes on the subtree it now lives in (Chrome 2025 dual tree):
+      // its `syncing` flag, and its descendants', follow the destination.
+      const destSyncing = nodes.get(dest.parentId).syncing;
+      if (destSyncing !== undefined) {
+        (function cascade(x) { x.syncing = destSyncing; (x.children || []).forEach((cid) => cascade(nodes.get(cid))); })(n);
+      }
       onMoved.dispatch(id, { parentId: dest.parentId });
       return toNode(n);
     },

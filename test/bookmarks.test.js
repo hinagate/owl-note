@@ -96,6 +96,52 @@ describe('bookmarks wrapper', () => {
     expect(node.parentId).toBe('37');
   });
 
+  // Chrome's 2025 identity split exposes two "Other Bookmarks" — one in the
+  // account (syncing) subtree, one local (non-syncing). owl-note must always land
+  // its notes in the syncing one, or notes silently never leave the device.
+  describe('dual bookmark tree (Chrome 2025 identity split)', () => {
+    it('getOtherBookmarksId returns the syncing Other Bookmarks regardless of tree order', async () => {
+      installFakeChrome({ dualTree: true }); // local subtree listed first
+      const id = await bm.getOtherBookmarksId();
+      const [node] = await chrome.bookmarks.get(id);
+      expect(node.folderType).toBe('other');
+      expect(node.syncing).toBe(true);
+    });
+
+    it('creates the notes root in the syncing subtree on a fresh dual-tree profile', async () => {
+      installFakeChrome({ dualTree: true });
+      const root = await bm.ensureRoot();
+      const [node] = await chrome.bookmarks.get(root);
+      expect(node.parentId).toBe('ao'); // account (syncing) Other Bookmarks
+      expect(node.syncing).toBe(true);
+    });
+
+    it('adopts the syncing-tree notes folder when a copy exists in both subtrees', async () => {
+      installFakeChrome({ dualTree: true });
+      const local = await chrome.bookmarks.create({ parentId: 'lo', title: bm.ROOT_TITLE });
+      const synced = await chrome.bookmarks.create({ parentId: 'ao', title: bm.ROOT_TITLE });
+      await chrome.storage.local.clear(); // ids differ per device; rediscover by title
+      const root = await bm.ensureRoot();
+      expect(root).toBe(synced.id);
+      expect((await chrome.bookmarks.get(root))[0].syncing).toBe(true);
+      expect(local.id).not.toBe(root);
+    });
+
+    it('migrates a notes folder stranded in the non-syncing subtree into the syncing subtree', async () => {
+      installFakeChrome({ dualTree: true });
+      // Pre-split user: their "📓 Notes" (with a note) is now in the LOCAL tree,
+      // and its id was recorded last run — so it would never sync again.
+      const stranded = await chrome.bookmarks.create({ parentId: 'lo', title: bm.ROOT_TITLE });
+      await bm.createNote(stranded.id, 'Stranded', 'PAY');
+      await chrome.storage.local.set({ [bm.ROOT_ID_KEY]: stranded.id });
+
+      const root = await bm.ensureRoot();
+      expect((await chrome.bookmarks.get(root))[0].syncing).toBe(true);
+      // The note rode along — nothing lost.
+      expect((await bm.listNotes(root)).map((n) => n.payload)).toEqual(['PAY']);
+    });
+  });
+
   it('creates notebooks and notes and lists them', async () => {
     const root = await bm.ensureRoot();
     const nb = await bm.createNotebook(root, 'Code Base');
