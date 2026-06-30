@@ -58,4 +58,9 @@ export async function uploadFile({ name, mime, bytes, hash }) {
   return res.id;
 }
 
+export async function getMedia(fileId) {
+  const res = await authedFetch(`${DRIVE_FILES_URL}/${fileId}?alt=media`);
+  return new Uint8Array(await res.arrayBuffer());
+}
+
 export { authedFetch };
