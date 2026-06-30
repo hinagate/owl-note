@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { cpSync, mkdirSync, existsSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, existsSync, rmSync, readFileSync } from 'node:fs';
 
 // Clean dist first so stale files (e.g. dropped .ttf/.woff fonts) never linger.
 rmSync('dist', { recursive: true, force: true });
@@ -8,12 +8,19 @@ mkdirSync('dist', { recursive: true });
 // Production builds (Chrome Web Store) minify; local dev builds stay readable.
 const PROD = process.argv.includes('--prod') || process.env.NODE_ENV === 'production';
 
+let creds = { clientId: '', clientSecret: '' };
+try { creds = JSON.parse(readFileSync('.drive-credentials.json', 'utf8')); } catch { /* contributors without creds: Drive sync simply stays unconfigured */ }
+
 await build({
   entryPoints: { app: 'src/app/app.js', 'service-worker': 'src/background/service-worker.js' },
   bundle: true,
   format: 'iife',
   outdir: 'dist',
   target: 'chrome120',
+  define: {
+    __OWL_DRIVE_CLIENT_ID__: JSON.stringify(creds.clientId || ''),
+    __OWL_DRIVE_CLIENT_SECRET__: JSON.stringify(creds.clientSecret || ''),
+  },
   minify: PROD,
   logLevel: 'info',
 });

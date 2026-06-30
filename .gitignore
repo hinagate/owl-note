@@ -12,3 +12,6 @@ dist/
 *.log
 screenshots/
 docs/
+
+# Drive OAuth client credentials — never commit (injected at build time)
+.drive-credentials.json
