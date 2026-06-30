@@ -8,7 +8,11 @@ async function authedFetch(url, opts = {}) {
   const token = await getAccessToken();
   const headers = { ...(opts.headers || {}), Authorization: `Bearer ${token}` };
   const res = await fetch(url, { ...opts, headers });
-  if (!res.ok) throw new Error(`Drive API ${res.status} for ${url}`);
+  if (!res.ok) {
+    const err = new Error(`Drive API ${res.status} for ${url}`);
+    err.status = res.status; // let callers self-heal on 404 (deleted folder/file)
+    throw err;
+  }
   return res;
 }
 
@@ -37,9 +41,7 @@ export async function findByHash(hash) {
   return (res.files && res.files[0] && res.files[0].id) || null;
 }
 
-export async function uploadFile({ name, mime, bytes, hash }) {
-  if (bytes.length > MAX_ATTACH_BYTES) throw new Error(`Attachment too large (max ${MAX_ATTACH_BYTES} bytes)`);
-  const folderId = await ensureFolder();
+async function uploadToFolder(folderId, { name, mime, bytes, hash }) {
   const meta = { name, mimeType: mime, parents: [folderId], appProperties: { owlHash: hash } };
   const boundary = 'owlnote' + hash;
   const enc = new TextEncoder();
@@ -56,6 +58,18 @@ export async function uploadFile({ name, mime, bytes, hash }) {
     body,
   })).json();
   return res.id;
+}
+
+export async function uploadFile({ name, mime, bytes, hash }) {
+  if (bytes.length > MAX_ATTACH_BYTES) throw new Error(`Attachment too large (max ${MAX_ATTACH_BYTES} bytes)`);
+  try {
+    return await uploadToFolder(await ensureFolder(), { name, mime, bytes, hash });
+  } catch {
+    // The cached sync folder may have been deleted/trashed in Drive — drop the stale id,
+    // recreate the folder, and retry once so sync heals itself instead of failing forever.
+    await chrome.storage.local.remove(FOLDER_KEY);
+    return uploadToFolder(await ensureFolder(), { name, mime, bytes, hash });
+  }
 }
 
 export async function getMedia(fileId) {
