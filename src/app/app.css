@@ -252,3 +252,7 @@ body.resizing { user-select: none; cursor: col-resize; }
 #note-list .item.trashed .trash-actions { display: flex; gap: 8px; margin-top: 6px; }
 #note-list .item.trashed .trash-actions button { border: 1px solid var(--border); background: #fff; border-radius: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
 #note-list .item.trashed .delete-forever { color: #b00020; border-color: #f3c2c8; }
+
+.attachments-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 0; }
+.attach-chip { font-size: 12px; padding: 2px 8px; border: 1px solid #c9ced6; border-radius: 12px; background: #f5f6f8; cursor: pointer; }
+.attach-chip.unavailable { opacity: 0.5; text-decoration: line-through; }

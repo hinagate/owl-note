@@ -1,7 +1,8 @@
 // src/app/editor.js
 import { renderMarkdown } from '../lib/markdown.js';
 import { imageFileToDataUri } from '../lib/image-downscale.js';
-import { extractImages, inlineImages, pruneAttachments } from '../lib/note-images.js';
+import { extractImages, inlineImages, inlineImagesAsync, pruneAttachments, attachFile, listFileRefs } from '../lib/note-images.js';
+import { getBytes } from '../lib/attachment-store.js';
 import * as panes from './panes.js';
 
 export function renderEditor(
@@ -34,6 +35,13 @@ export function renderEditor(
   imgInput.accept = 'image/*';
   imgInput.style.display = 'none';
 
+  const fileBtn = document.createElement('button');
+  fileBtn.className = 'attach-file';
+  fileBtn.textContent = '📎 File';
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.style.display = 'none';
+
   const listBtn = document.createElement('button');
   listBtn.className = 'toggle-list';
   const setListLabel = () => { listBtn.textContent = panes.isNoteListHidden() ? '⬓ Show list' : '⬓ Hide list'; };
@@ -55,7 +63,7 @@ export function renderEditor(
   readingHint.textContent = '📖 Reading mode';
 
   // viewBtn (« / ») sits to the LEFT of Save — a quick "preview only" reading toggle.
-  bar.append(viewBtn, save, status, codeBtn, imgBtn, imgInput, listBtn, readingHint);
+  bar.append(viewBtn, save, status, codeBtn, imgBtn, imgInput, fileBtn, fileInput, listBtn, readingHint);
 
   if (onDelete) {
     const del = document.createElement('button');
@@ -82,6 +90,9 @@ export function renderEditor(
   ta.className = 'note-body';
   ta.value = body;
   editPane.append(titleInput, ta);
+  const attachBar = document.createElement('div');
+  attachBar.className = 'attachments-bar';
+  editPane.append(attachBar); // chips list under the body
   const preview = document.createElement('div');
   preview.className = 'preview';
 
@@ -143,6 +154,39 @@ export function renderEditor(
       .catch(() => { /* sizing is best-effort; never block editing */ });
   };
 
+  function renderChips() {
+    attachBar.innerHTML = '';
+    const ids = new Set(listFileRefs(ta.value).map((r) => r.id));
+    for (const a of atts) {
+      if (!ids.has(a.id)) continue; // only files still referenced in the body
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'attach-chip';
+      chip.textContent = `📎 ${a.name}`;
+      chip.addEventListener('click', async () => {
+        const uri = await getBytes(a);
+        if (!uri) { chip.classList.add('unavailable'); return; }
+        const win = window.open();
+        if (win) win.location = uri;
+      });
+      attachBar.appendChild(chip);
+    }
+  }
+
+  // Drive-backed images have no inline dataUri on this device — fetch + cache them,
+  // then re-render so they appear. Sync inlineImages (in refresh) shows what's local first.
+  let resolving = false;
+  async function resolveDriveImages() {
+    if (resolving) return;
+    if (!atts.some((a) => a.driveFileId && !a.dataUri)) return; // all local already
+    resolving = true;
+    try {
+      const resolved = await inlineImagesAsync(ta.value, atts, getBytes);
+      const bodyEl = content.querySelector('.preview-body');
+      if (bodyEl) bodyEl.innerHTML = renderMarkdown(resolved);
+    } finally { resolving = false; }
+  }
+
   const refresh = () => {
     content.innerHTML = '';
     const t = titleInput.value.trim();
@@ -153,9 +197,12 @@ export function renderEditor(
       content.appendChild(h);
     }
     const bodyEl = document.createElement('div');
-    bodyEl.innerHTML = renderMarkdown(inlineImages(ta.value, atts)); // refs -> data URIs, then sanitized
+    bodyEl.className = 'preview-body';
+    bodyEl.innerHTML = renderMarkdown(inlineImages(ta.value, atts)); // refs -> local data URIs, then sanitized
     content.appendChild(bodyEl);
     decorateCodeBlocks(content);
+    renderChips();
+    resolveDriveImages();
     updateSize();
   };
 
@@ -257,6 +304,25 @@ export function renderEditor(
     const file = imgInput.files && imgInput.files[0];
     imgInput.value = ''; // allow re-picking the same file
     if (file) await insertImageFile(file);
+  });
+
+  fileBtn.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files && fileInput.files[0];
+    fileInput.value = '';
+    if (!file) return;
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let bin = ''; for (let k = 0; k < bytes.length; k++) bin += String.fromCharCode(bytes[k]);
+    const dataUri = `data:${file.type || 'application/octet-stream'};base64,${btoa(bin)}`;
+    const { ref, attachments: merged } = attachFile({ name: file.name || 'file', mime: file.type, dataUri }, atts);
+    atts = merged;
+    const start = ta.selectionStart ?? ta.value.length;
+    const before = ta.value.slice(0, start);
+    const snippet = (before && !before.endsWith('\n') ? '\n' : '') + ref + '\n';
+    ta.value = before + snippet + ta.value.slice(ta.selectionEnd ?? start);
+    ta.selectionStart = ta.selectionEnd = before.length + snippet.length;
+    ta.focus();
+    fireChange();
   });
 
   // Paste a copied image straight into the editor (same pipeline as the 🖼 button).
