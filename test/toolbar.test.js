@@ -46,4 +46,26 @@ describe('toolbar', () => {
     expect(onImport).toHaveBeenCalledWith([f]);
     expect(input.value).toBe('');
   });
+
+  it('renders the Drive sync toggle only when a handler is supplied', () => {
+    const el = document.getElementById('toolbar');
+    renderToolbar(el, opts());
+    expect(el.querySelector('input.drive-sync')).toBeNull();
+    renderToolbar(el, opts({ driveEnabled: true, onToggleDrive: vi.fn() }));
+    const box = el.querySelector('input.drive-sync');
+    expect(box).not.toBeNull();
+    expect(box.checked).toBe(true); // reflects isEnabled() state on load
+  });
+
+  it('fires onToggleDrive on change and reverts the box to the resolved state', async () => {
+    const onToggleDrive = vi.fn(async () => false); // consent declined -> stays off
+    const el = document.getElementById('toolbar');
+    renderToolbar(el, opts({ driveEnabled: false, onToggleDrive }));
+    const box = el.querySelector('input.drive-sync');
+    box.checked = true;
+    box.dispatchEvent(new Event('change'));
+    expect(onToggleDrive).toHaveBeenCalledWith(true);
+    await new Promise((r) => setTimeout(r)); // let the async change handler settle
+    expect(box.checked).toBe(false); // reverted because enable() resolved false
+  });
 });
