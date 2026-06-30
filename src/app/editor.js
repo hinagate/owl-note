@@ -183,7 +183,10 @@ export function renderEditor(
     try {
       const resolved = await inlineImagesAsync(ta.value, atts, getBytes);
       const bodyEl = content.querySelector('.preview-body');
-      if (bodyEl) bodyEl.innerHTML = renderMarkdown(resolved);
+      if (bodyEl) {
+        bodyEl.innerHTML = renderMarkdown(resolved);
+        decorateCodeBlocks(content);
+      }
     } finally { resolving = false; }
   }
 
@@ -202,7 +205,7 @@ export function renderEditor(
     content.appendChild(bodyEl);
     decorateCodeBlocks(content);
     renderChips();
-    resolveDriveImages();
+    resolveDriveImages().catch(() => {});
     updateSize();
   };
 

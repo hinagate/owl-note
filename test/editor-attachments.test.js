@@ -23,4 +23,20 @@ describe('editor file attachments', () => {
     expect(chips).toHaveLength(1);
     expect(chips[0].textContent).toContain('report.pdf');
   });
+
+  it('code-block Copy button survives async Drive image re-render', async () => {
+    // Pre-seed the image cache so resolveDriveImages takes the re-render path
+    // without any network call.
+    await chrome.storage.local.set({ 'owlcache:img1': 'data:image/png;base64,iVBORw0KGgo=' });
+
+    renderEditor(document.getElementById('root'), {
+      body: '```js\nlet x = 1;\n```\n\n![img](owl-img:img1)',
+      attachments: [{ id: 'img1', mime: 'image/png', driveFileId: 'F' }],
+    });
+
+    // Flush all pending microtasks so resolveDriveImages completes.
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(document.querySelector('.preview .copy-code')).toBeTruthy();
+  });
 });
