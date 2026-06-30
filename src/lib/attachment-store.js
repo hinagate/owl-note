@@ -42,3 +42,52 @@ export async function putAttachment(att) {
   await chrome.storage.local.set({ [cacheKey(att.id)]: att.dataUri }); // keep origin device's bytes for instant display
   return { id: att.id, name: att.name, mime, driveFileId: fileId };
 }
+
+export async function getBytes(att) {
+  if (att.dataUri) return att.dataUri;
+  const cached = (await chrome.storage.local.get(cacheKey(att.id)))[cacheKey(att.id)];
+  if (cached) return cached;
+  let fileId = att.driveFileId;
+  if (!fileId) {
+    const map = (await chrome.storage.local.get(MAP_KEY))[MAP_KEY] || {};
+    fileId = map[att.id];
+  }
+  if (!fileId) return null;
+  try {
+    const bytes = await client.getMedia(fileId);
+    const uri = bytesToDataUri(bytes, att.mime || 'application/octet-stream');
+    await chrome.storage.local.set({ [cacheKey(att.id)]: uri });
+    return uri;
+  } catch {
+    return null; // offline / revoked / deleted — caller shows a placeholder
+  }
+}
+
+export async function offloadNote(note) {
+  const enabled = (await chrome.storage.local.get('drive:enabled'))['drive:enabled'];
+  if (!enabled) return note;
+  const atts = note.attachments || [];
+  if (!atts.some((a) => a.dataUri)) return note; // nothing to offload
+  try {
+    const next = [];
+    for (const a of atts) next.push(await putAttachment(a));
+    return { ...note, attachments: next };
+  } catch {
+    return note; // any failure -> leave inline so the note stays device-local (today's behavior)
+  }
+}
+
+// PURE — no network. The note's shape AFTER offload, for the live size meter only:
+// each attachment with bytes becomes a reference-sized stand-in (a ~33-char fake
+// fileId matches a real Drive id's length) so the meter shows what WOULD sync,
+// without uploading anything on every keystroke.
+export function offloadShape(note) {
+  const atts = note.attachments || [];
+  if (!atts.some((a) => a.dataUri)) return note;
+  return {
+    ...note,
+    attachments: atts.map((a) => (a.dataUri
+      ? { id: a.id, name: a.name, mime: a.mime || 'application/octet-stream', driveFileId: a.driveFileId || 'x'.repeat(33) }
+      : a)),
+  };
+}
