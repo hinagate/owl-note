@@ -1,7 +1,7 @@
 // src/app/editor.js
 import { renderMarkdown } from '../lib/markdown.js';
 import { imageFileToDataUri } from '../lib/image-downscale.js';
-import { extractImages, inlineImages, inlineImagesAsync, pruneAttachments, attachFile, listFileRefs } from '../lib/note-images.js';
+import { extractImages, inlineImages, inlineImagesAsync, pruneAttachments, attachFile, listFileRefs, linkifyFileRefs } from '../lib/note-images.js';
 import { getBytes } from '../lib/attachment-store.js';
 import * as panes from './panes.js';
 
@@ -37,7 +37,9 @@ export function renderEditor(
 
   const fileBtn = document.createElement('button');
   fileBtn.className = 'attach-file';
-  fileBtn.textContent = '📎 File';
+  const fileBtnIco = document.createElement('span');
+  fileBtnIco.className = 'owl-file-ico';
+  fileBtn.append(fileBtnIco, document.createTextNode('File'));
   const fileInput = document.createElement('input');
   fileInput.type = 'file';
   fileInput.style.display = 'none';
@@ -63,7 +65,7 @@ export function renderEditor(
   readingHint.textContent = '📖 Reading mode';
 
   // viewBtn (« / ») sits to the LEFT of Save — a quick "preview only" reading toggle.
-  bar.append(viewBtn, save, status, codeBtn, imgBtn, imgInput, fileBtn, fileInput, listBtn, readingHint);
+  bar.append(viewBtn, save, codeBtn, imgBtn, imgInput, fileBtn, fileInput, listBtn, readingHint);
 
   if (onDelete) {
     const del = document.createElement('button');
@@ -89,10 +91,18 @@ export function renderEditor(
   const ta = document.createElement('textarea');
   ta.className = 'note-body';
   ta.value = body;
-  editPane.append(titleInput, ta);
+  // A highlight backdrop sits behind the (transparent) textarea and draws a grey box
+  // behind each attachment reference, so they're easy to spot in the raw markdown.
+  const backdrop = document.createElement('div');
+  backdrop.className = 'note-body-highlights';
+  backdrop.setAttribute('aria-hidden', 'true');
+  const bodyWrap = document.createElement('div');
+  bodyWrap.className = 'note-body-wrap';
+  bodyWrap.append(backdrop, ta);
+  editPane.append(titleInput, bodyWrap);
   const attachBar = document.createElement('div');
   attachBar.className = 'attachments-bar';
-  editPane.append(attachBar); // chips list under the body
+  editPane.append(attachBar, status); // chips under the body; status sits below the chips
   const preview = document.createElement('div');
   preview.className = 'preview';
 
@@ -154,22 +164,44 @@ export function renderEditor(
       .catch(() => { /* sizing is best-effort; never block editing */ });
   };
 
+  const attById = (id) => atts.find((a) => a.id === id);
+
+  // Open an attachment's bytes in a new tab. window.open() runs synchronously to keep
+  // the click's user gesture (popup blocker), and we navigate via a blob: URL because
+  // Chrome blocks top-level navigation to data: URIs.
+  async function openAttachment(att, markUnavailable) {
+    const win = window.open();
+    const uri = att && (await getBytes(att));
+    if (!uri) { if (win) win.close(); if (markUnavailable) markUnavailable(); return; }
+    const blob = await (await fetch(uri)).blob();
+    if (win) win.location = URL.createObjectURL(blob);
+  }
+
+  // Wire the clickable file links rendered into the preview by linkifyFileRefs
+  // (`<a data-owl-file="id">`): the owl-file: scheme can't be a real href, so open via JS.
+  function wireFileLinks(root) {
+    for (const el of root.querySelectorAll('a[data-owl-file]')) {
+      el.addEventListener('click', (e) => {
+        e.preventDefault();
+        openAttachment(attById(el.dataset.owlFile), () => el.classList.add('unavailable'));
+      });
+    }
+  }
+
+  // One chip per file REFERENCE in the body (not per unique attachment), so two refs —
+  // even to the same underlying file — show two chips, matching the two preview links.
   function renderChips() {
     attachBar.innerHTML = '';
-    const ids = new Set(listFileRefs(ta.value).map((r) => r.id));
-    for (const a of atts) {
-      if (!ids.has(a.id)) continue; // only files still referenced in the body
+    for (const { id, name } of listFileRefs(ta.value)) {
+      const att = attById(id);
+      if (!att) continue; // referenced file has no attachment bytes
       const chip = document.createElement('button');
       chip.type = 'button';
       chip.className = 'attach-chip';
-      chip.textContent = `📎 ${a.name}`;
-      chip.addEventListener('click', async () => {
-        const win = window.open();                 // sync: keep the user gesture
-        const uri = await getBytes(a);
-        if (!uri) { if (win) win.close(); chip.classList.add('unavailable'); return; }
-        const blob = await (await fetch(uri)).blob();
-        if (win) win.location = URL.createObjectURL(blob);
-      });
+      const ico = document.createElement('span');
+      ico.className = 'owl-file-ico';
+      chip.append(ico, document.createTextNode(name));
+      chip.addEventListener('click', () => openAttachment(att, () => chip.classList.add('unavailable')));
       attachBar.appendChild(chip);
     }
   }
@@ -185,10 +217,28 @@ export function renderEditor(
       const resolved = await inlineImagesAsync(ta.value, atts, getBytes);
       const bodyEl = content.querySelector('.preview-body');
       if (bodyEl) {
-        bodyEl.innerHTML = renderMarkdown(resolved);
+        bodyEl.innerHTML = renderMarkdown(linkifyFileRefs(resolved));
         decorateCodeBlocks(content);
+        wireFileLinks(content);
       }
     } finally { resolving = false; }
+  }
+
+  // Draw a grey box behind each owl-img / owl-file reference so attachments stand out in
+  // the raw markdown. The backdrop mirrors the textarea text and aligns 1:1 (monospace).
+  const HL_RE = /!\[[^\]]*\]\(owl-img:[A-Za-z0-9]+\)|\[[^\]]*\]\(owl-file:[A-Za-z0-9]+\)/g;
+  const escHtml = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  function renderHighlights() {
+    const text = ta.value;
+    let html = '';
+    let last = 0;
+    for (const m of text.matchAll(HL_RE)) {
+      html += escHtml(text.slice(last, m.index)) + '<mark>' + escHtml(m[0]) + '</mark>';
+      last = m.index + m[0].length;
+    }
+    backdrop.innerHTML = html + escHtml(text.slice(last)) + '\n'; // trailing \n keeps the last line aligned
+    backdrop.scrollTop = ta.scrollTop;
+    backdrop.scrollLeft = ta.scrollLeft;
   }
 
   const refresh = () => {
@@ -202,10 +252,12 @@ export function renderEditor(
     }
     const bodyEl = document.createElement('div');
     bodyEl.className = 'preview-body';
-    bodyEl.innerHTML = renderMarkdown(inlineImages(ta.value, atts)); // refs -> local data URIs, then sanitized
+    bodyEl.innerHTML = renderMarkdown(linkifyFileRefs(inlineImages(ta.value, atts))); // img refs -> data URIs, file refs -> links, then sanitized
     content.appendChild(bodyEl);
     decorateCodeBlocks(content);
+    wireFileLinks(content);
     renderChips();
+    renderHighlights();
     resolveDriveImages().catch(() => {});
     updateSize();
   };
@@ -240,7 +292,7 @@ export function renderEditor(
       await onSave({ title, body, attachments: pruneAttachments(ta.value, atts) }, { auto });
       setStatus('Saved ✓');
     } catch {
-      setStatus("Couldn't save — will retry");
+      setStatus('Save failed');
     } finally {
       saving = false;
       if (resaveQueued) { resaveQueued = false; scheduleAutoSave(); }
@@ -249,6 +301,7 @@ export function renderEditor(
 
   refresh();
   ta.addEventListener('input', fireChange);
+  ta.addEventListener('scroll', () => { backdrop.scrollTop = ta.scrollTop; backdrop.scrollLeft = ta.scrollLeft; });
   titleInput.addEventListener('input', () => {
     if (titleInput.value.includes('\n')) {
       const caret = titleInput.selectionStart;
@@ -342,7 +395,13 @@ export function renderEditor(
     titleInput.select();
   }
 
-  return { getBody: () => ta.value, getTitle: () => titleInput.value, getAttachments: () => atts, flush: () => doSave({ auto: true }) };
+  return {
+    getBody: () => ta.value,
+    getTitle: () => titleInput.value,
+    getAttachments: () => atts,
+    flush: () => doSave({ auto: true }),
+    destroy: () => clearTimeout(saveTimer), // cancel a pending auto-save when this editor is torn down
+  };
 }
 
 // Add a hover "Copy" button to every rendered code block.

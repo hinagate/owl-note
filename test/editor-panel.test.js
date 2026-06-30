@@ -218,7 +218,7 @@ describe('auto-save (debounced)', () => {
   it('shows a subtle status (Unsaved… → Saved ✓), not a toast', async () => {
     const onSave = vi.fn().mockResolvedValue({});
     render({ onSave });
-    const status = document.querySelector('.editor-bar .save-status');
+    const status = document.querySelector('.save-status'); // now floats in the edit pane, not the toolbar
     typeBody('x');
     expect(status.textContent).toBe('Unsaved…');
     await vi.advanceTimersByTimeAsync(2600);

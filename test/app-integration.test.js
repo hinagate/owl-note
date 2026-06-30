@@ -9,6 +9,15 @@ beforeEach(async () => {
   app.resetUI();
 });
 
+async function waitFor(fn, ms = 1500) {
+  const start = Date.now();
+  while (Date.now() - start < ms) {
+    if (await fn()) return;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  throw new Error('waitFor: condition not met in time');
+}
+
 describe('app integration', () => {
   it('creates a notebook implicitly under root, saves a note, and lists it', async () => {
     const app = await import('../src/app/app.js');
@@ -24,7 +33,7 @@ describe('app integration', () => {
     ta.value = 'body text';
     ta.dispatchEvent(new Event('input'));
     document.querySelector('#editor button.save').click();
-    await new Promise((r) => setTimeout(r, 10));
+    await waitFor(async () => (await bm.allNotes(root)).length >= 1); // wait for the save to actually land, not a fixed delay
     const notes = await bm.allNotes(root);
     expect(notes).toHaveLength(1);
     expect(notes[0].title).toBe('Hello list');

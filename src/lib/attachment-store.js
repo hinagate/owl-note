@@ -58,7 +58,8 @@ export async function getBytes(att) {
     const uri = bytesToDataUri(bytes, att.mime || 'application/octet-stream');
     await chrome.storage.local.set({ [cacheKey(att.id)]: uri });
     return uri;
-  } catch {
+  } catch (err) {
+    console.warn('[owl-note] Drive image fetch failed — showing placeholder:', err);
     return null; // offline / revoked / deleted — caller shows a placeholder
   }
 }
@@ -72,8 +73,10 @@ export async function offloadNote(note) {
     const next = [];
     for (const a of atts) next.push(await putAttachment(a));
     return { ...note, attachments: next };
-  } catch {
-    return note; // any failure -> leave inline so the note stays device-local (today's behavior)
+  } catch (err) {
+    // any failure -> leave inline so the note stays device-local (today's behavior)
+    console.warn('[owl-note] Drive attachment offload failed — note kept device-local:', err);
+    return note;
   }
 }
 

@@ -39,4 +39,31 @@ describe('editor file attachments', () => {
 
     expect(document.querySelector('.preview .copy-code')).toBeTruthy();
   });
+
+  function pickFile(input, file) {
+    Object.defineProperty(input, 'files', { value: [file], configurable: true, writable: true });
+    input.dispatchEvent(new Event('change'));
+  }
+
+  it('renders one chip per file reference, even when two refs point to the same file', () => {
+    renderEditor(document.getElementById('root'), {
+      body: '[a.zip](owl-file:dup)\n[b.zip](owl-file:dup)',
+      attachments: [{ id: 'dup', name: 'a.zip', mime: 'application/zip', driveFileId: 'F' }],
+    });
+    const chips = document.querySelectorAll('.attachments-bar .attach-chip');
+    expect(chips).toHaveLength(2);
+    expect(chips[0].textContent).toContain('a.zip');
+    expect(chips[1].textContent).toContain('b.zip');
+  });
+
+  it('adds a chip immediately on attach and appends a second chip', async () => {
+    renderEditor(document.getElementById('root'), {});
+    const fileInput = [...document.querySelectorAll('input[type="file"]')].find((i) => i.accept !== 'image/*');
+    pickFile(fileInput, fakeFile('a.pdf', 'application/pdf', 'AAA'));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(document.querySelectorAll('.attachments-bar .attach-chip')).toHaveLength(1);
+    pickFile(fileInput, fakeFile('b.zip', 'application/zip', 'BBB'));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(document.querySelectorAll('.attachments-bar .attach-chip')).toHaveLength(2);
+  });
 });

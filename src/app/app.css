@@ -167,8 +167,11 @@ body.resizing { user-select: none; cursor: col-resize; }
 .editor-bar { display: flex; gap: 8px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); }
 .editor-bar button { border: 1px solid var(--border); background: #fff; padding: 6px 12px; border-radius: 8px; font-size: 13px; cursor: pointer; }
 .editor-bar button:hover { background: #f1f3f5; }
-.editor-bar .save-status { font-size: 12px; color: var(--muted); white-space: nowrap; }
+/* Auto-save status sits at the bottom-right of the edit pane — below the chips (no overlap), out of the toolbar. */
+.edit-pane .save-status { align-self: flex-end; margin: 2px 14px 6px 0; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.edit-pane .save-status:empty { display: none; }
 .editor-bar .toggle-edit { font-weight: 700; font-size: 15px; line-height: 1; padding: 6px 11px; }
+.editor-bar .attach-file { display: inline-flex; align-items: center; gap: 5px; }
 .editor-bar .reading-hint { font-size: 12px; color: var(--muted); background: #eef0f2; padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
 .editor-bar button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 .editor-bar button.primary:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
@@ -183,11 +186,18 @@ body.resizing { user-select: none; cursor: col-resize; }
 .note-title::placeholder { color: #b7bcc4; font-weight: 700; }
 .editor-split { display: grid; grid-template-columns: 1fr 1fr; height: 100%; overflow: hidden; }
 /* Left column: the title field stacked above the body textarea; holds the divider to the preview. */
-.edit-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--border); }
-.editor-split textarea.note-body {
-  flex: 1 1 auto; min-height: 0; border: 0; padding: 18px 20px; resize: none;
-  font: 14px/1.72 ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; outline: none; color: var(--text); background: #fff;
+.edit-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--border); position: relative; }
+/* Body editor: a highlight backdrop sits behind a transparent textarea so attachment
+   references get a grey box. The two layers MUST share font/padding/wrap to align 1:1. */
+.note-body-wrap { position: relative; flex: 1 1 auto; min-height: 0; background: #fff; }
+.editor-split textarea.note-body, .note-body-highlights {
+  position: absolute; inset: 0; box-sizing: border-box; margin: 0; padding: 18px 20px;
+  font: 14px/1.72 ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  white-space: pre-wrap; overflow-wrap: break-word; tab-size: 2; overflow: auto;
 }
+.editor-split textarea.note-body { border: 0; resize: none; outline: none; color: var(--text); background: transparent; z-index: 1; }
+.note-body-highlights { pointer-events: none; color: transparent; z-index: 0; }
+.note-body-highlights mark { background: #eceef1; color: transparent; border-radius: 3px; box-shadow: 0 0 0 2px #eceef1; }
 /* Reading view (preview only): drop the two-column grid to a plain block so the
    preview ALWAYS fills the full editor width. A single-track grid still let grid
    auto-placement strand the preview in a narrow/left column in some states; a block
@@ -261,5 +271,10 @@ body.resizing { user-select: none; cursor: col-resize; }
 #note-list .item.trashed .delete-forever { color: #b00020; border-color: #f3c2c8; }
 
 .attachments-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 0; }
-.attach-chip { font-size: 12px; padding: 2px 8px; border: 1px solid #c9ced6; border-radius: 12px; background: #f5f6f8; cursor: pointer; }
+.attach-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 2px 9px; border: 1px solid #c9ced6; border-radius: 12px; background: #f5f6f8; cursor: pointer; }
 .attach-chip.unavailable { opacity: 0.5; text-decoration: line-through; }
+/* File-attachment link in the rendered preview: paperclip + clickable name, on its own line. */
+.owl-file-link { display: flex; align-items: center; gap: 5px; width: fit-content; margin: 6px 0; color: var(--accent); text-decoration: underline; cursor: pointer; }
+.owl-file-link.unavailable { opacity: 0.5; text-decoration: line-through; cursor: default; }
+/* Crisp SVG paperclip (Feather), tinted to the surrounding text color via mask. */
+.owl-file-ico { display: inline-block; width: 13px; height: 13px; flex: none; background-color: currentColor; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48'/%3E%3C/svg%3E") center/contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48'/%3E%3C/svg%3E") center/contain no-repeat; }

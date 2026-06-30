@@ -72,18 +72,27 @@ export async function toggleDriveSync(checked) {
         + 'they sync across your devices. You will be asked to grant access, and can '
         + 'turn this off at any time.',
       );
-      if (!ok) return false; // user declined the first-run consent — leave sync off
+      if (!ok) { toast('Drive sync not enabled.'); return false; } // user declined consent — leave sync off
       await enable();
       toast('Google Drive sync on');
       return true;
     }
+    // Disabling — warn that attachments will stop syncing.
+    const offOk = confirm(
+      'Turn off Google Drive sync?\n\n'
+      + 'New photos and file attachments will no longer sync across your devices — '
+      + 'they will stay only on this device. Files already in your Drive are kept.',
+    );
+    if (!offOk) return await isEnabled(); // changed mind — keep it on (toolbar re-checks the box)
     await disable();
-    toast('Google Drive sync off');
+    toast('⚠ Drive sync off — new photos & files won’t sync across devices', true);
     return false;
   } catch (err) {
     // permission denied, consent window cancelled, or auth failed — reflect reality
     console.warn('Google Drive sync not enabled:', err);
-    toast(err && err.message ? err.message : 'Google Drive sync not enabled', true);
+    const m = String((err && err.message) || '');
+    const cancelled = /did not approve|access_denied|denied|cancel|closed|interaction_required/i.test(m);
+    toast(cancelled ? '⚠ Google Drive sync cancelled — not enabled.' : `⚠ Couldn't enable Drive sync${m ? ': ' + m : ''}`, true);
     return await isEnabled();
   }
 }
@@ -100,6 +109,7 @@ export function resetUI() {
   ui.activeLocalId = null;
   ui.activeLocalFolderId = null;
   ui.current = null;
+  if (ui.editor && ui.editor.destroy) ui.editor.destroy();
   ui.editor = null;
   ui.query = '';
   ui.notes = [];
@@ -398,6 +408,7 @@ function renderCurrentEditor(opts = {}) {
   const noteFolderId = ui.activeLocalId
     ? (ui.activeLocalFolderId ?? ui.activeFolder)
     : (ui.current?.folderId ?? ui.activeFolder);
+  if (ui.editor && ui.editor.destroy) ui.editor.destroy(); // cancel the prior editor's pending auto-save
   ui.editor = renderEditor(document.getElementById('editor'), {
     title: ui.current ? ui.current.title : '',
     body: ui.current ? ui.current.body : '',

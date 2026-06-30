@@ -71,6 +71,19 @@ export function listFileRefs(body) {
   return out;
 }
 
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+// Turn each `[name](owl-file:<id>)` reference into a clickable preview anchor. A raw
+// `owl-file:` href is stripped by the sanitizer (unknown scheme) — leaving a dead link —
+// so we emit a safe `href="#"` anchor carrying the id in `data-owl-file`; the editor
+// wires the click to open the attachment.
+export function linkifyFileRefs(body) {
+  return String(body ?? '').replace(REF_FILE, (whole, name, id) =>
+    `<a href="#" class="owl-file-link" data-owl-file="${id}"><span class="owl-file-ico"></span>${escapeHtml(name)}</a>`);
+}
+
 // Like inlineImages but async: resolves each owl-img ref's bytes via getBytes(att)
 // (which may hit the local cache or Drive). Refs whose bytes are unavailable are left
 // as-is so the renderer can show a placeholder.
