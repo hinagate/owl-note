@@ -2,6 +2,13 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { installFakeChrome } from './helpers/fake-chrome.js';
 import { connect, disconnect, isConnected } from '../src/lib/drive/auth.js';
 
+vi.mock('../src/lib/drive/config.js', () => ({
+  OAUTH_CLIENT_ID: 'cid',
+  OAUTH_CLIENT_SECRET: 'sec',
+  DRIVE_SCOPE: 'https://www.googleapis.com/auth/drive.file',
+  TOKEN_ENDPOINT: 'https://oauth2.googleapis.com/token',
+}));
+
 beforeEach(() => {
   installFakeChrome();
   chrome.identity = {

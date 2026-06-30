@@ -7,6 +7,12 @@ const SKEW_MS = 60000; // refresh a minute early
 
 function needsAuth(msg) { const e = new Error(msg || 'Drive not connected'); e.name = 'NeedsAuth'; return e; }
 
+function assertConfigured() {
+  if (!OAUTH_CLIENT_ID || !OAUTH_CLIENT_SECRET) {
+    throw needsAuth('Google Drive OAuth is not configured. Add .drive-credentials.json and rebuild.');
+  }
+}
+
 async function readTokens() {
   return (await chrome.storage.local.get(TOKENS))[TOKENS] || null;
 }
@@ -20,6 +26,7 @@ export async function isConnected() {
 }
 
 async function refresh(t) {
+  assertConfigured();
   const res = await fetch(TOKEN_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -47,6 +54,7 @@ function codeFromRedirect(redirectUrl) {
 }
 
 export async function connect() {
+  assertConfigured();
   const redirectUri = chrome.identity.getRedirectURL();
   const { verifier, challenge } = await createPkce();
   const url = buildAuthUrl({ clientId: OAUTH_CLIENT_ID, redirectUri, scope: DRIVE_SCOPE, challenge });

@@ -80,9 +80,10 @@ export async function toggleDriveSync(checked) {
     await disable();
     toast('Google Drive sync off');
     return false;
-  } catch {
+  } catch (err) {
     // permission denied, consent window cancelled, or auth failed — reflect reality
-    toast('Google Drive sync not enabled', true);
+    console.warn('Google Drive sync not enabled:', err);
+    toast(err && err.message ? err.message : 'Google Drive sync not enabled', true);
     return await isEnabled();
   }
 }
