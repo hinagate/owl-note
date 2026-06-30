@@ -20,8 +20,19 @@ import { saveNote, urlByteLength, MAX_URL_BYTES, WARN_URL_BYTES } from '../lib/s
 import { ensureTrash, trashNotes, restoreNotes, deleteForever } from '../lib/trash.js';
 import { rangeHandles } from '../lib/list-selection.js';
 import { isSelfOrDescendant } from '../lib/notebook-tree.js';
+import { offloadShape } from '../lib/attachment-store.js';
+import { isEnabled, enable, disable } from '../lib/drive-sync.js';
 
 export { saveNote, MAX_URL_BYTES, WARN_URL_BYTES }; // moved to ../lib/save-note.js
+
+// The bytes a note WOULD occupy in its bookmark, after Drive offload. With sync on,
+// attachments become small references, so the meter reflects what actually syncs.
+// Uses the PURE offloadShape (no upload) — this runs on every keystroke.
+export async function measuredBytes(note) {
+  const enabled = (await chrome.storage.local.get('drive:enabled'))['drive:enabled'];
+  const toSave = enabled ? offloadShape(note) : note;
+  return urlByteLength(await encode(toSave));
+}
 
 // Measure what this note will actually cost in its bookmark URL — the same
 // compressed bytes the save path caps — so the editor can show it live.
@@ -29,8 +40,7 @@ async function measureNoteSize({ title, body, attachments = [] }) {
   const note = ui.current && ui.activeBookmarkId
     ? withUpdatedContent(ui.current, { title, body, attachments })
     : createNote({ title, body, attachments });
-  const payload = await encode(note);
-  return { bytes: urlByteLength(payload), warn: WARN_URL_BYTES, max: MAX_URL_BYTES };
+  return { bytes: await measuredBytes(note), warn: WARN_URL_BYTES, max: MAX_URL_BYTES };
 }
 
 export async function dropNote(handle, folderId) {
@@ -45,6 +55,36 @@ export function toast(message, isWarn = false) {
   el.className = isWarn ? 'warn' : '';
   el.hidden = false;
   setTimeout(() => { el.hidden = true; }, 3000);
+}
+
+// Turn Drive attachment sync on/off from the toolbar checkbox. Runs inside the
+// checkbox's change handler (a user gesture) so enable() can call
+// chrome.permissions.request. Returns the resulting enabled state so the toolbar
+// can revert the box if consent is cancelled/denied. NOTE: the first-run consent
+// copy uses confirm() — synchronous, so it does NOT spend the gesture before
+// enable() reaches chrome.permissions.request.
+export async function toggleDriveSync(checked) {
+  try {
+    if (checked) {
+      const ok = confirm(
+        'Sync images & files via Google Drive?\n\n'
+        + 'Attachments will be stored in a private app folder in your Google Drive so '
+        + 'they sync across your devices. You will be asked to grant access, and can '
+        + 'turn this off at any time.',
+      );
+      if (!ok) return false; // user declined the first-run consent — leave sync off
+      await enable();
+      toast('Google Drive sync on');
+      return true;
+    }
+    await disable();
+    toast('Google Drive sync off');
+    return false;
+  } catch {
+    // permission denied, consent window cancelled, or auth failed — reflect reality
+    toast('Google Drive sync not enabled', true);
+    return await isEnabled();
+  }
 }
 
 const recentIds = []; // ids of notes created this session — float to the top until reload (in-memory)
@@ -304,6 +344,8 @@ async function refreshPanes() {
     onExportMarkdown: () => doExportMarkdown(),
     onExportJson: doExport,
     onImport: (files) => doImportFiles(files),
+    driveEnabled: await isEnabled(),
+    onToggleDrive: (checked) => toggleDriveSync(checked),
   });
   await refreshNoteList();
   // Editor is intentionally NOT re-rendered here. It is rendered only by

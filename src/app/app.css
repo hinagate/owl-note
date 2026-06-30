@@ -48,6 +48,13 @@ body {
   border-color: var(--accent); box-shadow: 0 0 0 3px rgba(45, 190, 96, 0.15);
 }
 
+/* Drive sync opt-in toggle */
+.drive-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; color: var(--text); cursor: pointer; white-space: nowrap;
+}
+.drive-toggle input { cursor: pointer; }
+
 /* Panes */
 #panes { display: grid; grid-template-columns: 220px 300px 1fr; height: calc(100vh - 53px); }
 #sidebar { background: var(--sidebar-bg); border-right: 1px solid var(--border); overflow: auto; padding: 10px 8px; }

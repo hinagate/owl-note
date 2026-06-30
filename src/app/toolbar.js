@@ -3,7 +3,7 @@
 // Track the active outside-click closer so re-renders don't leak stale listeners.
 let _activeCloser = null;
 
-export function renderToolbar(container, { query = '', onSearch, onExportMarkdown, onExportJson, onImport }) {
+export function renderToolbar(container, { query = '', onSearch, onExportMarkdown, onExportJson, onImport, driveEnabled = false, onToggleDrive = null }) {
   // Clean up any stale document listener from a previous render.
   if (_activeCloser) {
     document.removeEventListener('click', _activeCloser);
@@ -66,4 +66,29 @@ export function renderToolbar(container, { query = '', onSearch, onExportMarkdow
   importBtn.addEventListener('click', () => importInput.click());
 
   container.append(search, exportWrap, importBtn, importInput);
+
+  // Drive sync opt-in toggle. Rendered only when the app supplies a handler.
+  // The checkbox change is a user gesture, which chrome.permissions.request needs:
+  // onToggleDrive must reach chrome.permissions.request synchronously (no awaits before it).
+  if (onToggleDrive) {
+    const driveWrap = document.createElement('label');
+    driveWrap.className = 'drive-toggle';
+    const driveBox = document.createElement('input');
+    driveBox.type = 'checkbox';
+    driveBox.className = 'drive-sync';
+    driveBox.checked = !!driveEnabled;
+    const driveText = document.createElement('span');
+    driveText.textContent = 'Sync images & files via Google Drive';
+    driveBox.addEventListener('change', async () => {
+      driveBox.disabled = true;
+      try {
+        const next = await onToggleDrive(driveBox.checked); // resolves to the real enabled state
+        driveBox.checked = !!next; // revert if the user cancelled consent / denied the permission
+      } finally {
+        driveBox.disabled = false;
+      }
+    });
+    driveWrap.append(driveBox, driveText);
+    container.append(driveWrap);
+  }
 }
