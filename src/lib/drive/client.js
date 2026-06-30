@@ -1,5 +1,5 @@
 import { getAccessToken } from './auth.js';
-import { DRIVE_FILES_URL, DRIVE_UPLOAD_URL, ATTACH_FOLDER_NAME } from './config.js';
+import { DRIVE_FILES_URL, DRIVE_UPLOAD_URL, ATTACH_FOLDER_NAME, MAX_ATTACH_BYTES } from './config.js';
 
 const FOLDER_KEY = 'drive:folderId';
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
@@ -29,6 +29,33 @@ export async function ensureFolder() {
   }
   await chrome.storage.local.set({ [FOLDER_KEY]: id });
   return id;
+}
+
+export async function findByHash(hash) {
+  const q = encodeURIComponent(`appProperties has { key='owlHash' and value='${hash}' } and trashed=false`);
+  const res = await (await authedFetch(`${DRIVE_FILES_URL}?q=${q}&fields=files(id)`)).json();
+  return (res.files && res.files[0] && res.files[0].id) || null;
+}
+
+export async function uploadFile({ name, mime, bytes, hash }) {
+  if (bytes.length > MAX_ATTACH_BYTES) throw new Error(`Attachment too large (max ${MAX_ATTACH_BYTES} bytes)`);
+  const folderId = await ensureFolder();
+  const meta = { name, mimeType: mime, parents: [folderId], appProperties: { owlHash: hash } };
+  const boundary = 'owlnote' + hash;
+  const enc = new TextEncoder();
+  const head = enc.encode(
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n` +
+    `--${boundary}\r\nContent-Type: ${mime}\r\n\r\n`,
+  );
+  const tail = enc.encode(`\r\n--${boundary}--`);
+  const body = new Uint8Array(head.length + bytes.length + tail.length);
+  body.set(head, 0); body.set(bytes, head.length); body.set(tail, head.length + bytes.length);
+  const res = await (await authedFetch(`${DRIVE_UPLOAD_URL}?uploadType=multipart&fields=id`, {
+    method: 'POST',
+    headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+    body,
+  })).json();
+  return res.id;
 }
 
 export { authedFetch };
