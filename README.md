@@ -44,6 +44,8 @@ Note apps keep getting heavier and pricier — more features you never asked for
 - **Bulk actions, with a safety net** — multi-select like files (Ctrl/Cmd-click, Shift+↑/↓) and a **Trash** you can restore from.
 - **Nested notebooks** — organize notes into notebooks and sub-notebooks in a collapsible tree, drag to re-nest, and a breadcrumb always shows which notebook the open note lives in.
 - **Private by design** — no backend, no telemetry; we run no server and never see your notes. Minimal permissions, built on Manifest V3.
+- **Attach images & files** — paste or drop in images, or attach any file (PDF, Word, zip…) right inside a note.
+- **Optional Google Drive sync** — flip one toggle to also sync your attachments *and* any note too large to fit in a bookmark through **your own** Google Drive, so nothing stays stuck on a single device. Off by default — we still run no server and never see your notes.
 - **Your work is safe** — auto-saves as you type, with a compressed local backup on every device, so nothing is lost even if a bookmark goes missing.
 
 <p align="center">
@@ -73,13 +75,15 @@ OWL-Note doesn’t invent its own storage or sync system. It uses what your brow
 3. Your browser’s built-in account sync (Google or Microsoft) replicates it to your other signed-in devices.
 4. A local backup copy is also kept on each device for safety.
 
+**Optional — Google Drive sync.** Turn on one toggle and OWL-Note *additionally* stores image/file attachments and any note too large to fit in a bookmark in an `OWL-Note Attachments` folder in **your own** Google Drive — so those sync across your devices too. It’s keyed to your Google account, off by default, and we never see it. Everything else works exactly as above.
+
 That’s why it’s so lightweight and private — we’re not building another cloud service. We’re just making excellent use of infrastructure you already have and that Google/Microsoft continue to harden.
 
 ---
 
 ## Good to know
 
-- Built for text notes — Markdown, code, and math. Very large notes (e.g. with big images) stay on the current device instead of syncing.
+- By default, notes sync as bookmarks; a note too large for that (e.g. with big images or lots of text) stays on the current device. Turn on **Google Drive sync** (optional) and those sync too, via your own Drive.
 - Works on Chrome, Edge, and other Chromium browsers.
 
 ---
