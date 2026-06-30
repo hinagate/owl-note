@@ -2,6 +2,7 @@
 import * as bm from './bookmarks.js';
 import * as mirror from './mirror.js';
 import { encode } from './codec.js';
+import { offloadNote } from './attachment-store.js';
 
 // Chrome's bookmark sync silently drops bookmarks whose URL is much past ~8 KB,
 // so that — not Chrome's far larger local-bookmark limit — is the real ceiling
@@ -17,9 +18,10 @@ export function urlByteLength(payload) {
   return new TextEncoder().encode(bm.buildNoteUrl(payload)).length;
 }
 
-export async function saveNote(note, folderId, existingBookmarkId) {
-  await mirror.saveBackup(note); // durability first — always
-  const payload = await encode(note);
+export async function saveNote(note, folderId, existingBookmarkId, offload = offloadNote) {
+  await mirror.saveBackup(note); // durability first — always, with full inline bytes
+  const toSave = await offload(note); // best-effort Drive offload (no-op when sync off / on failure)
+  const payload = await encode(toSave);
   const bytes = urlByteLength(payload);
   if (bytes > MAX_URL_BYTES) {
     if (existingBookmarkId) await bm.deleteNote(existingBookmarkId);
@@ -27,8 +29,8 @@ export async function saveNote(note, folderId, existingBookmarkId) {
     return { bookmarkId: null, status: 'capped' };
   }
   let bookmarkId = existingBookmarkId;
-  if (bookmarkId) await bm.updateNote(bookmarkId, note.title, payload);
-  else bookmarkId = await bm.createNote(folderId, note.title, payload);
+  if (bookmarkId) await bm.updateNote(bookmarkId, toSave.title, payload);
+  else bookmarkId = await bm.createNote(folderId, toSave.title, payload);
   await mirror.saveBackup(note, { localOnly: false });
   return { bookmarkId, status: bytes > WARN_URL_BYTES ? 'warn' : 'ok' };
 }
