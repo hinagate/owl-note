@@ -9,6 +9,8 @@ import { contentHash } from './note.js';
 const INLINE_IMG = /(!\[[^\]]*\]\()(data:image\/[\w.+-]+;base64,[A-Za-z0-9+/=]+)(\))/g;
 // `![alt](owl-img:ID)` — the short reference we substitute for an extracted image.
 const REF_IMG = /(!\[[^\]]*\]\()owl-img:([A-Za-z0-9]+)(\))/g;
+// `[name](owl-file:ID)` — a non-image file attachment reference.
+const REF_FILE = /\[([^\]]*)\]\(owl-file:([A-Za-z0-9]+)\)/g;
 
 function altOf(prefix) {
   const m = /^!\[([^\]]*)\]/.exec(prefix);
@@ -49,4 +51,39 @@ export function pruneAttachments(body, attachments = []) {
   const used = new Set();
   for (const m of String(body ?? '').matchAll(REF_IMG)) used.add(m[2]);
   return (attachments || []).filter((a) => used.has(a.id));
+}
+
+// Add a non-image file as an attachment, returning a readable `[name](owl-file:<id>)`
+// reference to insert in the body. id is a content hash so identical files dedupe.
+export function attachFile({ name, mime, dataUri }, attachments = []) {
+  const id = contentHash(dataUri);
+  const byId = new Map((attachments || []).map((a) => [a.id, a]));
+  if (!byId.has(id)) byId.set(id, { id, name: name || 'file', mime: mime || 'application/octet-stream', dataUri });
+  return { ref: `[${name || 'file'}](owl-file:${id})`, attachments: [...byId.values()] };
+}
+
+// All owl-file references in a body, in order.
+export function listFileRefs(body) {
+  const out = [];
+  for (const m of String(body ?? '').matchAll(REF_FILE)) out.push({ id: m[2], name: m[1] });
+  return out;
+}
+
+// Like inlineImages but async: resolves each owl-img ref's bytes via getBytes(att)
+// (which may hit the local cache or Drive). Refs whose bytes are unavailable are left
+// as-is so the renderer can show a placeholder.
+export async function inlineImagesAsync(body, attachments = [], getBytes) {
+  const byId = new Map((attachments || []).map((a) => [a.id, a]));
+  const src = String(body ?? '');
+  const matches = [...src.matchAll(REF_IMG)];
+  if (!matches.length) return src;
+  let out = '';
+  let last = 0;
+  for (const m of matches) {
+    const att = byId.get(m[2]);
+    const uri = att ? await getBytes(att) : null;
+    out += src.slice(last, m.index) + (uri ? m[1] + uri + m[3] : m[0]);
+    last = m.index + m[0].length;
+  }
+  return out + src.slice(last);
 }
