@@ -21,6 +21,7 @@ import { ensureTrash, trashNotes, restoreNotes, deleteForever } from '../lib/tra
 import { rangeHandles } from '../lib/list-selection.js';
 import { isSelfOrDescendant } from '../lib/notebook-tree.js';
 import { offloadShape } from '../lib/attachment-store.js';
+import * as noteDrive from '../lib/note-drive.js';
 import { isEnabled, enable, disable } from '../lib/drive-sync.js';
 
 export { saveNote, MAX_URL_BYTES, WARN_URL_BYTES }; // moved to ../lib/save-note.js
@@ -153,7 +154,17 @@ export async function loadNotes(folderId) {
   for (const r of visible) {
     try {
       const note = await decode(r.payload);
-      decoded.push({ ...note, bookmarkId: r.bookmarkId, folderId: r.folderId || folderId, dateAdded: r.dateAdded });
+      // A Drive-backed (over-cap) note keeps only a short preview in the bookmark. On the
+      // device that wrote it the local mirror still holds the full body — use that so the
+      // note is fully searchable here; other devices fall back to the synced preview.
+      let body = note.body;
+      if (note._driveBody) {
+        const backup = await mirror.getBackup(note.id);
+        body = (backup && backup.current && backup.current.body !== undefined && backup.current.hash === note.hash)
+          ? backup.current.body
+          : (note.preview || '');
+      }
+      decoded.push({ ...note, body, bookmarkId: r.bookmarkId, folderId: r.folderId || folderId, dateAdded: r.dateAdded });
       if (note.id) seen.add(note.id);
     } catch { /* skip malformed */ }
   }
@@ -437,6 +448,7 @@ function renderCurrentEditor(opts = {}) {
       // meter already flags oversized notes. Only manual saves pop a toast.
       if (!auto) {
         if (res.status === 'capped') toast('Too large to sync — saved locally only', true);
+        else if (res.status === 'synced') toast('Saved — large note synced via Drive');
         else if (res.status === 'warn') toast('Large note — may not sync across devices', true);
         else toast('Saved');
       }
@@ -492,7 +504,11 @@ async function deleteNotebook(id) {
   const notes = await bm.allNotes(id);
   const deleted = new Set(notes.map((n) => n.bookmarkId));
   for (const n of notes) {
-    try { const note = await decode(n.payload); await mirror.removeBackup(note.id); } catch { /* skip malformed */ }
+    try {
+      const note = await decode(n.payload);
+      if (note._driveBody) { try { await noteDrive.deleteNoteBody(note._driveBody); } catch { /* best-effort */ } }
+      await mirror.removeBackup(note.id);
+    } catch { /* skip malformed */ }
   }
   // Does the open note live in the deleted subtree? Covers bookmark notes (by id) and
   // local-only notes (by folder), so a deleted folder can't linger in the breadcrumb.
@@ -535,10 +551,27 @@ async function openLocalNote(id) {
   await refreshNoteList();
 }
 
+// Resolve a (possibly Drive-backed) note to its full body. For a stub, prefer the local
+// mirror when it holds the same content (origin device — no fetch), else pull the full
+// payload from Drive. Falls back to the preview if Drive is unreachable, so it still opens.
+async function resolveNote(n) {
+  if (!n || !n._driveBody) return n;
+  const backup = await mirror.getBackup(n.id);
+  if (backup && backup.current && backup.current.body !== undefined && backup.current.hash === n.hash) {
+    return { ...backup.current, _driveBody: n._driveBody, bookmarkId: n.bookmarkId, folderId: n.folderId };
+  }
+  try {
+    const full = await decode(await noteDrive.loadNoteBody(n._driveBody));
+    return { ...full, _driveBody: n._driveBody, bookmarkId: n.bookmarkId, folderId: n.folderId, dateAdded: n.dateAdded };
+  } catch {
+    return { ...n, body: n.preview || '' }; // Drive unavailable — open with the preview
+  }
+}
+
 async function openBookmark(bookmarkId) {
   const found = (ui.notes || []).find((n) => n.bookmarkId === bookmarkId);
   if (!found) return;
-  ui.current = found;
+  ui.current = await resolveNote(found);
   ui.activeBookmarkId = bookmarkId;
   ui.activeLocalId = null;
   ui.isNew = false;
@@ -569,7 +602,7 @@ export async function openByHash() {
     // bookmark so the breadcrumb shows the right path and edits update it (not duplicate it).
     let match = null;
     try { match = (await bm.allNotes(ui.rootId)).find((r) => r.payload === payload); } catch { /* tree read failed */ }
-    ui.current = match ? { ...note, folderId: match.folderId } : note;
+    ui.current = await resolveNote(match ? { ...note, folderId: match.folderId, bookmarkId: match.bookmarkId } : note);
     ui.activeBookmarkId = match ? match.bookmarkId : null;
     ui.activeLocalId = null;
     ui.isNew = false; // an opened note is not a new-note draft

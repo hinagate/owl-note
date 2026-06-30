@@ -63,4 +63,18 @@ export async function getMedia(fileId) {
   return new Uint8Array(await res.arrayBuffer());
 }
 
+// Overwrite an existing file's bytes (simple media update). Returns the fileId.
+export async function updateMedia(fileId, bytes) {
+  await authedFetch(`${DRIVE_UPLOAD_URL}/${fileId}?uploadType=media`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: bytes,
+  });
+  return fileId;
+}
+
+export async function deleteFile(fileId) {
+  await authedFetch(`${DRIVE_FILES_URL}/${fileId}`, { method: 'DELETE' });
+}
+
 export { authedFetch };

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { installFakeChrome } from './helpers/fake-chrome.js';
 
 beforeEach(async () => {
@@ -7,6 +7,13 @@ beforeEach(async () => {
     '<div id="toolbar"></div><aside id="sidebar"></aside><section id="note-list"></section><main id="editor"></main><div id="toast" hidden></div>';
   const app = await import('../src/app/app.js');
   app.resetUI();
+});
+
+// Drain any in-flight save/refresh (and cancel the editor's pending auto-save) so a prior
+// test's async work completes against ITS OWN fake-chrome and can't bleed into the next test.
+afterEach(async () => {
+  try { const app = await import('../src/app/app.js'); app.resetUI(); } catch { /* ignore */ }
+  await new Promise((r) => setTimeout(r, 50));
 });
 
 async function waitFor(fn, ms = 1500) {
@@ -37,6 +44,22 @@ describe('app integration', () => {
     const notes = await bm.allNotes(root);
     expect(notes).toHaveLength(1);
     expect(notes[0].title).toBe('Hello list');
+  });
+
+  it('searches a Drive-backed note by its full body via the local mirror (preview elsewhere)', async () => {
+    const app = await import('../src/app/app.js');
+    const bm = await import('../src/lib/bookmarks.js');
+    const mirror = await import('../src/lib/mirror.js');
+    const { encode } = await import('../src/lib/codec.js');
+    const root = await bm.ensureRoot();
+    // A stub bookmark (over-cap note) carrying only a short preview...
+    const stub = { id: 'big1', title: 'Big', _driveBody: 'FID', preview: 'short preview', version: 2, hash: 'hh' };
+    await bm.createNote(root, stub.title, await encode(stub));
+    // ...with the full body in the local mirror on this device (matching hash).
+    await mirror.saveBackup({ id: 'big1', title: 'Big', body: 'the full secret body text', version: 2, hash: 'hh' });
+    await app.initUI(root);
+    const big = (await app.loadNotes(root)).find((n) => n.id === 'big1');
+    expect(big.body).toBe('the full secret body text'); // full body from the mirror, not the preview
   });
 
   it('lists notes newest-first across reloads (older notes ordered by bookmark dateAdded)', async () => {
