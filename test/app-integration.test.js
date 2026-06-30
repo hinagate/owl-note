@@ -62,6 +62,18 @@ describe('app integration', () => {
     expect(big.body).toBe('the full secret body text'); // full body from the mirror, not the preview
   });
 
+  it('opens the latest note by default on boot, instead of a blank editor', async () => {
+    const app = await import('../src/app/app.js');
+    const bm = await import('../src/lib/bookmarks.js');
+    const { encode } = await import('../src/lib/codec.js');
+    const root = await bm.ensureRoot();
+    await bm.createNote(root, 'Older', await encode({ id: 'o1', title: 'Older', body: 'older body', created: 1000 }));
+    await bm.createNote(root, 'Newer', await encode({ id: 'n1', title: 'Newer', body: 'newer body', created: 2000 }));
+    await app.initUI(root);
+    await waitFor(() => document.querySelector('#editor .note-title')?.value === 'Newer');
+    expect(document.querySelector('#editor textarea.note-body').value).toContain('newer body');
+  });
+
   it('lists notes newest-first across reloads (older notes ordered by bookmark dateAdded)', async () => {
     const app = await import('../src/app/app.js');
     const bm = await import('../src/lib/bookmarks.js');

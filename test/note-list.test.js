@@ -34,6 +34,35 @@ describe('note list', () => {
     expect(el.querySelector('.card-snippet').textContent).toContain('some body text');
   });
 
+  it('badges Drive-backed and local-only notes (and leaves normal notes untagged)', () => {
+    const el = document.getElementById('note-list');
+    renderNoteList(el, {
+      notes: [
+        { bookmarkId: 'b1', title: 'BigOn', _driveBody: 'F1' },
+        { bookmarkId: 'b2', title: 'Photo', attachments: [{ id: 'a', driveFileId: 'AF' }] },
+        { id: 'l1', title: 'Local', localOnly: true },
+        { bookmarkId: 'b3', title: 'Small' },
+      ],
+      activeHandle: null, onOpen: vi.fn(), driveEnabled: true,
+    });
+    const card = (t) => [...el.querySelectorAll('.item.card')].find((c) => c.querySelector('.card-title').textContent.startsWith(t));
+    expect(card('BigOn').querySelector('.badge-drive').textContent).toContain('Drive');
+    expect(card('BigOn').querySelector('.badge-drive .owl-cloud-ico')).not.toBeNull(); // cloud glyph, not the ☁ emoji
+    expect(card('Photo').querySelector('.badge-drive').textContent).toContain('Drive'); // attachment lives in Drive
+    expect(card('Local').querySelector('.badge-local').textContent).toContain('not synced');
+    expect(card('Small').querySelector('.badge-drive, .badge-drive-off, .badge-local')).toBeNull();
+  });
+
+  it('flips a Drive-backed note to a warning badge when sync is off', () => {
+    const el = document.getElementById('note-list');
+    renderNoteList(el, {
+      notes: [{ bookmarkId: 'b1', title: 'Big', _driveBody: 'F1' }],
+      activeHandle: null, onOpen: vi.fn(), driveEnabled: false,
+    });
+    expect(el.querySelector('.badge-drive')).toBeNull();
+    expect(el.querySelector('.badge-drive-off').textContent).toContain('Drive sync off');
+  });
+
   it('marks a draft entry with the draft class and shows its name', () => {
     const el = document.getElementById('note-list');
     renderNoteList(el, {

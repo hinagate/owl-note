@@ -1,5 +1,5 @@
 // src/app/note-list.js
-export function renderNoteList(container, { notes, activeHandle, onOpen = () => {}, onTogglePin = () => {}, onNew = () => {}, trashView = false, onRestore = () => {}, onDeleteForever = () => {}, onEmptyTrash = () => {}, selected = new Set(), focusIndex = -1, onCardClick = null, onMove = () => {}, onSelectAll = () => {}, onClearSelection = () => {}, onOpenFocused = () => {}, onBatchDelete = () => {} }) {
+export function renderNoteList(container, { notes, activeHandle, onOpen = () => {}, onTogglePin = () => {}, onNew = () => {}, trashView = false, onRestore = () => {}, onDeleteForever = () => {}, onEmptyTrash = () => {}, selected = new Set(), focusIndex = -1, onCardClick = null, onMove = () => {}, onSelectAll = () => {}, onClearSelection = () => {}, onOpenFocused = () => {}, onBatchDelete = () => {}, driveEnabled = false }) {
   // Fall back to onOpen for plain clicks when no modifier-aware handler is provided
   // (maintains backward compat with unit tests that pass onOpen directly).
   const _cardClick = onCardClick ?? ((idx, handle, mod) => { if (!mod.ctrl && !mod.shift) onOpen(handle); });
@@ -114,6 +114,18 @@ export function renderNoteList(container, { notes, activeHandle, onOpen = () => 
       const badge = document.createElement('span');
       badge.className = 'badge-local';
       badge.textContent = 'local · not synced';
+      title.appendChild(badge);
+    } else if (n._driveBody || (n.attachments || []).some((a) => a.driveFileId)) {
+      // Uses Google Drive: an over-cap note body and/or image/file attachments stored in Drive.
+      const badge = document.createElement('span');
+      badge.className = driveEnabled ? 'badge-drive' : 'badge-drive-off';
+      if (driveEnabled) {
+        const ico = document.createElement('span');
+        ico.className = 'owl-cloud-ico'; // crisp cloud glyph (replaces the plain ☁ emoji)
+        badge.append(ico, document.createTextNode(' Drive'));
+      } else {
+        badge.textContent = '⚠ Drive sync off';
+      }
       title.appendChild(badge);
     }
 

@@ -120,9 +120,11 @@ export function renderToolbar(container, { query = '', onSearch, onSuggest = nul
     driveBox.type = 'checkbox';
     driveBox.className = 'drive-sync';
     driveBox.checked = !!driveEnabled;
-    driveBox.setAttribute('aria-label', 'Sync large notes & attachments via Google Drive'); // a11y without label-click
+    driveBox.setAttribute('aria-label', 'Sync Large Notes & Attachments compatible with Google Drive'); // a11y without label-click
     const driveText = document.createElement('span');
-    driveText.textContent = 'Sync large notes & attachments via Google Drive';
+    const cloudIco = document.createElement('span');
+    cloudIco.className = 'owl-cloud-ico'; // crisp cloud glyph (replaces the plain ☁ emoji)
+    driveText.append(cloudIco, document.createTextNode(' Sync Large Notes & Attachments compatible with Google Drive'));
     driveBox.addEventListener('change', async () => {
       driveBox.disabled = true;
       try {

@@ -55,6 +55,8 @@ describe('toolbar', () => {
     const box = el.querySelector('input.drive-sync');
     expect(box).not.toBeNull();
     expect(box.checked).toBe(true); // reflects isEnabled() state on load
+    expect(el.querySelector('.drive-toggle .owl-cloud-ico')).not.toBeNull(); // cloud glyph on the label
+    expect(el.querySelector('.drive-toggle').textContent).toContain('compatible with Google Drive');
   });
 
   it('shows auto-suggest matches and opens the picked note', () => {

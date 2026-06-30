@@ -268,6 +268,12 @@ body.resizing { user-select: none; cursor: col-resize; }
   color: #7a6a45;
   vertical-align: middle;
 }
+/* ☁ this note's body lives in Google Drive (over the bookmark cap). */
+.badge-drive { margin-left: 6px; padding: 1px 6px; font-size: 10px; border-radius: 8px; background: #e3eefb; color: #2c5b9c; vertical-align: middle; }
+.badge-drive-off { margin-left: 6px; padding: 1px 6px; font-size: 10px; border-radius: 8px; background: #fbe9e0; color: #a4521f; vertical-align: middle; }
+/* Cloud glyph (mask-tinted to the surrounding text color) for the Drive badge + sync toggle. */
+.owl-cloud-ico { display: inline-block; width: 13px; height: 13px; vertical-align: -2px; background-color: currentColor; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.2 15 C2.2 13.2 2.5 11.8 3.4 11 C4 7.4 5.6 6 8 6 C10.2 6 11.8 7.6 12.5 10 C13.1 8.7 14.2 8 15.6 8 C17.6 8 19.2 9.5 19.6 11.6 C20.6 12 21.5 13.1 21.5 14.6 C21.5 17.2 19.8 19 17.2 19 L6 19 C3.6 19 2.2 17.4 2.2 15 Z'/%3E%3C/svg%3E") center/contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.2 15 C2.2 13.2 2.5 11.8 3.4 11 C4 7.4 5.6 6 8 6 C10.2 6 11.8 7.6 12.5 10 C13.1 8.7 14.2 8 15.6 8 C17.6 8 19.2 9.5 19.6 11.6 C20.6 12 21.5 13.1 21.5 14.6 C21.5 17.2 19.8 19 17.2 19 L6 19 C3.6 19 2.2 17.4 2.2 15 Z'/%3E%3C/svg%3E") center/contain no-repeat; }
+.badge-drive .owl-cloud-ico { width: 11px; height: 11px; vertical-align: -1px; }
 
 /* Sidebar bottom Trash row */
 #sidebar { display: flex; flex-direction: column; }

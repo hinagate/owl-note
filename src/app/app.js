@@ -136,6 +136,7 @@ export async function initUI(rootId) {
   await refreshPanes();
   renderCurrentEditor();
   await openByHash();
+  if (!ui.current) await openLatestNote(); // no specific note in the URL hash — default to the latest
   if (!ui.hashWired) {
     window.addEventListener('hashchange', openByHash);
     // Flush a pending auto-save when the tab is hidden/closed — focus can stay in the
@@ -178,6 +179,7 @@ const DRAFT_ID = '__draft__';
 
 async function refreshNoteList() {
   const inTrash = ui.activeFolder === ui.trashId;
+  const driveEnabled = await isEnabled();
   let notes = await loadNotes(ui.activeFolder);
   ui.allNotes = notes; // full unfiltered set for the active folder — search-bar suggestions use this
   if (ui.query) notes = searchNotes(notes, ui.query);
@@ -193,6 +195,7 @@ async function refreshNoteList() {
   ui.selected = new Set([...ui.selected].filter((h) => Hset.has(h)));
   renderNoteList(document.getElementById('note-list'), {
     notes: list,
+    driveEnabled,
     activeHandle: ui.activeBookmarkId ?? ui.activeLocalId ?? (isDraft ? DRAFT_ID : null),
     onOpen: (handle) => {
       if (handle === DRAFT_ID) return;
@@ -374,7 +377,11 @@ async function refreshPanes() {
     onExportJson: doExport,
     onImport: (files) => doImportFiles(files),
     driveEnabled: await isEnabled(),
-    onToggleDrive: (checked) => toggleDriveSync(checked),
+    onToggleDrive: async (checked) => {
+      const result = await toggleDriveSync(checked);
+      await refreshNoteList(); // refresh note-card sync badges right after toggling
+      return result;
+    },
   });
   await refreshNoteList();
   // Editor is intentionally NOT re-rendered here. It is rendered only by
@@ -584,6 +591,15 @@ async function openBookmark(bookmarkId) {
   ui.isNew = false;
   renderCurrentEditor();
   await refreshNoteList();
+}
+
+// On a plain launch (no note id in the URL hash) open the latest note so the editor
+// isn't blank. ui.notes is already loaded and ordered (pinned/newest-first) by refreshPanes.
+async function openLatestNote() {
+  const top = (ui.notes || []).find((n) => !n.draft);
+  if (!top) return; // empty folder — leave the blank new-note editor
+  if (top.localOnly) await openLocalNote(top.id);
+  else await openBookmark(top.bookmarkId);
 }
 
 export async function togglePin(handle) {
