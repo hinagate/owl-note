@@ -14,5 +14,5 @@ export const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 export const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 export const DRIVE_FILES_URL = 'https://www.googleapis.com/drive/v3/files';
 export const DRIVE_UPLOAD_URL = 'https://www.googleapis.com/upload/drive/v3/files';
-export const ATTACH_FOLDER_NAME = 'OWL-Note Attachments';
+export const ATTACH_FOLDER_NAME = 'OWL-Note Sync';
 export const MAX_ATTACH_BYTES = 25 * 1024 * 1024;

@@ -70,7 +70,7 @@ export async function toggleDriveSync(checked) {
       const ok = confirm(
         'Sync large notes & attachments via Google Drive?\n\n'
         + 'Notes too large to sync as bookmarks, plus image and file attachments, will be '
-        + "stored in an 'OWL-Note Attachments' folder in your Google Drive so they sync "
+        + "stored in an 'OWL-Note Sync' folder in your Google Drive so they sync "
         + 'across your devices. You will be asked to grant access, and can turn this off at any time.',
       );
       if (!ok) { toast('Drive sync not enabled.'); return false; } // user declined consent — leave sync off

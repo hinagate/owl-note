@@ -75,7 +75,7 @@ OWL-Note doesn’t invent its own storage or sync system. It uses what your brow
 3. Your browser’s built-in account sync (Google or Microsoft) replicates it to your other signed-in devices.
 4. A local backup copy is also kept on each device for safety.
 
-**Optional — Google Drive sync.** Turn on one toggle and OWL-Note *additionally* stores image/file attachments and any note too large to fit in a bookmark in an `OWL-Note Attachments` folder in **your own** Google Drive — so those sync across your devices too. It’s keyed to your Google account, off by default, and we never see it. Everything else works exactly as above.
+**Optional — Google Drive sync.** Turn on one toggle and OWL-Note *additionally* stores image/file attachments and any note too large to fit in a bookmark in an `OWL-Note Sync` folder in **your own** Google Drive — so those sync across your devices too. It’s keyed to your Google account, off by default, and we never see it. Everything else works exactly as above.
 
 That’s why it’s so lightweight and private — we’re not building another cloud service. We’re just making excellent use of infrastructure you already have and that Google/Microsoft continue to harden.
 
