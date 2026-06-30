@@ -3,8 +3,15 @@ import * as bm from './bookmarks.js';
 import * as mirror from './mirror.js';
 import { encode } from './codec.js';
 
-export const WARN_URL_BYTES = 16384;
-export const MAX_URL_BYTES = 65536;
+// Chrome's bookmark sync silently drops bookmarks whose URL is much past ~8 KB,
+// so that — not Chrome's far larger local-bookmark limit — is the real ceiling
+// for a note that must SYNC. Measured with tools/sync-probe across two devices.
+// Above MAX a note can't sync, so it's kept device-local instead of written as a
+// bookmark that looks saved but never replicates. (Earlier 16K/64K values let
+// 8–64 KB notes masquerade as synced; the live size meter inherits MAX, so this
+// also fixes the misleading "/ 64 KB" readout.)
+export const WARN_URL_BYTES = 6144; // 6 KB — warn as a note nears the sync ceiling
+export const MAX_URL_BYTES = 8192; // 8 KB — hard sync limit; beyond this, local-only
 
 export function urlByteLength(payload) {
   return new TextEncoder().encode(bm.buildNoteUrl(payload)).length;
