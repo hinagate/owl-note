@@ -742,10 +742,12 @@ async function folderForZipDir(dir, root, cache) {
   return parent;
 }
 
-async function importOne({ id, title, body, attachments }, targetFolderId, idMap, tally) {
+async function importOne({ id, title, body, attachments }, targetFolderId, ctx) {
+  const { idMap, tally } = ctx;
   const existing = id ? idMap.get(id) : undefined;
   const note = { id: id || crypto.randomUUID(), title, body, attachments: attachments || [], version: 1, hash: contentHash(body) };
   const res = await saveNote(note, targetFolderId, existing ? existing.bookmarkId : undefined);
+  ctx.touched.add(targetFolderId); // remember where notes landed, to reveal it after import
   if (existing) tally.updated += 1;
   // Only record a real bookmark for dedup; a capped note has no bookmark (bookmarkId null).
   else { tally.created += 1; if (res.bookmarkId) idMap.set(note.id, { bookmarkId: res.bookmarkId, folderId: targetFolderId }); }
@@ -770,13 +772,13 @@ async function importMarkdown(text, path, fromZip, ctx) {
     ? await folderForZipDir(dirname(path), ctx.root, ctx.nbCache)
     : (meta.notebook ? await findOrCreateNotebook(ctx.root, String(meta.notebook), ctx.nbCache) : ctx.root);
   const prepared = await prepareImport(body);
-  await importOne({ id: meta.id, title, body: prepared.body, attachments: prepared.attachments }, folder, ctx.idMap, ctx.tally);
+  await importOne({ id: meta.id, title, body: prepared.body, attachments: prepared.attachments }, folder, ctx);
 }
 
 // Import .zip / .md / .json files. Pure of DOM/toast concerns so it is testable.
 export async function importFiles(files) {
   const root = ui.rootId ?? (await bm.ensureRoot());
-  const ctx = { root, idMap: await buildIdMap(root), nbCache: new Map(), tally: { created: 0, updated: 0, skipped: 0, tooLarge: 0 } };
+  const ctx = { root, idMap: await buildIdMap(root), nbCache: new Map(), tally: { created: 0, updated: 0, skipped: 0, tooLarge: 0 }, touched: new Set() };
   for (const file of files) {
     const name = (file.name || '').toLowerCase();
     try {
@@ -794,7 +796,7 @@ export async function importFiles(files) {
         for (const n of notes) {
           if (!n.body.trim()) { ctx.tally.skipped += 1; continue; }
           const prepared = await prepareImport(n.body);
-          await importOne({ id: n.meta.id, title: n.title, body: prepared.body, attachments: prepared.attachments }, folder, ctx.idMap, ctx.tally);
+          await importOne({ id: n.meta.id, title: n.title, body: prepared.body, attachments: prepared.attachments }, folder, ctx);
         }
       } else if (name.endsWith('.docx')) {
         const md = await docxToMarkdown(await file.arrayBuffer());
@@ -803,21 +805,21 @@ export async function importFiles(files) {
           const prepared = await prepareImport(md);
           await importOne(
             { title: docxStem(file.name), body: prepared.body, attachments: prepared.attachments },
-            ctx.root, ctx.idMap, ctx.tally);
+            ctx.root, ctx);
         }
       } else if (name.endsWith('.json')) {
         const data = JSON.parse(await file.text());
         for (const n of Array.isArray(data.notes) ? data.notes : []) {
           if (!n || typeof n.id !== 'string') continue;
           const prepared = await prepareImport(n.body || '', n.attachments || []);
-          await importOne({ id: n.id, title: n.title || extractTitle(prepared.body), body: prepared.body, attachments: prepared.attachments }, root, ctx.idMap, ctx.tally);
+          await importOne({ id: n.id, title: n.title || extractTitle(prepared.body), body: prepared.body, attachments: prepared.attachments }, root, ctx);
         }
       } else {
         ctx.tally.skipped += 1;
       }
     } catch { ctx.tally.skipped += 1; } // couldn't read this file — continue the batch
   }
-  return ctx.tally;
+  return { ...ctx.tally, touched: [...ctx.touched] };
 }
 
 async function doImportFiles(files) {
@@ -826,6 +828,13 @@ async function doImportFiles(files) {
   if (t.tooLarge) parts.push(`${t.tooLarge} local-only (not synced — use Export → Import to copy to other devices)`);
   if (t.skipped) parts.push(`${t.skipped} skipped`);
   toast(`Imported: ${parts.join(', ')}`, t.tooLarge > 0 || t.skipped > 0);
+  await refreshPanes(); // updates ui.notebooks with the newly created folders
+  // Reveal what was imported: expand the folders it landed in (and their ancestors) and show
+  // them, so the user doesn't have to hunt for or expand the tree. Select the single imported
+  // folder if there's exactly one, otherwise fall back to root ("All notes").
+  const touched = (t.touched || []).filter((f) => f && f !== ui.rootId);
+  for (const f of touched) expandToReveal(f);
+  ui.activeFolder = touched.length === 1 ? touched[0] : ui.rootId;
   await refreshPanes();
 }
 

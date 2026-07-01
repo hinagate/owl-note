@@ -54,6 +54,13 @@ describe('importFiles', () => {
     expect((await decode(all[0].payload)).body).toBe('v2');
   });
 
+  it('reports which folder the import landed in (touched), so the app can reveal it', async () => {
+    const root = await bm.ensureRoot();
+    const t = await importFiles([textFile('Idea.md', md('notebook: "Work"', '# Idea\nx'))]);
+    const work = (await bm.listNotebooks(root)).find((n) => n.title === 'Work');
+    expect(t.touched).toContain(work.id);
+  });
+
   it('places a loose .md by its notebook frontmatter and gives it a fresh id', async () => {
     const root = await bm.ensureRoot();
     await importFiles([textFile('Idea.md', md('notebook: "Work"', '# Idea\ndetails'))]);
