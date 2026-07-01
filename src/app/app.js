@@ -527,31 +527,36 @@ async function renameNotebook(id, current) {
   toast('Notebook renamed');
 }
 
-async function deleteNotebook(id) {
+export async function deleteNotebook(id) {
   const hasSubs = (ui.notebooks || []).some((nb) => nb.id !== id && isSelfOrDescendant(ui.notebooks, id, nb.id));
   const msg = hasSubs
-    ? 'Delete this notebook, its sub-notebooks, and all their notes? This cannot be undone.'
-    : 'Delete this notebook and all its notes? This cannot be undone.';
+    ? 'Delete this notebook and its sub-notebooks? Their notes are moved to Trash (restorable).'
+    : 'Delete this notebook? Its notes are moved to Trash (restorable).';
   if (!confirm(msg)) return;
-  const notes = await bm.allNotes(id);
-  const deleted = new Set(notes.map((n) => n.bookmarkId));
-  for (const n of notes) {
-    try {
-      const note = await decode(n.payload);
-      if (note._driveBody) { try { await noteDrive.deleteNoteBody(note._driveBody); } catch { /* best-effort */ } }
-      await mirror.removeBackup(note.id);
-    } catch { /* skip malformed */ }
+
+  // Move the subtree's notes to Trash (recoverable) rather than hard-deleting — same as deleting
+  // a note directly. Their Drive files are cleaned later, at Delete forever (ref-counted).
+  const subtree = new Set((ui.notebooks || []).filter((nb) => isSelfOrDescendant(ui.notebooks, id, nb.id)).map((nb) => nb.id));
+  subtree.add(id);
+  const targets = [];
+  for (const n of await bm.allNotes(id)) {
+    try { targets.push({ id: (await decode(n.payload)).id, bookmarkId: n.bookmarkId, folderId: n.folderId }); } catch { /* skip malformed */ }
   }
-  // Does the open note live in the deleted subtree? Covers bookmark notes (by id) and
-  // local-only notes (by folder), so a deleted folder can't linger in the breadcrumb.
-  // Computed before deleteFolder, while ui.notebooks still reflects the old tree.
+  for (const ln of await mirror.allLocalOnly()) {
+    if (subtree.has(ln.folderId)) targets.push({ id: ln.id, bookmarkId: null, folderId: ln.folderId, localOnly: true });
+  }
+  const movedBookmarks = new Set(targets.filter((t) => t.bookmarkId).map((t) => t.bookmarkId));
+  await trashNotes(targets, ui.trashId);
+
+  // The subtree now holds only empty folders — remove them. (Computed while ui.notebooks
+  // still reflects the old tree.)
   const openFolder = ui.activeLocalId ? ui.activeLocalFolderId : (ui.current && ui.current.folderId);
-  const openNoteDeleted = (ui.activeBookmarkId && deleted.has(ui.activeBookmarkId))
+  const openNoteMoved = (ui.activeBookmarkId && movedBookmarks.has(ui.activeBookmarkId))
     || (openFolder && (openFolder === id || isSelfOrDescendant(ui.notebooks, id, openFolder)));
   const activeInSubtree = ui.activeFolder === id || (ui.activeFolder && isSelfOrDescendant(ui.notebooks, id, ui.activeFolder));
   await bm.deleteFolder(id);
   if (activeInSubtree) ui.activeFolder = ui.rootId;
-  if (openNoteDeleted) {
+  if (openNoteMoved) {
     ui.current = null;
     ui.activeBookmarkId = null;
     ui.activeLocalId = null;
@@ -559,7 +564,7 @@ async function deleteNotebook(id) {
     renderCurrentEditor();
   }
   await refreshPanes();
-  toast('Notebook deleted');
+  toast('Notebook deleted — notes moved to Trash');
 }
 
 function newNote() {

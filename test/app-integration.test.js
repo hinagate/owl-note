@@ -112,6 +112,27 @@ describe('app integration', () => {
     expect(await mirror.isLocalOnly('bad')).toBe(true); // stayed local-only, will retry next re-enable
   });
 
+  it('deleting a notebook moves its notes to Trash (restorable), not a permanent delete', async () => {
+    const app = await import('../src/app/app.js');
+    const bm = await import('../src/lib/bookmarks.js');
+    const mirror = await import('../src/lib/mirror.js');
+    const { encode } = await import('../src/lib/codec.js');
+    const { createNote } = await import('../src/lib/note.js');
+    const { ensureTrash } = await import('../src/lib/trash.js');
+    const root = await bm.ensureRoot();
+    const nb = await bm.createNotebook(root, 'Work');
+    const note = createNote({ title: 'Keep me', body: 'x' });
+    const bid = await bm.createNote(nb, note.title, await encode(note));
+    await mirror.saveBackup(note, { folderId: nb });
+    await app.initUI(root);
+    window.confirm = () => true;
+    await app.deleteNotebook(nb);
+    const trashId = await ensureTrash(root);
+    expect((await bm.listNotes(trashId)).map((n) => n.bookmarkId)).toContain(bid); // moved to Trash, not gone
+    expect(await mirror.getBackup(note.id)).not.toBeNull(); // backup kept -> restorable
+    expect((await bm.listNotebooks(root)).some((f) => f.id === nb)).toBe(false); // notebook itself removed
+  });
+
   it('lists notes newest-first across reloads (older notes ordered by bookmark dateAdded)', async () => {
     const app = await import('../src/app/app.js');
     const bm = await import('../src/lib/bookmarks.js');
@@ -399,7 +420,7 @@ describe('app integration', () => {
     expect(visible.some((n) => n.title === 'Hidden')).toBe(false);
   });
 
-  it('deletes a notebook and its notes (bookmarks + backups)', async () => {
+  it('deletes a notebook and moves its notes to Trash', async () => {
     const app = await import('../src/app/app.js');
     const bm = await import('../src/lib/bookmarks.js');
     const mirror = await import('../src/lib/mirror.js');
@@ -427,9 +448,9 @@ describe('app integration', () => {
     document.querySelector('#sidebar .item.folder .nb-delete').click();
     await new Promise((r) => setTimeout(r, 15));
     const trashId = (await chrome.storage.local.get('owl:trash-id'))['owl:trash-id'];
-    expect((await bm.listNotebooks(root)).filter((n) => n.id !== trashId)).toHaveLength(0);
-    expect(await bm.allNotes(root)).toHaveLength(0);
-    expect(await mirror.getBackup(id)).toBeNull();
+    expect((await bm.listNotebooks(root)).filter((n) => n.id !== trashId)).toHaveLength(0); // notebook removed
+    expect((await bm.listNotes(trashId)).length).toBe(1); // its note moved to Trash, not hard-deleted
+    expect(await mirror.getBackup(id)).not.toBeNull(); // backup kept -> restorable
   });
 
   it('selects (focuses) a newly created notebook', async () => {
