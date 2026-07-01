@@ -9,6 +9,12 @@ describe('markdown', () => {
     expect(html).toContain('Hello');
   });
 
+  it('opens external links in a new tab', () => {
+    const html = renderMarkdown('[site](https://example.com)');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+  });
+
   it('highlights fenced code blocks', () => {
     const html = renderMarkdown('```js\nconst x = 1;\n```');
     expect(html).toContain('hljs');

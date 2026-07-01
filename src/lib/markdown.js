@@ -43,6 +43,19 @@ const SANITIZE_OPTS = {
   ADD_ATTR: ['encoding'],
 };
 
+// The preview lives inside the extension page, so clicking a normal link would navigate the
+// whole app away. Open external (http/https) links in a new tab instead. owl-file: links use
+// href="#" and are handled in JS, so they're left alone. (Guarded: DOMPurify only binds
+// addHook when a DOM is present, so this no-ops in the pure-node test env.)
+if (typeof DOMPurify.addHook === 'function') {
+  DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+    if (node.tagName === 'A' && /^https?:\/\//i.test(node.getAttribute('href') || '')) {
+      node.setAttribute('target', '_blank');
+      node.setAttribute('rel', 'noopener noreferrer');
+    }
+  });
+}
+
 export function renderMarkdown(body) {
   const clean = DOMPurify.sanitize(marked.parse(String(body ?? '')), SANITIZE_OPTS);
   return softenKatexErrors(clean);
