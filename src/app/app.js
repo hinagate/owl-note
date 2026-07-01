@@ -75,7 +75,10 @@ export async function toggleDriveSync(checked) {
       );
       if (!ok) { toast('Drive sync not enabled.'); return false; } // user declined consent — leave sync off
       await enable();
-      toast('Google Drive sync on');
+      const promoted = await reconcileLocalToDrive(); // push notes stranded local-only while sync was off
+      toast(promoted > 0
+        ? `Google Drive sync on — synced ${promoted} local note${promoted === 1 ? '' : 's'} to Drive`
+        : 'Google Drive sync on');
       return true;
     }
     // Disabling — warn that attachments will stop syncing.
@@ -96,6 +99,21 @@ export async function toggleDriveSync(checked) {
     toast(cancelled ? '⚠ Google Drive sync cancelled — not enabled.' : `⚠ Couldn't enable Drive sync${m ? ': ' + m : ''}`, true);
     return await isEnabled();
   }
+}
+
+// When Drive sync is (re)enabled, push every note kept device-local while sync was off up to
+// Drive so it becomes synced. Reuses saveNote's offload pipeline (no new permissions); a note
+// whose upload fails stays local-only and is retried on the next re-enable. Returns count synced.
+export async function reconcileLocalToDrive(save = saveNote) {
+  let synced = 0;
+  for (const note of await mirror.allLocalOnly()) {
+    const { folderId, ...clean } = note;
+    try {
+      await save(clean, folderId ?? ui.rootId, undefined);
+      synced += 1;
+    } catch { /* leave it local-only; retried on the next re-enable */ }
+  }
+  return synced;
 }
 
 const recentIds = []; // ids of notes created this session — float to the top until reload (in-memory)

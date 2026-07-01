@@ -74,6 +74,44 @@ describe('app integration', () => {
     expect(document.querySelector('#editor textarea.note-body').value).toContain('newer body');
   });
 
+  it('reconcileLocalToDrive re-saves every local-only note and clears its local-only flag', async () => {
+    const app = await import('../src/app/app.js');
+    const bm = await import('../src/lib/bookmarks.js');
+    const mirror = await import('../src/lib/mirror.js');
+    const root = await bm.ensureRoot();
+    await mirror.saveBackup({ id: 'a', title: 'A', body: 'aaa' }, { localOnly: true, folderId: root });
+    await mirror.saveBackup({ id: 'b', title: 'B', body: 'bbb' }, { localOnly: true, folderId: root });
+    const saved = [];
+    const fakeSave = async (note, folder) => {
+      saved.push(note.id);
+      await mirror.saveBackup(note, { localOnly: false, folderId: folder }); // simulate a successful offload+sync
+      return { status: 'synced', bookmarkId: 'bk-' + note.id };
+    };
+    const n = await app.reconcileLocalToDrive(fakeSave);
+    expect(n).toBe(2);
+    expect(saved.sort()).toEqual(['a', 'b']);
+    expect(await mirror.isLocalOnly('a')).toBe(false);
+    expect(await mirror.isLocalOnly('b')).toBe(false);
+  });
+
+  it('reconcileLocalToDrive keeps a note local-only when its save fails, and still syncs the rest', async () => {
+    const app = await import('../src/app/app.js');
+    const bm = await import('../src/lib/bookmarks.js');
+    const mirror = await import('../src/lib/mirror.js');
+    const root = await bm.ensureRoot();
+    await mirror.saveBackup({ id: 'ok', title: 'OK', body: 'x' }, { localOnly: true, folderId: root });
+    await mirror.saveBackup({ id: 'bad', title: 'BAD', body: 'y' }, { localOnly: true, folderId: root });
+    const fakeSave = async (note, folder) => {
+      if (note.id === 'bad') throw new Error('upload failed');
+      await mirror.saveBackup(note, { localOnly: false, folderId: folder });
+      return { status: 'synced' };
+    };
+    const n = await app.reconcileLocalToDrive(fakeSave);
+    expect(n).toBe(1); // only the one that succeeded
+    expect(await mirror.isLocalOnly('ok')).toBe(false);
+    expect(await mirror.isLocalOnly('bad')).toBe(true); // stayed local-only, will retry next re-enable
+  });
+
   it('lists notes newest-first across reloads (older notes ordered by bookmark dateAdded)', async () => {
     const app = await import('../src/app/app.js');
     const bm = await import('../src/lib/bookmarks.js');
@@ -449,12 +487,12 @@ describe('app integration', () => {
     // Ctrl-click two cards
     cards()[0].dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
     cards()[2].dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
-    await new Promise((r) => setTimeout(r, 5));
+    await waitFor(() => document.querySelectorAll('#note-list .item.selected').length === 2); // poll, don't race a fixed delay
     expect(document.querySelectorAll('#note-list .item.selected').length).toBe(2);
     // Delete key -> batch trash
     window.confirm = () => true;
     document.getElementById('note-list').dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
-    await new Promise((r) => setTimeout(r, 15));
+    await waitFor(() => document.querySelectorAll('#note-list .item.card').length === 1); // wait for the trash + re-render to settle
     expect(document.querySelectorAll('#note-list .item.card').length).toBe(1);
     const trashId = (await chrome.storage.local.get('owl:trash-id'))['owl:trash-id'];
     expect((await bm.listNotes(trashId)).length).toBe(2);
