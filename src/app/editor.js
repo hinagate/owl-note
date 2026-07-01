@@ -166,6 +166,21 @@ export function renderEditor(
 
   const attById = (id) => atts.find((a) => a.id === id);
 
+  // Insert text over [start,end] while PRESERVING the textarea's native undo stack — assigning
+  // ta.value directly wipes Ctrl+Z. Uses execCommand('insertText') where available (all
+  // Chromium browsers); falls back to a manual splice (loses undo) e.g. under jsdom.
+  function insertText(text, start, end) {
+    ta.focus();
+    ta.setSelectionRange(start, end);
+    let ok = false;
+    try { ok = !!(document.execCommand && document.execCommand('insertText', false, text)); } catch { ok = false; }
+    if (!ok) {
+      ta.value = ta.value.slice(0, start) + text + ta.value.slice(end);
+      ta.selectionStart = ta.selectionEnd = start + text.length;
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  }
+
   // Open an attachment's bytes in a new tab. window.open() runs synchronously to keep
   // the click's user gesture (popup blocker), and we navigate via a blob: URL because
   // Chrome blocks top-level navigation to data: URIs.
@@ -320,14 +335,10 @@ export function renderEditor(
     const end = ta.selectionEnd ?? start;
     const before = ta.value.slice(0, start);
     const selected = ta.value.slice(start, end);
-    const after = ta.value.slice(end);
     const open = (before && !before.endsWith('\n') ? '\n' : '') + '```js\n';
     const close = '\n```\n';
-    ta.value = before + open + selected + close + after;
-    const caret = before.length + open.length + selected.length;
-    ta.selectionStart = ta.selectionEnd = caret;
-    ta.focus();
-    fireChange();
+    insertText(open + selected + close, start, end); // replaces the selection, keeps undo alive
+    ta.selectionStart = ta.selectionEnd = before.length + open.length + selected.length;
   });
 
   // Shared image insertion pipeline used by the 🖼 button and paste handler.
@@ -344,11 +355,7 @@ export function renderEditor(
       const end = ta.selectionEnd ?? start;
       const before = ta.value.slice(0, start);
       const snippet = (before && !before.endsWith('\n') ? '\n' : '') + ref + '\n';
-      ta.value = before + snippet + ta.value.slice(end);
-      const caret = before.length + snippet.length;
-      ta.selectionStart = ta.selectionEnd = caret;
-      ta.focus();
-      fireChange();
+      insertText(snippet, start, end); // keeps undo alive
     } finally {
       imgBtn.disabled = false;
       imgBtn.textContent = label;
@@ -376,10 +383,7 @@ export function renderEditor(
     const start = ta.selectionStart ?? ta.value.length;
     const before = ta.value.slice(0, start);
     const snippet = (before && !before.endsWith('\n') ? '\n' : '') + ref + '\n';
-    ta.value = before + snippet + ta.value.slice(ta.selectionEnd ?? start);
-    ta.selectionStart = ta.selectionEnd = before.length + snippet.length;
-    ta.focus();
-    fireChange();
+    insertText(snippet, start, ta.selectionEnd ?? start); // keeps undo alive
   });
 
   // Paste a copied image straight into the editor (same pipeline as the 🖼 button).
