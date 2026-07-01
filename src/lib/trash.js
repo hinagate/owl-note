@@ -2,7 +2,7 @@
 import * as bm from './bookmarks.js';
 import * as mirror from './mirror.js';
 import { decode } from './codec.js';
-import { deleteFile } from './drive/client.js';
+import { driveFileIdsOf, deleteUnreferencedFiles } from './drive-gc.js';
 
 const TRASH_TITLE = '🗑 Trash';
 const TRASH_ID_KEY = 'owl:trash-id';
@@ -47,28 +47,15 @@ export async function restoreNotes(notes, rootId) {
   await setOrigins(origins);
 }
 
-// A note's Drive files: its over-cap body file and any image/file attachment files.
-function driveFileIdsOf(note) {
-  const ids = [];
-  if (note && note._driveBody) ids.push(note._driveBody);
-  for (const a of (note && note.attachments) || []) if (a && a.driveFileId) ids.push(a.driveFileId);
-  return ids;
-}
-
 export async function deleteForever(notes) {
   const deletedIds = new Set(notes.map((n) => n.id));
-  // Partition every note's Drive fileIds (whole tree, incl. Trash) into being-removed vs
-  // surviving, so a file a surviving note still references — identical images share one file
-  // by content hash — is kept, not deleted.
-  const removed = new Set();
-  const kept = new Set();
+  // Collect the Drive files of the notes being removed, BEFORE we delete them.
+  const candidates = new Set();
   try {
     const root = await bm.ensureRoot();
     for (const r of await bm.allNotes(root)) {
-      let note;
-      try { note = await decode(r.payload); } catch { continue; }
-      const bucket = deletedIds.has(note.id) ? removed : kept;
-      for (const f of driveFileIdsOf(note)) bucket.add(f);
+      let note; try { note = await decode(r.payload); } catch { continue; }
+      if (deletedIds.has(note.id)) for (const f of driveFileIdsOf(note)) candidates.add(f);
     }
   } catch { /* tree read failed — skip Drive cleanup, still delete the notes below */ }
 
@@ -80,8 +67,6 @@ export async function deleteForever(notes) {
   }
   await setOrigins(origins);
 
-  // Delete only the removed notes' files that no surviving note still references.
-  for (const f of removed) {
-    if (!kept.has(f)) { try { await deleteFile(f); } catch { /* best-effort; leave the file */ } }
-  }
+  // Now the notes (and their backups) are gone, delete their files that nothing else uses.
+  await deleteUnreferencedFiles([...candidates]);
 }

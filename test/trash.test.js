@@ -71,6 +71,17 @@ describe('trash', () => {
     expect(client.deleteFile).toHaveBeenCalledTimes(2);
   });
 
+  it('deleteForever from Trash (real flow: trash then delete) removes the note\'s Drive file', async () => {
+    const root = await bm.ensureRoot();
+    const trash = await ensureTrash(root);
+    const note = { id: 'n1', title: 'N', body: 'x', attachments: [{ id: 'a1', driveFileId: 'FILE1' }] };
+    const bid = await bm.createNote(root, note.title, await encode(note));
+    await mirror.saveBackup(note, { folderId: root });
+    await trashNotes([{ id: note.id, bookmarkId: bid, folderId: root }], trash); // move to Trash
+    await deleteForever([{ id: note.id, bookmarkId: bid }]); // then permanently delete
+    expect(client.deleteFile).toHaveBeenCalledWith('FILE1');
+  });
+
   it('deleteForever keeps a file still referenced by a surviving note (shared image)', async () => {
     const root = await bm.ensureRoot();
     await ensureTrash(root);

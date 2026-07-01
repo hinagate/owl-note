@@ -173,6 +173,14 @@ export async function allNotes(rootId) {
   return out;
 }
 
+// The compressed payload of a single note bookmark (null if it isn't a note / is gone).
+export async function payloadAt(bookmarkId) {
+  try {
+    const [node] = await chrome.bookmarks.get(bookmarkId);
+    return node && isNoteUrl(node.url) ? payloadFromUrl(node.url) : null;
+  } catch { return null; }
+}
+
 export async function createNote(folderId, title, payload) {
   const node = await chrome.bookmarks.create({ parentId: folderId, title, url: buildNoteUrl(payload) });
   return node.id;
