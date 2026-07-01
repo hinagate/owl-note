@@ -20,10 +20,11 @@ describe('drive/client upload', () => {
   });
 
   it('uploadFile multipart-posts to the upload endpoint and returns the new id', async () => {
-    await chrome.storage.local.set({ 'drive:folderId': 'FOLDER' });
     let uploadedTo = null;
     global.fetch = vi.fn(async (url) => {
-      uploadedTo = String(url);
+      const u = String(url);
+      if (u.includes('?q=')) return { ok: true, json: async () => ({ files: [{ id: 'FOLDER' }] }) }; // resolve folder by name
+      uploadedTo = u;
       return { ok: true, json: async () => ({ id: 'NEW' }) };
     });
     const id = await uploadFile({ name: 'a.png', mime: 'image/png', bytes: new Uint8Array([1, 2, 3]), hash: 'h1' });
@@ -31,23 +32,19 @@ describe('drive/client upload', () => {
     expect(uploadedTo).toContain('uploadType=multipart');
   });
 
-  it('uploadFile self-heals a deleted sync folder: refreshes the folder and retries once', async () => {
-    await chrome.storage.local.set({ 'drive:folderId': 'DEAD' });
+  it('uploadFile self-heals a deleted folder: re-resolves the name and uploads to a fresh folder', async () => {
+    await chrome.storage.local.set({ 'drive:folderId': 'DEAD' }); // stale id is ignored
     let uploads = 0;
     global.fetch = vi.fn(async (url) => {
       const u = String(url);
-      if (u.includes('/upload/')) {
-        uploads += 1;
-        if (uploads === 1) return { ok: false, status: 404, json: async () => ({}) }; // parent folder gone
-        return { ok: true, json: async () => ({ id: 'NEW' }) };
-      }
-      if (u.includes('?q=')) return { ok: true, json: async () => ({ files: [] }) }; // search by name -> none (deleted)
+      if (u.includes('/upload/')) { uploads += 1; return { ok: true, json: async () => ({ id: 'NEW' }) }; }
+      if (u.includes('?q=')) return { ok: true, json: async () => ({ files: [] }) }; // name search -> none (deleted/trashed)
       return { ok: true, json: async () => ({ id: 'FRESH' }) }; // create a new folder
     });
     const id = await uploadFile({ name: 'a.png', mime: 'image/png', bytes: new Uint8Array([1, 2, 3]), hash: 'h1' });
     expect(id).toBe('NEW');
-    expect(uploads).toBe(2); // failed once on the dead folder, retried once on the fresh one
-    expect((await chrome.storage.local.get('drive:folderId'))['drive:folderId']).toBe('FRESH'); // re-cached
+    expect(uploads).toBe(1); // no doomed attempt on the dead folder — resolved fresh first
+    expect((await chrome.storage.local.get('drive:folderId'))['drive:folderId']).toBe('FRESH');
   });
 
   it('uploadFile rejects files over the 25 MB cap', async () => {

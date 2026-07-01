@@ -41,20 +41,6 @@ describe('note-drive', () => {
     expect(client.uploadFile).not.toHaveBeenCalled();
   });
 
-  it('saveNoteBody recreates the body file when the existing one was deleted (404)', async () => {
-    client.updateMedia.mockRejectedValue(Object.assign(new Error('Drive API 404'), { status: 404 }));
-    client.uploadFile.mockResolvedValue('NEW');
-    expect(await saveNoteBody('n1', 'PAYLOAD', 'DELETED')).toBe('NEW'); // fresh file, not a failed save
-    expect(client.updateMedia).toHaveBeenCalledTimes(1);
-    expect(client.uploadFile).toHaveBeenCalledTimes(1);
-  });
-
-  it('saveNoteBody rethrows a non-404 update error without creating a duplicate', async () => {
-    client.updateMedia.mockRejectedValue(Object.assign(new Error('Drive API 500'), { status: 500 }));
-    await expect(saveNoteBody('n1', 'PAYLOAD', 'OLD')).rejects.toThrow(/500/);
-    expect(client.uploadFile).not.toHaveBeenCalled();
-  });
-
   it('loadNoteBody decodes the fetched bytes back to the payload string', async () => {
     client.getMedia.mockResolvedValue(new TextEncoder().encode('PAYLOAD'));
     expect(await loadNoteBody('F')).toBe('PAYLOAD');

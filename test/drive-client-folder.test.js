@@ -9,11 +9,12 @@ describe('drive/client ensureFolder', () => {
     installFakeChrome();
   });
 
-  it('reuses a cached folder id without calling Drive', async () => {
-    await chrome.storage.local.set({ 'drive:folderId': 'CACHED' });
-    global.fetch = vi.fn();
-    expect(await ensureFolder()).toBe('CACHED');
-    expect(global.fetch).not.toHaveBeenCalled();
+  it('re-resolves the folder by name, ignoring a stale cached id (self-heals deletion/rename)', async () => {
+    await chrome.storage.local.set({ 'drive:folderId': 'STALE' });
+    global.fetch = vi.fn(async () => ({ ok: true, json: async () => ({ files: [{ id: 'LIVE' }] }) }));
+    expect(await ensureFolder()).toBe('LIVE'); // not the stale cached id
+    expect(global.fetch).toHaveBeenCalled();
+    expect((await chrome.storage.local.get('drive:folderId'))['drive:folderId']).toBe('LIVE');
   });
 
   it('adopts an existing folder found by name', async () => {

@@ -1,13 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { installFakeChrome } from './helpers/fake-chrome.js';
 import * as auth from '../src/lib/drive/auth.js';
+import * as client from '../src/lib/drive/client.js';
 import { isEnabled, enable, disable } from '../src/lib/drive-sync.js';
 
 vi.mock('../src/lib/drive/auth.js', () => ({ connect: vi.fn(async () => {}), disconnect: vi.fn(async () => {}) }));
+vi.mock('../src/lib/drive/client.js', () => ({ ensureFolder: vi.fn(async () => 'FOLDER') }));
 
 beforeEach(() => {
   installFakeChrome();
-  auth.connect.mockClear(); auth.disconnect.mockClear();
+  auth.connect.mockClear(); auth.disconnect.mockClear(); client.ensureFolder.mockClear();
   chrome.permissions = { request: vi.fn(async () => true) };
 });
 
@@ -18,6 +20,7 @@ describe('drive-sync', () => {
     await enable();
     expect(chrome.permissions.request).toHaveBeenCalledWith({ origins: ['https://www.googleapis.com/*', 'https://oauth2.googleapis.com/*'] });
     expect(auth.connect).toHaveBeenCalled();
+    expect(client.ensureFolder).toHaveBeenCalled(); // create the folder so it's visible right away
     expect(await isEnabled()).toBe(true);
   });
 

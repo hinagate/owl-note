@@ -16,18 +16,7 @@ export function bodyPreview(body) {
 // Returns the fileId. Reuses `existingFileId` so cross-device edits update in place.
 export async function saveNoteBody(noteId, payloadStr, existingFileId) {
   const bytes = new TextEncoder().encode(payloadStr);
-  if (existingFileId) {
-    try {
-      return await client.updateMedia(existingFileId, bytes);
-    } catch (err) {
-      // The Drive body file was deleted (e.g. the user removed the sync folder) — recreate
-      // it instead of failing the save, so the note re-syncs to a fresh file.
-      if (err && err.status === 404) {
-        return client.uploadFile({ name: `note-${noteId}.owlnote`, mime: NOTE_MIME, bytes, hash: noteId });
-      }
-      throw err;
-    }
-  }
+  if (existingFileId) return client.updateMedia(existingFileId, bytes);
   return client.uploadFile({ name: `note-${noteId}.owlnote`, mime: NOTE_MIME, bytes, hash: noteId });
 }
 
