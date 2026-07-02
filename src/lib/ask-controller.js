@@ -94,6 +94,7 @@ export function createAskController({ index, fusion, registry, onState }) {
         question,
         answer: NO_MATCH_ANSWER,
         citations: [],
+        chunks: [], // [Task E5] nothing was retrieved — no related notes to offer
         grounded: false,
         provider: activeProviderId(),
         usedModel: false,
@@ -126,6 +127,11 @@ export function createAskController({ index, fusion, registry, onState }) {
           // Resolve against `context` (the set actually sent) so a cited NEIGHBOR
           // maps back to a real Chunk, not just the primaries.
           citations: resolveCitations(result.citations, context),
+          // [Task E5] the PRIMARY retrieved chunks (not `context`, which also
+          // holds neighbor-expanded chunks the model saw but retrieval didn't
+          // rank) — the panel's "Related notes" list mirrors retrieval, same as
+          // generating{chunks}/snippets/error already do.
+          chunks,
           grounded: result.grounded,
           provider: provider.id,
           usedModel: true,

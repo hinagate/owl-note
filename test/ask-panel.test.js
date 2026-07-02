@@ -387,6 +387,84 @@ describe('ask-panel — M3 download opt-in card', () => {
   });
 });
 
+// [Task E5] "Related notes" — the retrieved PRIMARIES rendered as clickable rows
+// under the answer, so an answer always offers a way to jump to its source notes
+// even when the model cites nothing. Dedupe-by-note and citation-exclusion are
+// the load-bearing rules under test here.
+describe('ask-panel — related notes section', () => {
+  it('shows one row per non-cited note, deduped to the first (highest-ranked) chunk', () => {
+    const { el, panel } = makePanel();
+    panel.update({
+      kind: 'answered', question: 'q', answer: 'Answer.',
+      citations: [chunk({ id: 'a::0', noteId: 'a', noteTitle: 'Note A' })],
+      chunks: [
+        chunk({ id: 'a::0', noteId: 'a', noteTitle: 'Note A' }), // cited -> excluded
+        chunk({ id: 'b::0', noteId: 'b', noteTitle: 'Note B', text: 'first b chunk' }),
+        chunk({ id: 'b::1', noteId: 'b', noteTitle: 'Note B', text: 'second b chunk' }), // dup note -> dropped
+      ],
+      grounded: true, usedModel: true,
+    });
+    const rows = el.querySelectorAll('.ask-related-row');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].querySelector('.ask-related-title').textContent).toBe('Note B');
+    expect(rows[0].querySelector('.ask-related-snippet').textContent).toContain('first b chunk');
+    expect(el.querySelector('.ask-related-label')).not.toBeNull();
+  });
+
+  it('clicking a related row calls onCitation with that chunk noteId', () => {
+    const { el, panel, onCitation } = makePanel();
+    panel.update({
+      kind: 'answered', question: 'q', answer: 'Answer.',
+      citations: [],
+      chunks: [chunk({ id: 'b::0', noteId: 'b', noteTitle: 'Note B' })],
+      grounded: true, usedModel: true,
+    });
+    el.querySelector('.ask-related-row').click();
+    expect(onCitation).toHaveBeenCalledWith('b');
+  });
+
+  it('renders NO section when citations already cover every retrieved note', () => {
+    const { el, panel } = makePanel();
+    panel.update({
+      kind: 'answered', question: 'q', answer: 'Answer.',
+      citations: [chunk({ id: 'a::0', noteId: 'a', noteTitle: 'Note A' })],
+      chunks: [chunk({ id: 'a::0', noteId: 'a', noteTitle: 'Note A' })],
+      grounded: true, usedModel: true,
+    });
+    expect(el.querySelectorAll('.ask-related-row')).toHaveLength(0);
+    expect(el.querySelector('.ask-related-label')).toBeNull();
+  });
+
+  it('zero-hit answered (chunks: []) shows no related section', () => {
+    const { el, panel } = makePanel();
+    panel.update({
+      kind: 'answered', question: 'q', answer: 'Nothing in your notes matches that.',
+      citations: [], chunks: [], grounded: false, usedModel: false,
+    });
+    expect(el.querySelectorAll('.ask-related-row')).toHaveLength(0);
+    expect(el.querySelector('.ask-related-label')).toBeNull();
+  });
+
+  it('NEVER uses innerHTML on related note text — HTML in title/text renders as literal text', () => {
+    const { el, panel } = makePanel();
+    panel.update({
+      kind: 'answered', question: 'q', answer: 'Answer.',
+      citations: [],
+      chunks: [chunk({
+        id: 'x::0', noteId: 'x', noteTitle: '<b>Bold</b> title',
+        text: '<img src=x onerror="window.__pwnedRelated=1">',
+      })],
+      grounded: true, usedModel: true,
+    });
+    const row = el.querySelector('.ask-related-row');
+    expect(row.querySelector('b')).toBeNull();
+    expect(row.querySelector('img')).toBeNull();
+    expect(row.querySelector('.ask-related-title').textContent).toBe('<b>Bold</b> title');
+    expect(row.querySelector('.ask-related-snippet').textContent).toContain('<img');
+    expect(window.__pwnedRelated).toBeUndefined();
+  });
+});
+
 // --- Layer 2: app integration over fake-chrome -------------------------------
 
 let app, bm, encode;

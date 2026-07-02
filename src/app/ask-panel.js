@@ -48,6 +48,23 @@ function snippetOf(text) {
   return s.length > SNIPPET_MAX ? s.slice(0, SNIPPET_MAX) + '…' : s;
 }
 
+// [Task E5] Reduce the PRIMARY retrieved chunks to the "Related notes" list: one
+// row per note (the FIRST/highest-ranked chunk represents it — retrieval already
+// ranked `chunks`, so first-seen is best-ranked), excluding any note already
+// shown as a citation so a note is never listed twice. Pure so it's trivial to
+// unit-test independent of the DOM.
+function relatedChunks(chunks, citations) {
+  const cited = new Set((Array.isArray(citations) ? citations : []).map((c) => c.noteId));
+  const seen = new Set();
+  const out = [];
+  for (const c of (Array.isArray(chunks) ? chunks : [])) {
+    if (cited.has(c.noteId) || seen.has(c.noteId)) continue;
+    seen.add(c.noteId);
+    out.push(c);
+  }
+  return out;
+}
+
 /**
  * @param {HTMLElement} container  the <aside id="ask-panel"> element
  * @param {Object} cb
@@ -242,6 +259,40 @@ export function renderAskPanel(container, {
     renderCards(chunks);
   }
 
+  // [Task E5] Compact, suggestion-row-style list of the retrieved notes NOT
+  // already shown as citations — modeled on toolbar.js's `.suggest-item` rows
+  // (title strong, snippet muted) rather than the bigger `.ask-card`, since this
+  // is a lighter-weight "you might also look at" affordance. SAFETY: chunk title
+  // and text are untrusted note content — textContent only, same as renderCards.
+  function renderRelated(chunks) {
+    if (!chunks.length) return; // no empty header — nothing to relate
+    const label = document.createElement('div');
+    label.className = 'ask-related-label';
+    label.textContent = 'Related notes';
+    results.appendChild(label);
+
+    for (const c of chunks) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'ask-related-row';
+
+      const title = document.createElement('div');
+      title.className = 'ask-related-title';
+      title.textContent = c.noteTitle || 'Untitled';
+      row.appendChild(title);
+
+      const snip = document.createElement('div');
+      snip.className = 'ask-related-snippet';
+      snip.textContent = snippetOf(c.text);
+      row.appendChild(snip);
+
+      // Same cross-folder open path as a citation/snippet card click — no new
+      // navigation path is introduced here.
+      row.addEventListener('click', () => onCitation(c.noteId));
+      results.appendChild(row);
+    }
+  }
+
   // The one-time on-device model download prompt. Shown only for the
   // 'model-downloadable' snippets reason AND only when the user hasn't opted out.
   function renderOptInCard() {
@@ -317,6 +368,10 @@ export function renderAskPanel(container, {
       results.appendChild(hint);
     }
     if (Array.isArray(state.citations) && state.citations.length) renderCitations(state.citations);
+    // [Task E5] Always offer a way to jump to the source notes, even when the
+    // model (or the zero-hit canned path) cited nothing — renders nothing if
+    // every retrieved note is already a citation, or nothing was retrieved.
+    renderRelated(relatedChunks(state.chunks, state.citations));
   }
 
   function renderGenerating() {

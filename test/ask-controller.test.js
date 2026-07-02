@@ -96,6 +96,10 @@ describe('createAskController — happy path', () => {
     expect(typeof ans.citations[0]).toBe('object');
     expect(ans.citations[0].id).toBe(citedId);
     expect(ans.citations[0].text).toBe(hits[0].text);
+    // [Task E5] answered carries the PRIMARY retrieved chunks (not the
+    // neighbor-expanded context the model saw) so the panel can render a
+    // "Related notes" list that mirrors retrieval.
+    expect(ans.chunks.map((c) => c.id)).toEqual(hits.map((c) => c.id));
 
     // The provider received { question, chunks, signal }.
     expect(provider._calls.answer.length).toBe(1);
@@ -253,6 +257,7 @@ describe('createAskController — zero hits vs empty index (distinct!)', () => {
     expect(ans.grounded).toBe(false);
     expect(ans.usedModel).toBe(false);
     expect(ans.citations).toEqual([]);
+    expect(ans.chunks).toEqual([]); // [Task E5] zero-hit canned path carries no chunks
     expect(ans.provider).toBe('builtin'); // active provider id still reported
     expect(provider._calls.answer.length).toBe(0);
     expect(provider._calls.availability).toBe(0); // model path skipped entirely
