@@ -883,8 +883,13 @@ async function folderForZipDir(dir, root, cache) {
 
 async function importOne({ id, title, body, attachments }, targetFolderId, ctx) {
   const { idMap, tally } = ctx;
-  const existing = id ? idMap.get(id) : undefined;
-  const note = { id: id || crypto.randomUUID(), title, body, attachments: attachments || [], version: 1, hash: contentHash(body) };
+  // Imported ids are untrusted. Strip angle brackets so a crafted id can never forge
+  // the <<<NOTE c:...>>> sentinel the Ask prompt wraps chunks in — the chunk id
+  // round-trips as a citation key, so it must be sanitized here at ingestion (a fixed
+  // choke point for every import format), not in the prompt where it can't be altered.
+  const safeId = typeof id === 'string' ? id.replace(/[<>]/g, '') : id;
+  const existing = safeId ? idMap.get(safeId) : undefined;
+  const note = { id: safeId || crypto.randomUUID(), title, body, attachments: attachments || [], version: 1, hash: contentHash(body) };
   const res = await saveNote(note, targetFolderId, existing ? existing.bookmarkId : undefined);
   ctx.touched.add(targetFolderId); // remember where notes landed, to reveal it after import
   if (existing) tally.updated += 1;
