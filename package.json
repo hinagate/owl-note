@@ -8,6 +8,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "eval:retrieval": "node eval/run-retrieval.mjs",
+    "eval:answers": "node eval/run-answers.mjs",
     "icons": "node scripts/icon-from-source.mjs",
     "build": "node esbuild.config.mjs && node scripts/icon-from-source.mjs",
     "build:prod": "node esbuild.config.mjs --prod && node scripts/icon-from-source.mjs",
