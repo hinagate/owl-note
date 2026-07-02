@@ -94,6 +94,19 @@ export function packChunks(rankedChunks) {
 
 const MAX_QUESTION_CHARS = 1500;
 
+// [T10/M4.5] Injection defense: neutralize any literal <<< / >>> run in
+// attacker-controlled note content (body AND title/heading) BEFORE it is wrapped in
+// the sentinel markers. Untouched, a body/title/heading containing "<<<END>>>" or
+// "<<<NOTE c:evil>>>" could forge or prematurely close a marker and break the DATA
+// boundary the system prompt depends on. We collapse each run of 3+ angle brackets to
+// a single-angle lookalike (‹ / ›) so the text stays readable but can never match the
+// <<<…>>> grammar. The genuine sentinels are added AFTER this and so remain intact.
+function neutralizeMarkers(text) {
+  return String(text ?? '')
+    .replace(/<{3,}/g, (m) => '‹'.repeat(m.length))
+    .replace(/>{3,}/g, (m) => '›'.repeat(m.length));
+}
+
 /**
  * Build the user-turn prompt: one <<<NOTE c:id>>>/<<<END>>> block per chunk,
  * followed by the (length-capped) question. Chunk ids are emitted verbatim so
@@ -105,17 +118,12 @@ export function buildUserPrompt({ question, chunks }) {
   const truncatedQuestion = String(question || '').slice(0, MAX_QUESTION_CHARS);
 
   const blocks = (chunks || []).map((chunk) => {
-    const label = chunk.heading ? `${chunk.noteTitle} — ${chunk.heading}` : chunk.noteTitle;
-    // [T10/M4.5] Injection defense: neutralize any literal <<< / >>> run in the
-    // note's own text BEFORE we wrap it in the sentinel markers below. Untouched, a
-    // body containing "<<<END>>>" or "<<<NOTE c:evil>>>" could forge or prematurely
-    // close a marker and break the DATA boundary the system prompt depends on. We
-    // collapse each run of 3+ angle brackets to a single-angle lookalike (‹ / ›) so
-    // the text stays readable but can never match the <<<…>>> grammar. The genuine
-    // sentinels are added AFTER this and so remain intact.
-    const safeRaw = String(chunk.raw ?? '')
-      .replace(/<{3,}/g, (m) => '‹'.repeat(m.length))
-      .replace(/>{3,}/g, (m) => '›'.repeat(m.length));
+    // Both title and heading are untrusted note content, so both are neutralized
+    // before being interpolated into the label right after the genuine marker.
+    const safeTitle = neutralizeMarkers(chunk.noteTitle);
+    const safeHeading = neutralizeMarkers(chunk.heading);
+    const label = chunk.heading ? `${safeTitle} — ${safeHeading}` : safeTitle;
+    const safeRaw = neutralizeMarkers(chunk.raw);
     return `<<<NOTE c:${chunk.id}>>> ${label}\n${safeRaw}\n<<<END>>>`;
   });
 
