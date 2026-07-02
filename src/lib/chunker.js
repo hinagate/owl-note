@@ -117,10 +117,13 @@ function parseSections(body) {
 }
 
 // Builds the chunks for one section: paragraphs/fences packed to the cap,
-// with the heading line (if any) folded into the first chunk.
+// with the heading line (if any) folded into the first chunk. The fold adds
+// heading + separator to the first chunk's raw, so that length is reserved
+// out of the first group's packing budget to keep raw within the cap.
 function sectionToChunks(section, content) {
   const blocks = splitBlocks(content);
-  let built = packBlocks(blocks).map(buildChunk);
+  const reserve = section.headingLine !== null ? section.headingLine.length + SEP.length : 0;
+  let built = packBlocks(blocks, reserve).map(buildChunk);
 
   if (section.headingLine !== null) {
     const m = HEADING_LINE.exec(section.headingLine);
@@ -161,10 +164,16 @@ function paragraphBlocks(segment) {
 }
 
 // Greedily packs blocks into chunks up to MAX_CHUNK_CHARS. Oversized
-// paragraphs are hard-split; oversized fences stay whole (atomicity wins).
-function packBlocks(blocks) {
+// paragraphs are hard-split; oversized fences stay whole (atomicity wins —
+// the only allowed cap overflow). `firstReserve` shrinks the first group's
+// budget so a heading fold onto it cannot push raw past the cap.
+function packBlocks(blocks, firstReserve = 0) {
   const chunks = [];
   let current = [];
+
+  // Math.max guards a pathological heading longer than the cap itself.
+  const capFor = (groupIndex) =>
+    groupIndex === 0 ? Math.max(1, MAX_CHUNK_CHARS - firstReserve) : MAX_CHUNK_CHARS;
 
   const currentLength = () =>
     current.length
@@ -179,15 +188,19 @@ function packBlocks(blocks) {
   };
 
   for (const block of blocks) {
-    if (block.type === 'para' && block.raw.length > MAX_CHUNK_CHARS) {
-      flush();
-      for (let i = 0; i < block.raw.length; i += MAX_CHUNK_CHARS) {
-        chunks.push([{ type: 'para', raw: block.raw.slice(i, i + MAX_CHUNK_CHARS) }]);
+    const prospective = currentLength() + (current.length ? SEP.length : 0) + block.raw.length;
+    if (current.length && prospective > capFor(chunks.length)) flush();
+
+    const cap = capFor(chunks.length);
+    if (block.type === 'para' && block.raw.length > cap) {
+      // Hard-split: only the section's first slice absorbs the heading
+      // reserve; later slices get the full cap.
+      let sliceCap = cap;
+      for (let i = 0; i < block.raw.length; i += sliceCap, sliceCap = MAX_CHUNK_CHARS) {
+        chunks.push([{ type: 'para', raw: block.raw.slice(i, i + sliceCap) }]);
       }
       continue;
     }
-    const prospective = currentLength() + (current.length ? SEP.length : 0) + block.raw.length;
-    if (current.length && prospective > MAX_CHUNK_CHARS) flush();
     current.push(block);
   }
   flush();
@@ -211,7 +224,8 @@ function cleanProse(str) {
 }
 
 // Fence content is kept verbatim (identifiers are searchable) — only the
-// ``` delimiter markers are dropped.
+// marker lines are dropped, whole (the language tag on the opening ``` line
+// would otherwise leak into the index as an orphan token).
 function cleanFence(str) {
-  return str.replace(/^```.*$/gm, (line) => line.replace(/```/g, ''));
+  return str.replace(/^```[^\n]*\n?/gm, '');
 }

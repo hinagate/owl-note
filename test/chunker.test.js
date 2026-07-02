@@ -105,6 +105,20 @@ describe('chunkNote — paragraph packing', () => {
     // Reassembling the pieces recovers the original text.
     expect(chunks.map((c) => c.raw).join('')).toBe(bigParagraph);
   });
+
+  it('keeps raw within the cap when folding a heading onto a near-cap paragraph (regression)', () => {
+    // Without reserving room for the heading fold, "## Section" + separator +
+    // a 1394-char paragraph produced a 1406-char raw chunk.
+    const para = 'z'.repeat(1394);
+    const body = `## Section\n\n${para}`;
+    const chunks = chunkNote(note({ body }));
+    for (const c of chunks) {
+      expect(c.raw.length).toBeLessThanOrEqual(MAX_CHUNK_CHARS);
+    }
+    // Heading still lives in the section's first chunk, and no content is lost.
+    expect(chunks[0].raw.startsWith('## Section')).toBe(true);
+    expect(chunks.map((c) => c.raw).join('').match(/z/g).length).toBe(1394);
+  });
 });
 
 describe('chunkNote — fenced code blocks are atomic', () => {
@@ -186,6 +200,14 @@ describe('chunkNote — cleaned text', () => {
     const chunks = chunkNote(note({ body }));
     expect(chunks[0].text).toContain('myUniqueIdentifier');
     expect(chunks[0].text).not.toContain('```');
+  });
+
+  it('drops the fence language tag from cleaned text but keeps it in raw (regression)', () => {
+    const body = '```python\ndef my_unique_func():\n    pass\n```';
+    const chunks = chunkNote(note({ body }));
+    expect(chunks[0].text).not.toContain('python');
+    expect(chunks[0].text).toContain('my_unique_func');
+    expect(chunks[0].raw).toContain('```python');
   });
 });
 
