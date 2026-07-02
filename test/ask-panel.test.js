@@ -87,6 +87,66 @@ describe('ask-panel — drawer shell', () => {
   });
 });
 
+// [T10/M4.5 Part 3] Drawer a11y: the slide-over must be a proper modal dialog for
+// keyboard + screen-reader users — dialog semantics, labelled controls, a focus
+// trap (Tab can't escape the drawer), and focus returned to the opener on close.
+describe('ask-panel — a11y (dialog semantics, labels, focus trap)', () => {
+  it('exposes role=dialog, aria-modal, an accessible name, and labelled controls', () => {
+    const { el } = makePanel();
+    expect(el.getAttribute('role')).toBe('dialog');
+    expect(el.getAttribute('aria-modal')).toBe('true');
+    expect(el.getAttribute('aria-label')).toBeTruthy();
+    // Each interactive control carries an accessible name.
+    expect(el.querySelector('.ask-input').getAttribute('aria-label')).toBeTruthy();
+    expect(el.querySelector('.ask-close').getAttribute('aria-label')).toBeTruthy();
+    expect(el.querySelector('.ask-submit').textContent).toBe('Ask'); // name from visible text
+  });
+
+  it('traps Tab focus inside the drawer (last wraps to first, first wraps to last)', () => {
+    const { el, panel } = makePanel();
+    panel.open();
+    const items = [el.querySelector('.ask-close'), el.querySelector('.ask-input'), el.querySelector('.ask-submit')];
+    const first = items[0];
+    const last = items[items.length - 1];
+
+    // Tab on the LAST focusable wraps to the FIRST.
+    last.focus();
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+    expect(document.activeElement).toBe(first);
+
+    // Shift+Tab on the FIRST focusable wraps to the LAST.
+    first.focus();
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }));
+    expect(document.activeElement).toBe(last);
+  });
+
+  it('returns focus to the opener (toolbar Ask button) when closed', () => {
+    const { el, panel } = makePanel(); // mount() replaces body content with the aside
+    const askBtn = document.createElement('button');
+    askBtn.textContent = 'Ask';
+    document.body.appendChild(askBtn);
+    askBtn.focus();
+
+    panel.open(askBtn); // opener passed explicitly, as app.js does
+    expect(document.activeElement).toBe(el.querySelector('.ask-input')); // focus moved into drawer
+
+    panel.close();
+    expect(document.activeElement).toBe(askBtn); // ...and back to the opener on close
+  });
+
+  it('Escape stays SCOPED to the panel (T5) and still closes + returns focus', () => {
+    const { el, panel } = makePanel();
+    const askBtn = document.createElement('button');
+    document.body.appendChild(askBtn);
+    askBtn.focus();
+    panel.open(askBtn);
+
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(el.hidden).toBe(true);
+    expect(document.activeElement).toBe(askBtn);
+  });
+});
+
 describe('ask-panel — state rendering', () => {
   it('renders one result card per chunk with title, heading and snippet', () => {
     const { el, panel } = makePanel();

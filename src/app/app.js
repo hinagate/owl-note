@@ -524,7 +524,10 @@ async function refreshPanes() {
       await refreshNoteList(); // refresh note-card sync badges right after toggling
       return result;
     },
-    onAsk: askPanel ? () => askPanel.open() : null, // Ask button only when the drawer is mounted
+    // Ask button only when the drawer is mounted. Pass the focused element (the just-
+    // clicked toolbar Ask button) as the opener so the panel returns focus to it on
+    // close (a11y — T10/M4.5). The panel falls back to document.activeElement anyway.
+    onAsk: askPanel ? () => askPanel.open(document.activeElement) : null,
   });
   await refreshNoteList();
   // Editor is intentionally NOT re-rendered here. It is rendered only by

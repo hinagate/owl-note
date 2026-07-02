@@ -69,6 +69,36 @@ describe('createAskIndex — relevance and ranking', () => {
   });
 });
 
+// [T10/M4.5 Part 2a] CJK bigram tokenizer. MiniSearch's default splits on
+// whitespace/punctuation and can't tokenize unspaced CJK, so a CJK note would be
+// unfindable. The custom tokenizer emits overlapping character bigrams for CJK runs
+// (a SUPERSET — latin tokenization is byte-identical to the default, proven by the
+// unchanged tests above/below all staying green).
+describe('createAskIndex — CJK retrieval (bigram tokenizer)', () => {
+  it('retrieves a Japanese-only note via a same-language query (bigram overlap)', () => {
+    const idx = createAskIndex();
+    idx.build([note({ id: 'jp', title: '日本語ノート', body: '猫が大好きです。犬も好きです。' })]);
+    const results = idx.query('大好き');
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0].noteId).toBe('jp');
+  });
+
+  it('retrieves a Chinese-only note by an unspaced query substring', () => {
+    const idx = createAskIndex();
+    idx.build([note({ id: 'zh', title: '笔记', body: '我喜欢喝咖啡和茶。' })]);
+    const results = idx.query('咖啡');
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0].noteId).toBe('zh');
+  });
+
+  it('still matches latin terms in a mixed latin+CJK note (superset, latin unchanged)', () => {
+    const idx = createAskIndex();
+    idx.build([note({ id: 'mix', title: 'Recipe レシピ', body: 'espresso コーヒー tips' })]);
+    expect(idx.query('espresso').some((r) => r.noteId === 'mix')).toBe(true);
+    expect(idx.query('コーヒー').some((r) => r.noteId === 'mix')).toBe(true);
+  });
+});
+
 describe('createAskIndex — upsertNote', () => {
   it('is a no-op on chunks when the hash is unchanged, but still refreshes meta', () => {
     const idx = createAskIndex();

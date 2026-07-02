@@ -69,6 +69,12 @@ export function renderAskPanel(container, {
 }) {
   container.innerHTML = ''; // build the shell ONCE; update() only mutates status/results
 
+  // [T10/M4.5 Part 3] Dialog semantics so AT announces the drawer as a modal with a
+  // name, and (with the focus trap below) treats the page behind it as inert.
+  container.setAttribute('role', 'dialog');
+  container.setAttribute('aria-modal', 'true');
+  container.setAttribute('aria-label', 'Ask your notes');
+
   const header = document.createElement('div');
   header.className = 'ask-header';
   const heading = document.createElement('h2');
@@ -88,6 +94,8 @@ export function renderAskPanel(container, {
   input.type = 'text';
   input.className = 'ask-input';
   input.placeholder = 'Ask a question about your notes…';
+  // Accessible name for the input (a placeholder is not a reliable label for AT).
+  input.setAttribute('aria-label', 'Ask a question about your notes');
   const submit = document.createElement('button');
   submit.type = 'button';
   submit.className = 'ask-submit';
@@ -121,23 +129,60 @@ export function renderAskPanel(container, {
   submit.addEventListener('click', fire);
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); fire(); } });
 
-  // Escape is SCOPED to the panel — the listener lives on the container and is
-  // only bound while the drawer is open. The app has no global shortcuts, so we
-  // deliberately do not touch document/window here.
-  function onKeydown(e) {
-    if (e.key === 'Escape') { e.stopPropagation(); close(); }
+  // The element to restore focus to when the drawer closes (the toolbar Ask button
+  // that opened it). Captured at open() time; cleared on close().
+  let returnFocusEl = null;
+
+  // All currently-focusable controls inside the drawer, in DOM order. Recomputed on
+  // each Tab so result cards / the opt-in card join the trap as they render.
+  function focusables() {
+    const sel = 'a[href], button:not([disabled]), input:not([disabled]), '
+      + 'select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    return [...container.querySelectorAll(sel)].filter((el) => !el.hidden);
   }
 
-  function open() {
+  // Escape is SCOPED to the panel — the listener lives on the container and is only
+  // bound while the drawer is open. The app has no global shortcuts, so we deliberately
+  // do not touch document/window here. The same handler runs the focus trap: while a
+  // modal (aria-modal=true) is open, Tab must not move focus to the inert page behind
+  // it, so we wrap last->first and first->last instead of letting it escape.
+  function onKeydown(e) {
+    if (e.key === 'Escape') { e.stopPropagation(); close(); return; }
+    if (e.key !== 'Tab') return;
+    const items = focusables();
+    if (items.length === 0) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey) {
+      if (active === first || !container.contains(active)) { e.preventDefault(); last.focus(); }
+    } else if (active === last || !container.contains(active)) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+
+  function open(opener) {
     container.hidden = false;
     container.addEventListener('keydown', onKeydown);
     renderFooter();
+    // Remember where focus came from so close() can return it there. Prefer an
+    // explicit opener (app.js passes the toolbar Ask button); otherwise fall back to
+    // whatever held focus at open time. Captured BEFORE input.focus() moves it.
+    const candidate = (opener && typeof opener.focus === 'function') ? opener : document.activeElement;
+    returnFocusEl = (candidate && candidate !== document.body && typeof candidate.focus === 'function')
+      ? candidate : null;
     input.focus();
   }
   function close() {
     container.hidden = true;
     container.removeEventListener('keydown', onKeydown);
+    const toRestore = returnFocusEl;
+    returnFocusEl = null;
     onClose();
+    // Return focus to the opener so keyboard users aren't dumped at document start.
+    // Guarded: the button may have been removed/re-rendered since open().
+    if (toRestore && document.contains(toRestore)) toRestore.focus();
   }
   function destroy() {
     container.removeEventListener('keydown', onKeydown);

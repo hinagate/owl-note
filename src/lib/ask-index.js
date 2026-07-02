@@ -18,6 +18,56 @@ const SEARCH_OPTIONS = {
   combineWith: 'AND',
 };
 
+// [T10/M4.5 Part 2a] CJK bigram tokenizer. MiniSearch's default splits on
+// whitespace/punctuation (SPACE_OR_PUNCTUATION), which leaves an unspaced CJK run
+// as ONE token — so a query term can't line up with it and the note is unfindable.
+// We wrap the default tokenizer: latin/other tokens pass through UNCHANGED (this is
+// a strict SUPERSET, keeping every existing latin test byte-identical), while CJK
+// runs are re-emitted as overlapping character bigrams so a query's bigrams overlap
+// the note's. Used for BOTH indexing and search: it's set as the constructor
+// `tokenize`, which MiniSearch also inherits at query time (no searchOptions.tokenize
+// override is present), so index and query tokenization always agree.
+//
+// CJK codepoint ranges (Plan §5.2): Han (+ Ext-A / compatibility), the Kana block
+// (Hiragana/Katakana, incl. the prolonged-sound mark), and Hangul (syllables + Jamo).
+const CJK_CODEPOINT =
+  /[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯ᄀ-ᇿ㄰-㆏ꥠ-꥿]/;
+const defaultTokenize = MiniSearch.getDefault('tokenize');
+
+// Overlapping 2-char shingles of a CJK run; a single CJK char emits itself.
+function cjkBigrams(run) {
+  const chars = Array.from(run); // split by code point (astral-safe)
+  if (chars.length < 2) return chars;
+  const grams = [];
+  for (let i = 0; i < chars.length - 1; i += 1) grams.push(chars[i] + chars[i + 1]);
+  return grams;
+}
+
+function tokenize(text, fieldName) {
+  const base = defaultTokenize(text, fieldName);
+  const out = [];
+  for (const token of base) {
+    if (!CJK_CODEPOINT.test(token)) { out.push(token); continue; } // pure-latin: untouched
+    // Mixed token: walk it into maximal CJK / non-CJK runs, bigramming only the CJK.
+    let run = '';
+    let runIsCjk = false;
+    const flush = () => {
+      if (!run) return;
+      if (runIsCjk) out.push(...cjkBigrams(run));
+      else out.push(run);
+      run = '';
+    };
+    for (const ch of token) {
+      const isCjk = CJK_CODEPOINT.test(ch);
+      if (run && isCjk !== runIsCjk) flush();
+      run += ch;
+      runIsCjk = isCjk;
+    }
+    flush();
+  }
+  return out;
+}
+
 // Chunk shape from chunker.js — stored in full so query() can return
 // ready-to-use chunks without a second lookup.
 const CHUNK_STORE_FIELDS = ['id', 'noteId', 'noteTitle', 'heading', 'text', 'raw'];
@@ -27,6 +77,7 @@ function newMiniSearch() {
     fields: ['text', 'noteTitle', 'heading'],
     storeFields: CHUNK_STORE_FIELDS,
     searchOptions: SEARCH_OPTIONS,
+    tokenize, // CJK-aware superset; inherited for query-time tokenization too
   });
 }
 

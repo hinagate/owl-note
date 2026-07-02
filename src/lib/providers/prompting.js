@@ -40,11 +40,27 @@ export const CHUNK_TOKEN_BUDGET = 3000;
 const MIN_PACKED_CHUNKS = 1;
 const MAX_PACKED_CHUNKS = 6;
 
-// Char-count based token estimate. Deliberately simple and isolated so
-// T10/M4.5 can swap it for a script-aware estimator (CJK codepoints are
-// closer to ~1 token/char); this version undercounts CJK text roughly 3-4x.
+// CJK codepoint ranges (Plan §5.2/§5.4): Han (+ Ext-A / compatibility ideographs),
+// the Kana block (Hiragana/Katakana, incl. the prolonged-sound mark), and Hangul
+// (syllables + Jamo). All well above the latin range, so latin text never matches.
+const CJK_CODEPOINT =
+  /[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯ᄀ-ᇿ㄰-㆏ꥠ-꥿]/;
+
+// Script-aware token estimate (§5.4). A plain chars/4 undercounts CJK ~3-4x — a
+// single Han/Kana/Hangul codepoint is roughly one token — so a CJK-heavy context
+// would silently overflow the model's fixed ~9,216-token window during packing.
+// We therefore count CJK codepoints at ~1 token each and all other chars at chars/4,
+// summing the two. Latin-preserving: with zero CJK this reduces to Math.ceil(len/4),
+// the exact value packChunks' budget tests rely on.
 export function estimateTokens(text) {
-  return Math.ceil((text || '').length / 4);
+  const s = String(text || '');
+  let cjk = 0;
+  let other = 0;
+  for (const ch of s) { // for..of iterates by code point (astral-safe)
+    if (CJK_CODEPOINT.test(ch)) cjk += 1;
+    else other += 1;
+  }
+  return Math.ceil(other / 4) + cjk;
 }
 
 /**
@@ -90,10 +106,17 @@ export function buildUserPrompt({ question, chunks }) {
 
   const blocks = (chunks || []).map((chunk) => {
     const label = chunk.heading ? `${chunk.noteTitle} — ${chunk.heading}` : chunk.noteTitle;
-    // [T10/M4.5] strip literal <<< from raw here (anti-forgery hardening —
-    // deferred so a note's own text can't inject a fake marker into the
-    // prompt). Inserted verbatim for now.
-    return `<<<NOTE c:${chunk.id}>>> ${label}\n${chunk.raw}\n<<<END>>>`;
+    // [T10/M4.5] Injection defense: neutralize any literal <<< / >>> run in the
+    // note's own text BEFORE we wrap it in the sentinel markers below. Untouched, a
+    // body containing "<<<END>>>" or "<<<NOTE c:evil>>>" could forge or prematurely
+    // close a marker and break the DATA boundary the system prompt depends on. We
+    // collapse each run of 3+ angle brackets to a single-angle lookalike (‹ / ›) so
+    // the text stays readable but can never match the <<<…>>> grammar. The genuine
+    // sentinels are added AFTER this and so remain intact.
+    const safeRaw = String(chunk.raw ?? '')
+      .replace(/<{3,}/g, (m) => '‹'.repeat(m.length))
+      .replace(/>{3,}/g, (m) => '›'.repeat(m.length));
+    return `<<<NOTE c:${chunk.id}>>> ${label}\n${safeRaw}\n<<<END>>>`;
   });
 
   return `NOTES:\n${blocks.join('\n\n')}\n\nQUESTION: ${truncatedQuestion}`;
