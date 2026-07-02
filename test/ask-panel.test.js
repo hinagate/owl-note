@@ -156,12 +156,45 @@ describe('ask-panel — state rendering', () => {
     expect(el.textContent).toContain('Nothing in your notes matches that.');
   });
 
-  it('error shows a friendly message and still renders the preserved chunks', () => {
+  it('error maps model-error to its friendly copy and still renders the preserved chunks', () => {
     const { el, panel } = makePanel();
-    panel.update({ kind: 'error', code: 'model-error', message: 'boom', chunks: [chunk({ noteId: 'e', noteTitle: 'Err note' })] });
-    expect(el.querySelector('.ask-status').textContent.toLowerCase()).toMatch(/wrong|error|couldn|unavailable/);
+    panel.update({ kind: 'error', code: 'model-error', message: 'raw provider stack trace', chunks: [chunk({ noteId: 'e', noteTitle: 'Err note' })] });
+    expect(el.querySelector('.ask-status').textContent).toContain('The AI model ran into a problem');
     expect(el.querySelectorAll('.ask-card')).toHaveLength(1);
     expect(el.querySelector('.ask-card-title').textContent).toBe('Err note');
+    // The raw provider message must never leak into the DOM.
+    expect(el.textContent).not.toContain('raw provider stack trace');
+  });
+
+  it.each([
+    ['context-overflow', 'too large to process'],
+    ['network', "Couldn't reach the AI service"],
+    ['auth', 'rejected the credentials'],
+    ['unavailable', "isn't available"],
+  ])('error code %s renders its mapped copy and still shows chunk cards', (code, expectedSubstring) => {
+    const { el, panel } = makePanel();
+    panel.update({ kind: 'error', code, message: 'internal-detail-should-not-leak', chunks: [chunk()] });
+    expect(el.querySelector('.ask-status').textContent).toContain(expectedSubstring);
+    expect(el.querySelectorAll('.ask-card')).toHaveLength(1);
+    expect(el.textContent).not.toContain('internal-detail-should-not-leak');
+  });
+
+  it('an unrecognized error code falls back to a generic friendly message', () => {
+    const { el, panel } = makePanel();
+    panel.update({ kind: 'error', code: 'totally-unknown-code', message: 'nope', chunks: [chunk()] });
+    expect(el.querySelector('.ask-status').textContent.toLowerCase()).toContain('something went wrong');
+    expect(el.querySelectorAll('.ask-card')).toHaveLength(1);
+    expect(el.textContent).not.toContain('nope');
+  });
+
+  it('aborted is NOT shown as a scary error — quietly leaves the prior render untouched', () => {
+    const { el, panel } = makePanel();
+    panel.update(snippetsState([chunk({ noteId: 'p', noteTitle: 'Prior card' })]));
+    const statusBefore = el.querySelector('.ask-status').textContent;
+    panel.update({ kind: 'error', code: 'aborted', message: 'AbortError', chunks: [] });
+    expect(el.querySelector('.ask-status').textContent).toBe(statusBefore);
+    expect(el.querySelector('.ask-card-title').textContent).toBe('Prior card');
+    expect(el.textContent.toLowerCase()).not.toMatch(/something went wrong|ran into a problem|rejected|couldn.?t reach/);
   });
 
   it('does not crash on the M2-unreachable downloading/generating states', () => {

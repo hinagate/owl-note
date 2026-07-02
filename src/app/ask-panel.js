@@ -18,6 +18,22 @@ import { renderMarkdown } from '../lib/markdown.js';
 
 const SNIPPET_MAX = 220;
 
+// Centralized code -> user-facing copy for the 'error' state (ASK_ERROR_CODES,
+// see src/lib/providers/provider.js). Deliberately NEVER surfaces state.message
+// (the raw provider/thrown text) — that's internal detail that could leak an
+// endpoint or key fragment from a future HTTP-compat provider (M7). 'aborted' is
+// handled separately in renderError as a non-error (a cancelled ask, not a
+// failure) and has no entry here. Any code without an entry falls back to
+// DEFAULT_ERROR_COPY.
+const ERROR_COPY = {
+  'model-error': 'The AI model ran into a problem. Showing matching notes instead.',
+  'context-overflow': 'That question plus its matches were too large to process. Showing matching notes.',
+  network: "Couldn't reach the AI service. Showing matching notes.",
+  auth: 'The AI service rejected the credentials. Showing matching notes.',
+  unavailable: "On-device AI isn't available here. Showing matching notes.",
+};
+const DEFAULT_ERROR_COPY = 'Something went wrong generating an answer. Showing matching notes.';
+
 // Verbatim opt-in copy (Plan §5.8) — do not paraphrase. The download is one-time,
 // on-device, and shared across sites, and notes never leave the device.
 const OPT_IN_COPY =
@@ -286,8 +302,14 @@ export function renderAskPanel(container, {
   }
 
   function renderError(state) {
-    setStatus('Something went wrong — showing matching excerpts.');
+    // A cancelled ask (superseded by a newer one, or a future explicit user
+    // cancel) is NOT a failure — no red/scary copy. Quietly leave whatever was
+    // already on screen (e.g. the prior snippets or answer) untouched.
+    if (state.code === 'aborted') return;
+
+    setStatus(ERROR_COPY[state.code] || DEFAULT_ERROR_COPY);
     clearResults();
+    // Retrieval survives a model error — always still show the preserved chunks.
     if (Array.isArray(state.chunks) && state.chunks.length) renderCards(state.chunks);
   }
 
