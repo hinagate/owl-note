@@ -1,57 +1,510 @@
 {
   "version": 1,
   "questions": [
-    { "id": "q01", "question": "What temperature did I bake the rye at in attempt 3?", "relevantNotes": ["Rye sourdough attempt 3"], "answerable": true, "tags": ["direct"] },
-    { "id": "q02", "question": "What hydration did I use for my second rye sourdough attempt?", "relevantNotes": ["Rye sourdough attempt 2"], "answerable": true, "tags": ["direct"] },
-    { "id": "q03", "question": "How much doubanjiang goes into my mapo tofu?", "relevantNotes": ["Sichuan mapo tofu (my version)"], "answerable": true, "tags": ["direct"] },
-    { "id": "q04", "question": "Which index did I add to fix the slow Postgres query?", "relevantNotes": ["Postgres slow query — missing index"], "answerable": true, "tags": ["direct"] },
-    { "id": "q05", "question": "Which git command did I use to find the lost commit when recovering the deleted branch?", "relevantNotes": ["Git rescue: recover a deleted branch"], "answerable": true, "tags": ["direct"] },
-    { "id": "q06", "question": "What budget did we approve for repainting the lobby at the April HOA meeting?", "relevantNotes": ["HOA meeting notes April"], "answerable": true, "tags": ["direct"] },
-    { "id": "q07", "question": "What is the cutover date for the Acme billing migration?", "relevantNotes": ["Vendor call: Acme billing migration"], "answerable": true, "tags": ["direct"] },
-    { "id": "q08", "question": "How long do I bake the banana bread and at what temperature?", "relevantNotes": ["Banana bread that actually works"], "answerable": true, "tags": ["direct"] },
-    { "id": "q09", "question": "What's the regex I use to extract the date and time from a log line?", "relevantNotes": ["Regex for parsing log timestamps"], "answerable": true, "tags": ["direct"] },
-    { "id": "q10", "question": "What coffee-to-water ratio do I use for cold brew?", "relevantNotes": ["Cold brew coffee ratios"], "answerable": true, "tags": ["direct"] },
-    { "id": "q11", "question": "Welchen Reifendruck fahre ich hinten am Fahrrad?", "relevantNotes": ["Fahrradreparatur Notizen"], "answerable": true, "tags": ["direct"] },
-    { "id": "q12", "question": "¿Cuál es mi presupuesto semanal para la compra?", "relevantNotes": ["Lista de la compra y presupuesto"], "answerable": true, "tags": ["direct"] },
-    { "id": "q13", "question": "What did we decide to prioritize for Q2, and what got pushed to Q3?", "relevantNotes": ["Q2 roadmap planning 2026-04-12"], "answerable": true, "tags": ["direct"] },
-    { "id": "q14", "question": "What is the Rust error code for borrowing a value as mutable more than once?", "relevantNotes": ["Rust ownership notes: borrow checker gotcha"], "answerable": true, "tags": ["direct"] },
-    { "id": "q15", "question": "How long do I simmer the red lentil dahl?", "relevantNotes": ["Weeknight red lentil dahl"], "answerable": true, "tags": ["direct"] },
-
-    { "id": "q16", "question": "How much do I put toward housing every month?", "relevantNotes": ["Budget review — May 2026"], "answerable": true, "tags": ["paraphrase"] },
-    { "id": "q17", "question": "How long does the concentrate need to sit before it's drinkable?", "relevantNotes": ["Cold brew coffee ratios"], "answerable": true, "tags": ["paraphrase"] },
-    { "id": "q18", "question": "What do I pay each month to keep the car covered?", "relevantNotes": ["Car maintenance log"], "answerable": true, "tags": ["paraphrase"] },
-    { "id": "q19", "question": "How far did I manage on my first time out after the injury?", "relevantNotes": ["First long run since the ankle thing"], "answerable": true, "tags": ["paraphrase"] },
-    { "id": "q20", "question": "When are we releasing the download capability to users?", "relevantNotes": ["Standup 2026-03-04"], "answerable": true, "tags": ["paraphrase"] },
-    { "id": "q21", "question": "What is Dad doing with the vacation property?", "relevantNotes": ["That conversation with Dad"], "answerable": true, "tags": ["paraphrase"] },
-    { "id": "q22", "question": "How do I know when the swiss cheese plant is thirsty?", "relevantNotes": ["Houseplant care cheatsheet"], "answerable": true, "tags": ["paraphrase"] },
-    { "id": "q23", "question": "What keeps advertisements off every device in the house?", "relevantNotes": ["Home lab setup — full build log"], "answerable": true, "tags": ["paraphrase"] },
-    { "id": "q24", "question": "What was the greatest distance I reached in the buildup before tapering?", "relevantNotes": ["Marathon training week 16"], "answerable": true, "tags": ["paraphrase"] },
-    { "id": "q25", "question": "Which room did I have the water problem in?", "relevantNotes": ["Rainy Tuesday and the leaking radiator"], "answerable": true, "tags": ["paraphrase"] },
-    { "id": "q26", "question": "How long does the cold breakfast need to sit before it's ready?", "relevantNotes": ["Overnight oats, the base recipe"], "answerable": true, "tags": ["paraphrase"] },
-
-    { "id": "q27", "question": "绿茶应该怎么保存？", "relevantNotes": ["茶叶保存笔记"], "answerable": true, "tags": ["cjk"] },
-    { "id": "q28", "question": "普洱茶适合放在什么样的环境里？", "relevantNotes": ["茶叶保存笔记"], "answerable": true, "tags": ["cjk"] },
-    { "id": "q29", "question": "伏見稲荷はいつ行くと空いていますか？", "relevantNotes": ["京都旅行のメモ"], "answerable": true, "tags": ["cjk"] },
-    { "id": "q30", "question": "김치찌개는 얼마나 끓여야 하나요?", "relevantNotes": ["김치찌개 레시피"], "answerable": true, "tags": ["cjk"] },
-    { "id": "q31", "question": "周五在健身房应该练哪个部位？", "relevantNotes": ["健身房训练计划"], "answerable": true, "tags": ["cjk"] },
-    { "id": "q32", "question": "深蹲今年的目标重量是多少？", "relevantNotes": ["健身房训练计划"], "answerable": true, "tags": ["cjk"] },
-
-    { "id": "q33", "question": "What was the root cause of the February 18th production outage?", "relevantNotes": ["Prod incident postmortem 2026-02-18"], "answerable": true, "tags": ["injection"] },
-    { "id": "q34", "question": "What temperature do I cook Grandma's caramel to?", "relevantNotes": ["Grandma's caramel sauce"], "answerable": true, "tags": ["injection"] },
-    { "id": "q35", "question": "What do I want to build out of the reclaimed cedar this weekend?", "relevantNotes": ["Weekend project ideas"], "answerable": true, "tags": ["injection"] },
-
-    { "id": "q36", "question": "How did the oven temperature change between my two rye sourdough attempts?", "relevantNotes": ["Rye sourdough attempt 2", "Rye sourdough attempt 3"], "answerable": true, "tags": ["multi-note"] },
-    { "id": "q37", "question": "What do I spend in total each month on rent and car insurance combined?", "relevantNotes": ["Budget review — May 2026", "Car maintenance log"], "answerable": true, "tags": ["multi-note"] },
-    { "id": "q38", "question": "In which meetings did the Acme billing migration come up, and what was the status each time?", "relevantNotes": ["Standup 2026-03-04", "Vendor call: Acme billing migration"], "answerable": true, "tags": ["multi-note"] },
-    { "id": "q39", "question": "Which of my notes mention the leaking radiator in the old apartment?", "relevantNotes": ["Rainy Tuesday and the leaking radiator", "Moving apartments — the good and the dread"], "answerable": true, "tags": ["multi-note"] },
-
-    { "id": "q40", "question": "What is my blood type?", "relevantNotes": [], "answerable": false, "tags": ["unanswerable"] },
-    { "id": "q41", "question": "How much did I originally pay for my car?", "relevantNotes": [], "answerable": false, "tags": ["unanswerable"] },
-    { "id": "q42", "question": "What's the wifi password at the office?", "relevantNotes": [], "answerable": false, "tags": ["unanswerable"] },
-    { "id": "q43", "question": "When is my sister's birthday?", "relevantNotes": [], "answerable": false, "tags": ["unanswerable"] },
-    { "id": "q44", "question": "What's the admin password for my home lab?", "relevantNotes": [], "answerable": false, "tags": ["unanswerable"] },
-    { "id": "q45", "question": "How many calories are in a slice of the banana bread?", "relevantNotes": [], "answerable": false, "tags": ["unanswerable"] },
-    { "id": "q46", "question": "Which airline did I fly to Kyoto with?", "relevantNotes": [], "answerable": false, "tags": ["unanswerable"] },
-    { "id": "q47", "question": "What's the name of my dentist?", "relevantNotes": [], "answerable": false, "tags": ["unanswerable"] }
+    {
+      "id": "q01",
+      "question": "What temperature did I bake the rye at in attempt 3?",
+      "relevantNotes": [
+        "Rye sourdough attempt 3"
+      ],
+      "answerable": true,
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q02",
+      "question": "What hydration did I use for my second rye sourdough attempt?",
+      "relevantNotes": [
+        "Rye sourdough attempt 2"
+      ],
+      "answerable": true,
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q03",
+      "question": "How much doubanjiang goes into my mapo tofu?",
+      "relevantNotes": [
+        "Sichuan mapo tofu (my version)"
+      ],
+      "answerable": true,
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q04",
+      "question": "Which index did I add to fix the slow Postgres query?",
+      "relevantNotes": [
+        "Postgres slow query — missing index"
+      ],
+      "answerable": true,
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q05",
+      "question": "Which git command did I use to find the lost commit when recovering the deleted branch?",
+      "relevantNotes": [
+        "Git rescue: recover a deleted branch"
+      ],
+      "answerable": true,
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q06",
+      "question": "What budget did we approve for repainting the lobby at the April HOA meeting?",
+      "relevantNotes": [
+        "HOA meeting notes April"
+      ],
+      "answerable": true,
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q07",
+      "question": "What is the cutover date for the Acme billing migration?",
+      "relevantNotes": [
+        "Vendor call: Acme billing migration"
+      ],
+      "answerable": true,
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q08",
+      "question": "How long do I bake the banana bread and at what temperature?",
+      "relevantNotes": [
+        "Banana bread that actually works"
+      ],
+      "answerable": true,
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q09",
+      "question": "What's the regex I use to extract the date and time from a log line?",
+      "relevantNotes": [
+        "Regex for parsing log timestamps"
+      ],
+      "answerable": true,
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q10",
+      "question": "What coffee-to-water ratio do I use for cold brew?",
+      "relevantNotes": [
+        "Cold brew coffee ratios"
+      ],
+      "answerable": true,
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q11",
+      "question": "Welchen Reifendruck fahre ich hinten am Fahrrad?",
+      "relevantNotes": [
+        "Fahrradreparatur Notizen"
+      ],
+      "answerable": true,
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q12",
+      "question": "¿Cuál es mi presupuesto semanal para la compra?",
+      "relevantNotes": [
+        "Lista de la compra y presupuesto"
+      ],
+      "answerable": true,
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q13",
+      "question": "What did we decide to prioritize for Q2, and what got pushed to Q3?",
+      "relevantNotes": [
+        "Q2 roadmap planning 2026-04-12"
+      ],
+      "answerable": true,
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q14",
+      "question": "What is the Rust error code for borrowing a value as mutable more than once?",
+      "relevantNotes": [
+        "Rust ownership notes: borrow checker gotcha"
+      ],
+      "answerable": true,
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q15",
+      "question": "How long do I simmer the red lentil dahl?",
+      "relevantNotes": [
+        "Weeknight red lentil dahl"
+      ],
+      "answerable": true,
+      "tags": [
+        "direct"
+      ]
+    },
+    {
+      "id": "q16",
+      "question": "How much do I put toward housing every month?",
+      "relevantNotes": [
+        "Budget review — May 2026"
+      ],
+      "answerable": true,
+      "tags": [
+        "paraphrase"
+      ]
+    },
+    {
+      "id": "q17",
+      "question": "How long does my make-ahead caffeine drink need to sit in the refrigerator before it's ready to pour?",
+      "relevantNotes": [
+        "Cold brew coffee ratios"
+      ],
+      "answerable": true,
+      "tags": [
+        "paraphrase"
+      ]
+    },
+    {
+      "id": "q18",
+      "question": "What do I pay each month to keep the vehicle covered?",
+      "relevantNotes": [
+        "Car maintenance log"
+      ],
+      "answerable": true,
+      "tags": [
+        "paraphrase"
+      ]
+    },
+    {
+      "id": "q19",
+      "question": "How far did I manage on my first time out after the injury?",
+      "relevantNotes": [
+        "First long run since the ankle thing"
+      ],
+      "answerable": true,
+      "tags": [
+        "paraphrase"
+      ]
+    },
+    {
+      "id": "q20",
+      "question": "When are we releasing the download capability to users?",
+      "relevantNotes": [
+        "Standup 2026-03-04"
+      ],
+      "answerable": true,
+      "tags": [
+        "paraphrase"
+      ]
+    },
+    {
+      "id": "q21",
+      "question": "What is my father doing with the vacation property?",
+      "relevantNotes": [
+        "That conversation with Dad"
+      ],
+      "answerable": true,
+      "tags": [
+        "paraphrase"
+      ]
+    },
+    {
+      "id": "q22",
+      "question": "How do I tell when my swiss cheese plant needs more moisture?",
+      "relevantNotes": [
+        "Houseplant care cheatsheet"
+      ],
+      "answerable": true,
+      "tags": [
+        "paraphrase"
+      ]
+    },
+    {
+      "id": "q23",
+      "question": "What keeps advertisements off every device in the house?",
+      "relevantNotes": [
+        "Home lab setup — full build log"
+      ],
+      "answerable": true,
+      "tags": [
+        "paraphrase"
+      ]
+    },
+    {
+      "id": "q24",
+      "question": "What was the greatest distance I covered in the buildup, before the wind-down phase began?",
+      "relevantNotes": [
+        "Marathon training week 16"
+      ],
+      "answerable": true,
+      "tags": [
+        "paraphrase"
+      ]
+    },
+    {
+      "id": "q25",
+      "question": "Which room did I have the water problem in?",
+      "relevantNotes": [
+        "Rainy Tuesday and the leaking radiator"
+      ],
+      "answerable": true,
+      "tags": [
+        "paraphrase"
+      ]
+    },
+    {
+      "id": "q26",
+      "question": "How long does the cold breakfast need to sit before it's ready?",
+      "relevantNotes": [
+        "Overnight oats, the base recipe"
+      ],
+      "answerable": true,
+      "tags": [
+        "paraphrase"
+      ]
+    },
+    {
+      "id": "q27",
+      "question": "绿茶应该怎么保存？",
+      "relevantNotes": [
+        "茶叶保存笔记"
+      ],
+      "answerable": true,
+      "tags": [
+        "cjk"
+      ]
+    },
+    {
+      "id": "q28",
+      "question": "普洱茶适合放在什么样的环境里？",
+      "relevantNotes": [
+        "茶叶保存笔记"
+      ],
+      "answerable": true,
+      "tags": [
+        "cjk"
+      ]
+    },
+    {
+      "id": "q29",
+      "question": "伏見稲荷はいつ行くと空いていますか？",
+      "relevantNotes": [
+        "京都旅行のメモ"
+      ],
+      "answerable": true,
+      "tags": [
+        "cjk"
+      ]
+    },
+    {
+      "id": "q30",
+      "question": "김치찌개는 얼마나 끓여야 하나요?",
+      "relevantNotes": [
+        "김치찌개 레시피"
+      ],
+      "answerable": true,
+      "tags": [
+        "cjk"
+      ]
+    },
+    {
+      "id": "q31",
+      "question": "周五在健身房应该练哪个部位？",
+      "relevantNotes": [
+        "健身房训练计划"
+      ],
+      "answerable": true,
+      "tags": [
+        "cjk"
+      ]
+    },
+    {
+      "id": "q32",
+      "question": "深蹲今年的目标重量是多少？",
+      "relevantNotes": [
+        "健身房训练计划"
+      ],
+      "answerable": true,
+      "tags": [
+        "cjk"
+      ]
+    },
+    {
+      "id": "q33",
+      "question": "What was the root cause of the February 18th production outage?",
+      "relevantNotes": [
+        "Prod incident postmortem 2026-02-18"
+      ],
+      "answerable": true,
+      "tags": [
+        "injection"
+      ]
+    },
+    {
+      "id": "q34",
+      "question": "What temperature do I cook Grandma's caramel to?",
+      "relevantNotes": [
+        "Grandma's caramel sauce"
+      ],
+      "answerable": true,
+      "tags": [
+        "injection"
+      ]
+    },
+    {
+      "id": "q35",
+      "question": "What do I want to build out of the reclaimed cedar this weekend?",
+      "relevantNotes": [
+        "Weekend project ideas"
+      ],
+      "answerable": true,
+      "tags": [
+        "injection"
+      ]
+    },
+    {
+      "id": "q36",
+      "question": "How did the oven temperature change between my two rye sourdough attempts?",
+      "relevantNotes": [
+        "Rye sourdough attempt 2",
+        "Rye sourdough attempt 3"
+      ],
+      "answerable": true,
+      "tags": [
+        "multi-note"
+      ]
+    },
+    {
+      "id": "q37",
+      "question": "What do I spend in total each month on rent and car insurance combined?",
+      "relevantNotes": [
+        "Budget review — May 2026",
+        "Car maintenance log"
+      ],
+      "answerable": true,
+      "tags": [
+        "multi-note"
+      ]
+    },
+    {
+      "id": "q38",
+      "question": "In which meetings did the Acme billing migration come up, and what was the status each time?",
+      "relevantNotes": [
+        "Standup 2026-03-04",
+        "Vendor call: Acme billing migration"
+      ],
+      "answerable": true,
+      "tags": [
+        "multi-note"
+      ]
+    },
+    {
+      "id": "q39",
+      "question": "Which of my notes mention the leaking radiator in the old apartment?",
+      "relevantNotes": [
+        "Rainy Tuesday and the leaking radiator",
+        "Moving apartments — the good and the dread"
+      ],
+      "answerable": true,
+      "tags": [
+        "multi-note"
+      ]
+    },
+    {
+      "id": "q40",
+      "question": "What is my blood type?",
+      "relevantNotes": [],
+      "answerable": false,
+      "tags": [
+        "unanswerable"
+      ]
+    },
+    {
+      "id": "q41",
+      "question": "How much did I originally pay for my car?",
+      "relevantNotes": [],
+      "answerable": false,
+      "tags": [
+        "unanswerable"
+      ]
+    },
+    {
+      "id": "q42",
+      "question": "What's the wifi password at the office?",
+      "relevantNotes": [],
+      "answerable": false,
+      "tags": [
+        "unanswerable"
+      ]
+    },
+    {
+      "id": "q43",
+      "question": "When is my sister's birthday?",
+      "relevantNotes": [],
+      "answerable": false,
+      "tags": [
+        "unanswerable"
+      ]
+    },
+    {
+      "id": "q44",
+      "question": "What's the admin password for my home lab?",
+      "relevantNotes": [],
+      "answerable": false,
+      "tags": [
+        "unanswerable"
+      ]
+    },
+    {
+      "id": "q45",
+      "question": "How many calories are in a slice of the banana bread?",
+      "relevantNotes": [],
+      "answerable": false,
+      "tags": [
+        "unanswerable"
+      ]
+    },
+    {
+      "id": "q46",
+      "question": "Which airline did I fly to Kyoto with?",
+      "relevantNotes": [],
+      "answerable": false,
+      "tags": [
+        "unanswerable"
+      ]
+    },
+    {
+      "id": "q47",
+      "question": "What's the name of my dentist?",
+      "relevantNotes": [],
+      "answerable": false,
+      "tags": [
+        "unanswerable"
+      ]
+    }
   ]
 }

@@ -7,11 +7,18 @@ Committed numbers from the retrieval eval harness. Regenerate with
 | --- | --- |
 | Date | 2026-07-02 |
 | Corpus | 48 notes / 60 chunks |
-| Golden set | 47 questions (39 answerable, 8 unanswerable) |
+| Golden set | 47 questions (39 answerable, 8 unanswerable) — v1.1, see note below |
 | MiniSearch | 7.2.0 (`^7.2.0`) |
 | Node | v23.9.0 |
-| Commit | 0bc8b03 (E1 fixtures; retrieval core unchanged) |
+| Commit | fixtures v1.1 (post-review repair; retrieval core unchanged) |
 | Config | lexical-only, top-5, CJK bigram tokenizer, no embeddings |
+
+> **Fixture repair (v1.1):** an independent semantic review of the golden set
+> found 5 of 11 paraphrase questions leaking a corpus-unique keyword from their
+> target note (`concentrate`, `car`, `Dad`, `thirsty`, `taper`), letting lexical
+> retrieval win questions meant to require semantic matching. They were reworded
+> (answerability preserved) and the table regenerated. Paraphrase recall dropped
+> 0.545 → 0.455 — the honest baseline. Overall dropped 0.846 → 0.821.
 
 ## Retrieval v1
 
@@ -23,9 +30,9 @@ here (abstention is measured by Answer QA, not retrieval).
 ```
   tag           n   recall@5    MRR
   ----------  ---  --------  -----
-  overall      39    0.846  0.826
+  overall      39    0.821  0.821
   direct       15    1.000  1.000
-  paraphrase   11    0.545  0.382
+  paraphrase   11    0.455  0.364
   cjk           6    1.000  1.000
   injection     3    1.000  1.000
   multi-note    4    0.750  1.000
@@ -33,16 +40,18 @@ here (abstention is measured by Answer QA, not retrieval).
 
 ### Misses (recall@5 == 0)
 
-All five recall-0 questions are paraphrase — the expected lexical-only weak spot:
+All six recall-0 questions are paraphrase — the expected lexical-only weak spot:
 
 ```
   [q16] paraphrase  "How much do I put toward housing every month?"
         expected: Budget review — May 2026
-  [q17] paraphrase  "How long does the concentrate need to sit before it's drinkable?"
+  [q17] paraphrase  "How long does my make-ahead caffeine drink need to sit in the refrigerator before it's ready to pour?"
         expected: Cold brew coffee ratios
+  [q18] paraphrase  "What do I pay each month to keep the vehicle covered?"
+        expected: Car maintenance log
   [q20] paraphrase  "When are we releasing the download capability to users?"
         expected: Standup 2026-03-04
-  [q24] paraphrase  "What was the greatest distance I reached in the buildup before tapering?"
+  [q24] paraphrase  "What was the greatest distance I covered in the buildup, before the wind-down phase began?"
         expected: Marathon training week 16
   [q26] paraphrase  "How long does the cold breakfast need to sit before it's ready?"
         expected: Overnight oats, the base recipe
@@ -57,7 +66,7 @@ queried with its own words ("rent utilities groceries savings").
 
 - **Lexical-only.** MiniSearch matches shared tokens (with prefix/fuzzy), so
   questions phrased with different words than the note (the paraphrase subset,
-  recall 0.545) score poorly *by design*. This gap is the headroom the M9
+  recall 0.455) score poorly *by design*. This gap is the headroom the M9
   embedding/fusion upgrade is meant to close — the paraphrase subset is the
   intended before/after benchmark, which is why the CI floor test deliberately
   leaves paraphrase ungated.
