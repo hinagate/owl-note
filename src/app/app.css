@@ -281,6 +281,23 @@ body.resizing { user-select: none; cursor: col-resize; }
   font-weight: 600; font-size: 13px; padding: 8px 16px; border-radius: 999px; cursor: pointer;
 }
 #ask-panel .ask-submit:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
+/* [Task E7] Current-note context chip — the open note pinned into the ask. */
+#ask-panel .ask-chip-row { padding: 0 16px 8px; }
+#ask-panel .ask-chip-row[hidden] { display: none; }
+#ask-panel .ask-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+  box-sizing: border-box; vertical-align: middle;
+  background: #eef6f0; border: 1px solid var(--border); border-radius: 999px;
+  padding: 3px 5px 3px 10px; font-size: 12px; color: var(--text);
+}
+#ask-panel .ask-chip-icon { font-size: 12px; line-height: 1; }
+#ask-panel .ask-chip-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#ask-panel .ask-chip-dismiss {
+  flex: none; border: none; background: transparent; cursor: pointer; color: var(--muted);
+  font-size: 12px; line-height: 1; padding: 2px 5px; border-radius: 999px;
+}
+#ask-panel .ask-chip-dismiss:hover { background: rgba(0, 0, 0, 0.08); color: var(--text); }
+
 #ask-panel .ask-status { padding: 0 16px 8px; font-size: 13px; color: var(--muted); }
 #ask-panel .ask-status:empty { display: none; }
 #ask-panel .ask-results { flex: 1 1 auto; overflow: auto; padding: 4px 16px 16px; }

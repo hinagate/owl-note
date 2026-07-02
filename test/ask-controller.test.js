@@ -281,6 +281,119 @@ describe('createAskController — zero hits vs empty index (distinct!)', () => {
   });
 });
 
+// [Task E7] Pinned current-note context. ask(question, { pinnedNoteId }) pins the
+// open note's first 2 doc-order chunks into the model context — leading the context
+// (so packing can never drop them) and deduped against primaries. The killer case:
+// zero lexical hits + a pin + an available model reaches the model ("summarize this
+// note") instead of the canned no-match; without an available model it stays canned.
+describe('createAskController — pinned current-note context (E7)', () => {
+  it('leads the model context with the pinned note chunks, primaries following', async () => {
+    const idx = realIndex();
+    const pinned = idx.chunksOf('n1'); // Espresso — NOT relevant to 'pod'
+    const primaries = idx.query('pod', 8); // matches n2 (Kubernetes)
+    const provider = fakeProvider({ id: 'builtin', availability: 'available' });
+    const { ctrl } = makeController(idx, provider);
+
+    await ctrl.ask('pod', { pinnedNoteId: 'n1' });
+
+    const sent = provider._calls.answer[0].chunks.map((c) => c.id);
+    expect(sent[0]).toBe(pinned[0].id);       // pinned FIRST (packing can't drop it)
+    expect(sent).toContain(primaries[0].id);  // primaries still present, after the pin
+  });
+
+  it('dedupes a pinned chunk that also ranked as a primary (no double-send)', async () => {
+    const idx = realIndex();
+    const provider = fakeProvider({ id: 'builtin', availability: 'available' });
+    const { ctrl } = makeController(idx, provider);
+
+    await ctrl.ask('pod', { pinnedNoteId: 'n2' }); // n2 is BOTH the pin AND the primary hit
+
+    const n2Id = idx.chunksOf('n2')[0].id;
+    const sent = provider._calls.answer[0].chunks.map((c) => c.id);
+    expect(sent.filter((id) => id === n2Id)).toHaveLength(1);
+  });
+
+  it('zero-hit + pinned + AVAILABLE → generating→answered on the pinned context; a cited pinned chunk resolves', async () => {
+    const idx = realIndex();
+    const pinned = idx.chunksOf('n1');
+    const citedId = pinned[0].id;
+    const provider = fakeProvider({
+      id: 'builtin',
+      availability: 'available',
+      answer: () => Promise.resolve({ answer: 'Summary of the note.', citations: [citedId], grounded: true }),
+    });
+    const { ctrl, states } = makeController(idx, provider);
+
+    await ctrl.ask('zzqwxyzblorptfnord', { pinnedNoteId: 'n1' }); // zero lexical hits
+
+    expect(kinds(states)).toEqual(['searching', 'generating', 'answered']);
+    const ans = last(states);
+    expect(ans.usedModel).toBe(true);
+    expect(provider._calls.answer.length).toBe(1);
+    // The model saw the pinned chunks even though retrieval matched nothing.
+    expect(provider._calls.answer[0].chunks.map((c) => c.id)).toContain(citedId);
+    // A cited pinned chunk resolves back to a real Chunk object.
+    expect(ans.citations.map((c) => c.id)).toEqual([citedId]);
+    // generating/answered still carry the PRIMARIES — empty here (nothing retrieved).
+    expect(states.find((s) => s.kind === 'generating').chunks).toEqual([]);
+    expect(ans.chunks).toEqual([]);
+  });
+
+  it('zero-hit + pinned + UNAVAILABLE → canned no-match, provider.answer never called', async () => {
+    const idx = realIndex();
+    const provider = fakeProvider({ id: 'builtin', availability: 'unavailable' });
+    const { ctrl, states } = makeController(idx, provider);
+
+    await ctrl.ask('zzqwxyzblorptfnord', { pinnedNoteId: 'n1' });
+
+    expect(kinds(states)).toEqual(['searching', 'answered']);
+    const ans = last(states);
+    expect(ans.answer).toBe('Nothing in your notes matches that.');
+    expect(ans.grounded).toBe(false);
+    expect(ans.usedModel).toBe(false);
+    expect(ans.chunks).toEqual([]);
+    expect(provider._calls.answer.length).toBe(0);
+  });
+
+  it('zero-hit + pinned + DOWNLOADABLE → canned no-match (anything-but-available stays canned)', async () => {
+    const idx = realIndex();
+    const provider = fakeProvider({ id: 'builtin', availability: 'downloadable' });
+    const { ctrl, states } = makeController(idx, provider);
+
+    await ctrl.ask('zzqwxyzblorptfnord', { pinnedNoteId: 'n1' });
+
+    expect(kinds(states)).toEqual(['searching', 'answered']);
+    expect(last(states).answer).toBe('Nothing in your notes matches that.');
+    expect(provider._calls.answer.length).toBe(0);
+  });
+
+  it('zero-hit + NO pin → canned no-match, provider left completely untouched (unchanged)', async () => {
+    const idx = realIndex();
+    const provider = fakeProvider({ id: 'builtin', availability: 'available' });
+    const { ctrl, states } = makeController(idx, provider);
+
+    await ctrl.ask('zzqwxyzblorptfnord'); // no pinnedNoteId
+
+    expect(kinds(states)).toEqual(['searching', 'answered']);
+    expect(last(states).answer).toBe('Nothing in your notes matches that.');
+    expect(provider._calls.availability).toBe(0); // model path skipped entirely
+    expect(provider._calls.answer.length).toBe(0);
+  });
+
+  it('an unknown pinnedNoteId contributes nothing (behaves like no pin)', async () => {
+    const idx = realIndex();
+    const provider = fakeProvider({ id: 'builtin', availability: 'available' });
+    const { ctrl, states } = makeController(idx, provider);
+
+    await ctrl.ask('zzqwxyzblorptfnord', { pinnedNoteId: 'does-not-exist' });
+
+    expect(kinds(states)).toEqual(['searching', 'answered']);
+    expect(last(states).answer).toBe('Nothing in your notes matches that.');
+    expect(provider._calls.availability).toBe(0);
+    expect(provider._calls.answer.length).toBe(0);
+  });
+});
+
 describe('createAskController — errors keep chunks', () => {
   it('provider answer throws AskError(network) → error{code:network} with chunks preserved', async () => {
     const idx = realIndex();

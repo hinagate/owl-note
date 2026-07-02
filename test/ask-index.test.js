@@ -291,6 +291,48 @@ describe('createAskIndex — neighbors', () => {
   });
 });
 
+// [Task E7] chunksOf(noteId): the ordered stored chunks of a note (its full chunk
+// set, in document order) — used to pin the currently-open note into the model
+// context. Same notes-Map → getStoredFields pattern as neighbors(); unknown id → [].
+describe('createAskIndex — chunksOf', () => {
+  const multiBody = '# One\n\ntext one\n\n# Two\n\ntext two\n\n# Three\n\ntext three';
+
+  it('returns every stored chunk of the note in document order', () => {
+    const idx = createAskIndex();
+    idx.build([note({ id: 'a', body: multiBody })]);
+    const allIds = idx.allChunks().map((c) => c.id);
+    expect(allIds.length).toBe(3);
+    expect(idx.chunksOf('a').map((c) => c.id)).toEqual(allIds);
+  });
+
+  it('returns full stored chunk objects (noteId + text + raw), not bare ids', () => {
+    const idx = createAskIndex();
+    idx.build([note({ id: 'a', body: multiBody })]);
+    for (const c of idx.chunksOf('a')) {
+      expect(c.noteId).toBe('a');
+      expect(typeof c.text).toBe('string');
+      expect(typeof c.raw).toBe('string');
+    }
+  });
+
+  it('unknown / undefined id → [] (never throws)', () => {
+    const idx = createAskIndex();
+    idx.build([note({ id: 'a', body: multiBody })]);
+    expect(() => idx.chunksOf('nope')).not.toThrow();
+    expect(idx.chunksOf('nope')).toEqual([]);
+    expect(idx.chunksOf(undefined)).toEqual([]);
+    expect(idx.chunksOf(null)).toEqual([]);
+  });
+
+  it('reflects only the CURRENT chunk set after a content change', () => {
+    const idx = createAskIndex();
+    idx.build([note({ id: 'a', body: multiBody, hash: 'h1' })]);
+    expect(idx.chunksOf('a').length).toBe(3);
+    idx.upsertNote(note({ id: 'a', body: 'just one chunk now', hash: 'h2' }));
+    expect(idx.chunksOf('a').length).toBe(1);
+  });
+});
+
 describe('createAskIndex — allChunks', () => {
   it('returns every stored chunk currently indexed', () => {
     const idx = createAskIndex();

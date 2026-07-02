@@ -199,9 +199,12 @@ async function ensureAskUI() {
     let aiDeclined = false;
     try { aiDeclined = !!(await chrome.storage.local.get(AI_DECLINED_KEY))[AI_DECLINED_KEY]; } catch { /* best-effort */ }
     askPanel = renderAskPanel(el, {
-      onAsk: (q) => askController.ask(q),
+      // [Task E7] Forward the panel's ask opts (e.g. { pinnedNoteId }) to the controller.
+      onAsk: (q, opts) => askController.ask(q, opts),
       onCitation: (noteId) => openCitation(noteId),
       getStats: () => getAskIndex().stats(),
+      // [Task E7] The currently-open note for the context chip; null when none is open.
+      getCurrentNote: () => (ui.current ? { id: ui.current.id, title: ui.current.title || 'Untitled' } : null),
       aiDeclined,
       // USER-GESTURE (critical): the panel's [Enable] handler calls this synchronously
       // from the click, and this MUST reach askController.enableModel() before any

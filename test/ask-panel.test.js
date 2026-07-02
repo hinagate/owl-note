@@ -640,6 +640,93 @@ describe('ask-panel — chat thread (E6)', () => {
   });
 });
 
+// [Task E7] Current-note context chip: a dismissible pill under the input showing
+// the open note's title, which pins that note into the model context. getCurrentNote
+// feeds it; fire() passes { pinnedNoteId } while the chip is active. Dismissal is
+// per-note (resets on note change / reopen). Title is untrusted → textContent.
+describe('ask-panel — current-note chip (E7)', () => {
+  it('renders the current note title as a chip under the input (textContent, XSS-safe)', () => {
+    const evil = '<img src=x onerror="window.__chipPwned=1"> Meeting notes';
+    const { el, panel } = makePanel({ getCurrentNote: () => ({ id: 'n1', title: evil }) });
+    panel.open();
+    const chip = el.querySelector('.ask-chip');
+    expect(chip).not.toBeNull();
+    // No element parsed from the untrusted title — it is a literal text node.
+    expect(chip.querySelector('img')).toBeNull();
+    expect(el.querySelector('.ask-chip-title').textContent).toContain('<img');
+    expect(window.__chipPwned).toBeUndefined();
+  });
+
+  it('shows no chip when getCurrentNote returns null', () => {
+    const { el, panel } = makePanel({ getCurrentNote: () => null });
+    panel.open();
+    expect(el.querySelector('.ask-chip')).toBeNull();
+  });
+
+  it('shows no chip when getCurrentNote is not provided (default → null)', () => {
+    const { el, panel } = makePanel(); // no getCurrentNote in the callbacks
+    panel.open();
+    expect(el.querySelector('.ask-chip')).toBeNull();
+  });
+
+  it('fire() passes { pinnedNoteId } while the chip is active', () => {
+    const { el, panel, onAsk } = makePanel({ getCurrentNote: () => ({ id: 'n7', title: 'Current' }) });
+    panel.open();
+    el.querySelector('.ask-input').value = 'summarize this note';
+    el.querySelector('.ask-submit').click();
+    expect(onAsk).toHaveBeenCalledWith('summarize this note', { pinnedNoteId: 'n7' });
+  });
+
+  it('dismissing the chip hides it and a later fire() passes NO pinnedNoteId', () => {
+    const { el, panel, onAsk } = makePanel({ getCurrentNote: () => ({ id: 'n7', title: 'Current' }) });
+    panel.open();
+    expect(el.querySelector('.ask-chip')).not.toBeNull();
+
+    el.querySelector('.ask-chip-dismiss').click();
+    expect(el.querySelector('.ask-chip')).toBeNull(); // hidden
+
+    el.querySelector('.ask-input').value = 'q';
+    el.querySelector('.ask-submit').click();
+    // Single-arg call (no opts) — the chip is dismissed, so nothing is pinned.
+    expect(onAsk).toHaveBeenCalledWith('q');
+  });
+
+  it('a note-id change resets an earlier dismissal (chip reappears for the new note)', () => {
+    let cur = { id: 'A', title: 'Note A' };
+    const { el, panel, onAsk } = makePanel({ getCurrentNote: () => cur });
+    panel.open();
+    el.querySelector('.ask-chip-dismiss').click(); // dismiss note A
+    expect(el.querySelector('.ask-chip')).toBeNull();
+
+    cur = { id: 'B', title: 'Note B' };
+    el.querySelector('.ask-input').value = 'q'; // fire() refreshes the chip afterward
+    el.querySelector('.ask-submit').click();
+
+    // That fire had no active chip (A was dismissed) → single-arg call.
+    expect(onAsk).toHaveBeenCalledWith('q');
+    // ...but the chip now reappears for the NEW note B (dismissal reset on id change).
+    expect(el.querySelector('.ask-chip-title').textContent).toBe('Note B');
+  });
+
+  it('reopening the drawer re-offers a chip that was dismissed for the same note', () => {
+    const { el, panel } = makePanel({ getCurrentNote: () => ({ id: 'n7', title: 'Current' }) });
+    panel.open();
+    el.querySelector('.ask-chip-dismiss').click();
+    expect(el.querySelector('.ask-chip')).toBeNull();
+    panel.close();
+    panel.open();
+    expect(el.querySelector('.ask-chip')).not.toBeNull(); // reopen re-offers it
+  });
+
+  it('the chip dismiss button is in the DOM only while the chip is visible (clean focus trap)', () => {
+    const { el, panel } = makePanel({ getCurrentNote: () => ({ id: 'n1', title: 'Cur' }) });
+    panel.open();
+    expect(el.querySelector('.ask-chip-dismiss')).not.toBeNull();
+    el.querySelector('.ask-chip-dismiss').click();
+    expect(el.querySelector('.ask-chip-dismiss')).toBeNull(); // no invisible focusable left behind
+  });
+});
+
 // --- Layer 2: app integration over fake-chrome -------------------------------
 
 let app, bm, encode;

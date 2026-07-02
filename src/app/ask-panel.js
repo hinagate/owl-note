@@ -17,6 +17,9 @@
 import { renderMarkdown } from '../lib/markdown.js';
 
 const SNIPPET_MAX = 220;
+// [Task E7] Chip title clip length — keeps the pill compact; the CSS also ellipsizes,
+// but clipping the text node bounds it even when the note title is one long word.
+const CHIP_TITLE_MAX = 40;
 
 // Centralized code -> user-facing copy for the 'error' state (ASK_ERROR_CODES,
 // see src/lib/providers/provider.js). Deliberately NEVER surfaces state.message
@@ -78,11 +81,14 @@ function relatedChunks(chunks, citations) {
  *        host persists the opt-out so it never returns.
  * @param {boolean}                    [cb.aiDeclined]     the persisted opt-out (from the host);
  *        when true the opt-in card is never shown.
+ * @param {() => ({ id: string, title: string }|null)} [cb.getCurrentNote]  the currently-open
+ *        note (or null) — drives the E7 context chip that pins it into the model context.
  * @returns {{ update: (state: object) => void, open: () => void, close: () => void, destroy: () => void }}
  */
 export function renderAskPanel(container, {
   onAsk, onCitation, onClose = () => {}, getStats = () => ({ notes: 0 }),
   onEnableModel = () => {}, onDeclineAi = () => {}, aiDeclined = false,
+  getCurrentNote = () => null,
 }) {
   container.innerHTML = ''; // build the shell ONCE; update() only mutates status/results
 
@@ -133,6 +139,14 @@ export function renderAskPanel(container, {
   submit.textContent = 'Ask';
   form.append(input, submit);
 
+  // [Task E7] Row hosting the current-note context chip, directly BELOW the input.
+  // Its contents are rebuilt on each refreshChip(); empty when there's no note to
+  // pin (so it contributes no stray focusable to the trap). Lives with the input
+  // form, NOT in the scrolling thread.
+  const chipRow = document.createElement('div');
+  chipRow.className = 'ask-chip-row';
+  chipRow.hidden = true;
+
   const status = document.createElement('div');
   status.className = 'ask-status';
   status.setAttribute('aria-live', 'polite');
@@ -146,7 +160,7 @@ export function renderAskPanel(container, {
   const footer = document.createElement('div');
   footer.className = 'ask-footer';
 
-  container.append(header, form, status, results, footer);
+  container.append(header, form, chipRow, status, results, footer);
 
   // The most recent asked query — remembered so the enable→re-ask flow can re-run it
   // after the model download completes.
@@ -155,16 +169,80 @@ export function renderAskPanel(container, {
   // flips true the moment the user dismisses, so the card can't reappear this session.
   let declined = !!aiDeclined;
 
+  // [Task E7] Context-chip state. `chipNoteId` is the note the chip currently
+  // reflects; `chipDismissed` is the per-note dismissal; `chipShown` mirrors whether
+  // the pill is actually rendered (a note is open AND not dismissed) so fire() knows
+  // exactly what the user sees. Dismissal is per-note: it resets when the note id
+  // changes (refreshChip) and when the drawer is reopened (open()).
+  let chipNoteId = null;
+  let chipDismissed = false;
+  let chipShown = false;
+
+  // Clip an untrusted note title for the pill; assigned via textContent by callers.
+  function chipTitle(t) {
+    const s = String(t ?? '').trim();
+    return s.length > CHIP_TITLE_MAX ? s.slice(0, CHIP_TITLE_MAX) + '…' : s;
+  }
+
+  // Rebuild the chip from the host's current note. Rebuilding (not toggling) keeps
+  // the trap clean: when hidden the row is EMPTY, so no invisible × button lingers as
+  // a focusable. Called on open() and after each fire() — the open note can change
+  // while the drawer is up (e.g. a citation click), so we re-read it each time.
+  function refreshChip() {
+    const note = getCurrentNote();
+    const id = note ? note.id : null;
+    // A note-id change (including → no note) resets an earlier dismissal so the chip
+    // reappears for the new note.
+    if (id !== chipNoteId) { chipNoteId = id; chipDismissed = false; }
+
+    chipRow.textContent = '';
+    chipShown = !!(note && !chipDismissed);
+    chipRow.hidden = !chipShown;
+    if (!chipShown) return;
+
+    const pill = document.createElement('div');
+    pill.className = 'ask-chip';
+
+    const icon = document.createElement('span');
+    icon.className = 'ask-chip-icon';
+    icon.textContent = '📄';
+    icon.setAttribute('aria-hidden', 'true');
+    pill.appendChild(icon);
+
+    const label = document.createElement('span');
+    label.className = 'ask-chip-title';
+    // SAFETY: note titles are untrusted → textContent, never innerHTML.
+    label.textContent = chipTitle(note.title || 'Untitled');
+    pill.appendChild(label);
+
+    const dismiss = document.createElement('button');
+    dismiss.type = 'button';
+    dismiss.className = 'ask-chip-dismiss';
+    dismiss.setAttribute('aria-label', "Don't use current note");
+    dismiss.textContent = '✕';
+    dismiss.addEventListener('click', () => { chipDismissed = true; refreshChip(); });
+    pill.appendChild(dismiss);
+
+    chipRow.appendChild(pill);
+  }
+
   // ---- actions -------------------------------------------------------------
   function fire() {
     const q = input.value.trim();
     if (!q) return;
     lastQuestion = q; // remembered for the enable→re-ask flow (survives the clear below)
-    onAsk(q);
+    // [Task E7] Pin the open note ONLY while its chip is active (shown & not
+    // dismissed). Passed as a second arg only in that case, so the plain ask keeps
+    // its single-arg shape (onAsk(q)) for callers/tests that don't pin.
+    if (chipShown && chipNoteId) onAsk(q, { pinnedNoteId: chipNoteId });
+    else onAsk(q);
     // [Task E6] Chat-style input: clear the box and keep focus so the user can type
     // the next question immediately (the asked text now lives in the thread bubble).
     input.value = '';
     input.focus();
+    // [Task E7] The open note can change during a session (citation clicks), so
+    // re-evaluate the chip after each ask.
+    refreshChip();
   }
   submit.addEventListener('click', fire);
   input.addEventListener('keydown', (e) => {
@@ -215,6 +293,10 @@ export function renderAskPanel(container, {
     container.hidden = false;
     container.addEventListener('keydown', onKeydown);
     renderFooter();
+    // [Task E7] A reopen re-offers the chip even if it was dismissed last time
+    // (dismissal is a lightweight this-view gesture, not a persisted preference).
+    chipDismissed = false;
+    refreshChip();
     // Remember where focus came from so close() can return it there. Prefer an
     // explicit opener (app.js passes the toolbar Ask button); otherwise fall back to
     // whatever held focus at open time. Captured BEFORE input.focus() moves it.

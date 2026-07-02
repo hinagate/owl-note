@@ -10,6 +10,20 @@ import { AskError } from './providers/provider.js';
 // Canned reply when retrieval finds nothing — we never spend a model call on it.
 const NO_MATCH_ANSWER = 'Nothing in your notes matches that.';
 
+// [Task E7] De-duplicate chunks by id, keeping FIRST occurrence. Used to collapse a
+// pinned chunk that also ranked as a primary so the model never sees it twice; first
+// wins so the pinned copy (prepended) keeps its leading position.
+function dedupeById(chunks) {
+  const seen = new Set();
+  const out = [];
+  for (const c of chunks) {
+    if (seen.has(c.id)) continue;
+    seen.add(c.id);
+    out.push(c);
+  }
+  return out;
+}
+
 // State constructors kept inline as plain objects; `.kind` is the discriminant.
 // Anticipated-but-unimplemented: a `streaming{...}` state (M8) will slot in
 // alongside `generating` — the union is intentionally open to it, but P1 must
@@ -17,7 +31,7 @@ const NO_MATCH_ANSWER = 'Nothing in your notes matches that.';
 
 /**
  * @param {Object} deps
- * @param {{ stats: () => { notes: number } }} deps.index
+ * @param {{ stats: () => { notes: number }, chunksOf: (noteId: string) => import('./providers/provider.js').Chunk[] }} deps.index
  * @param {{ query: (q: string, k?: number) => Promise<import('./providers/provider.js').Chunk[]> }} deps.fusion
  * @param {{ getActiveProvider: () => import('./providers/provider.js').Provider|null }} deps.registry
  * @param {(state: object) => void} deps.onState
@@ -67,12 +81,25 @@ export function createAskController({ index, fusion, registry, onState }) {
     return provider ? provider.id : null;
   }
 
-  async function ask(question) {
+  async function ask(question, { pinnedNoteId } = {}) {
     // Supersede any in-flight ask first, then take a fresh signal for this one.
     if (inFlight) inFlight.abort();
     const controller = new AbortController();
     inFlight = controller;
     const { signal } = controller;
+
+    // The canned no-match, emitted from more than one branch below — factored out so
+    // every path stays byte-identical to the pre-E7 zero-hit reply.
+    const emitNoMatch = () => emit({
+      kind: 'answered',
+      question,
+      answer: NO_MATCH_ANSWER,
+      citations: [],
+      chunks: [], // [Task E5] nothing was retrieved — no related notes to offer
+      grounded: false,
+      provider: activeProviderId(),
+      usedModel: false,
+    });
 
     // Corpus-empty is distinct from zero-hits: an unbuilt/empty index has nothing
     // to search, so we short-circuit to no-index and never touch fusion/provider.
@@ -87,18 +114,18 @@ export function createAskController({ index, fusion, registry, onState }) {
     if (signal.aborted) return; // superseded during retrieval
     lastChunks = chunks;
 
-    // Zero HITS on a non-empty index: answer without the model, ungrounded.
-    if (chunks.length === 0) {
-      emit({
-        kind: 'answered',
-        question,
-        answer: NO_MATCH_ANSWER,
-        citations: [],
-        chunks: [], // [Task E5] nothing was retrieved — no related notes to offer
-        grounded: false,
-        provider: activeProviderId(),
-        usedModel: false,
-      });
+    // [Task E7] Pin the currently-open note into the model context: its first 2
+    // doc-order chunks. chunksOf is SYNCHRONOUS, so this adds no new await before the
+    // supersede gates below. Cheap guarantee — if the note is query-relevant its
+    // chunks are already in `chunks` and dedupeById collapses the overlap.
+    const pinned = pinnedNoteId ? index.chunksOf(pinnedNoteId).slice(0, 2) : [];
+
+    // Zero HITS with NO pin: canned no-match, ungrounded, model never touched
+    // (provider is not even queried — byte-identical to pre-E7). WITH a pin we fall
+    // through to the availability check: a pinned note lets "summarize this note"
+    // reach the model despite zero lexical hits, but ONLY when the model is available.
+    if (chunks.length === 0 && pinned.length === 0) {
+      emitNoMatch();
       return;
     }
 
@@ -113,7 +140,10 @@ export function createAskController({ index, fusion, registry, onState }) {
         // + neighbors) is what the model reads and what citations resolve against,
         // while generating{chunks}/snippets/error and lastChunks keep the PRIMARY
         // chunks — expansion must not add near-duplicate note cards to the snippets.
-        const context = await fusion.expand(chunks);
+        // [Task E7] Pinned chunks lead the set (dedupeById drops a pin that also
+        // ranked as a primary), so packChunks (10/5000) can never trim away the
+        // pinned note — the whole point of pinning is a guaranteed presence.
+        const context = await fusion.expand(dedupeById([...pinned, ...chunks]));
         if (signal.aborted) return; // superseded during expansion (new await point)
         emit({ kind: 'generating', question, chunks });
         // capabilities().streaming would route to answerStream here — that's M8;
@@ -136,6 +166,15 @@ export function createAskController({ index, fusion, registry, onState }) {
           provider: provider.id,
           usedModel: true,
         });
+        return;
+      }
+
+      // [Task E7] Model not runnable AND zero lexical hits: the pin is a
+      // model-context concept, so with no model there's nothing useful to show —
+      // fall back to the canned no-match, exactly as the no-pin zero-hit path does.
+      // (This only reaches here because a pin let us skip the earlier shortcut.)
+      if (chunks.length === 0) {
+        emitNoMatch();
         return;
       }
 

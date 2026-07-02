@@ -189,6 +189,21 @@ export function createAskIndex() {
       return out;
     },
 
+    // [Task E7] The ordered stored chunks of ONE note (its full chunk set, in the
+    // note's document order via chunkIds) — used to pin the currently-open note into
+    // the model context. Same notes-Map → getStoredFields pattern as neighbors() and
+    // allChunks(); an unknown/undefined id → [] (never throws), mirroring neighbors().
+    chunksOf(noteId) {
+      const entry = notes.get(noteId);
+      if (!entry) return [];
+      const out = [];
+      for (const id of entry.chunkIds) {
+        const stored = mini.getStoredFields(id);
+        if (stored) out.push({ ...stored });
+      }
+      return out;
+    },
+
     // All indexed chunks, unranked — feeds the embedder (Phase 3).
     allChunks() {
       const out = [];
