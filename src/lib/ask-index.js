@@ -166,6 +166,29 @@ export function createAskIndex() {
       }));
     },
 
+    // [Task E3] Adjacent stored chunks of the SAME note — the one before and the
+    // one after `chunkId` in the note's ordered chunkIds — for fusion.expand's
+    // neighbor context (answers often straddle a chunk boundary). Position comes
+    // from the chunkIds array, NEVER from string-parsing the `::n` suffix, because
+    // a note id may itself contain '::'. Unknown/malformed id → [] (never throws).
+    neighbors(chunkId) {
+      const stored = mini.getStoredFields(chunkId); // undefined for unknown/malformed id
+      if (!stored) return [];
+      const entry = notes.get(stored.noteId);
+      if (!entry) return [];
+      const ids = entry.chunkIds;
+      const pos = ids.indexOf(chunkId);
+      if (pos === -1) return [];
+      const out = [];
+      for (const offset of [-1, 1]) { // prev then next, in that order
+        const neighborId = ids[pos + offset];
+        if (neighborId === undefined) continue; // edge chunk: no prev / no next
+        const neighbor = mini.getStoredFields(neighborId);
+        if (neighbor) out.push({ ...neighbor });
+      }
+      return out;
+    },
+
     // All indexed chunks, unranked — feeds the embedder (Phase 3).
     allChunks() {
       const out = [];

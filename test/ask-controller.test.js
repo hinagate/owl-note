@@ -120,6 +120,86 @@ describe('createAskController — happy path', () => {
   });
 });
 
+// [Task E3] The generation path enriches what the MODEL sees with neighbor chunks
+// (answers often straddle a chunk boundary), while generating/error states and the
+// snippet cards keep the PRIMARY chunks. A neighbor the model cites must still
+// resolve back to a real Chunk.
+describe('createAskController — neighbor-expanded model context', () => {
+  // A single note that chunks into three sections; querying 'beta' hits only the
+  // middle chunk, so expansion appends its two real neighbors (prev + next).
+  function multiChunkIndex() {
+    const idx = createAskIndex();
+    idx.build([
+      { id: 'doc', title: 'Doc', body: '# One\n\nalpha uno\n\n# Two\n\nbeta solo\n\n# Three\n\ngamma tres', hash: 'h' },
+    ]);
+    return idx;
+  }
+
+  it('sends the EXPANDED context to the model while generating/answered keep primaries; a cited neighbor resolves to a Chunk', async () => {
+    const idx = multiChunkIndex();
+    const primaries = idx.query('beta', 8);
+    expect(primaries.length).toBe(1); // sanity: lone middle-chunk hit
+    const neighborIds = idx.neighbors(primaries[0].id).map((c) => c.id);
+    expect(neighborIds.length).toBe(2);
+    const citedNeighbor = neighborIds[0]; // model cites a NEIGHBOR, not the primary
+
+    const provider = fakeProvider({
+      id: 'builtin',
+      availability: 'available',
+      answer: () => Promise.resolve({ answer: 'A', citations: [citedNeighbor], grounded: true }),
+    });
+    const { ctrl, states } = makeController(idx, provider);
+
+    await ctrl.ask('beta');
+
+    // generating state carries ONLY the primaries (snippet cards stay one-per-hit).
+    const gen = states.find((s) => s.kind === 'generating');
+    expect(gen.chunks.map((c) => c.id)).toEqual(primaries.map((c) => c.id));
+
+    // The provider received the EXPANDED set: primary + its two neighbors.
+    expect(provider._calls.answer.length).toBe(1);
+    const sent = provider._calls.answer[0].chunks;
+    expect(sent.map((c) => c.id)).toEqual([primaries[0].id, ...neighborIds]);
+
+    // A citation belonging to a NEIGHBOR resolves to a real Chunk object.
+    const ans = last(states);
+    expect(ans.citations.length).toBe(1);
+    expect(typeof ans.citations[0]).toBe('object');
+    expect(ans.citations[0].id).toBe(citedNeighbor);
+    expect(neighborIds).toContain(ans.citations[0].id); // it was NOT a primary
+  });
+
+  it('error on the generation path keeps the PRIMARY chunks, not the expanded set', async () => {
+    const idx = multiChunkIndex();
+    const primaries = idx.query('beta', 8);
+    const provider = fakeProvider({
+      availability: 'available',
+      answer: () => Promise.reject(new AskError('network', 'offline')),
+    });
+    const { ctrl, states } = makeController(idx, provider);
+
+    await ctrl.ask('beta');
+
+    const err = last(states);
+    expect(err.kind).toBe('error');
+    expect(err.chunks.map((c) => c.id)).toEqual(primaries.map((c) => c.id));
+  });
+
+  it('snippets path does NOT expand: snippet cards stay the primary hits', async () => {
+    const idx = multiChunkIndex();
+    const primaries = idx.query('beta', 8);
+    const provider = fakeProvider({ availability: 'unavailable' });
+    const { ctrl, states } = makeController(idx, provider);
+
+    await ctrl.ask('beta');
+
+    const snip = last(states);
+    expect(snip.kind).toBe('snippets');
+    expect(snip.chunks.map((c) => c.id)).toEqual(primaries.map((c) => c.id));
+    expect(provider._calls.answer.length).toBe(0);
+  });
+});
+
 describe('createAskController — retrieval-only paths (model never called)', () => {
   it('unavailable → searching → snippets(model-unavailable)', async () => {
     const idx = realIndex();

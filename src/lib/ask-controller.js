@@ -107,16 +107,25 @@ export function createAskController({ index, fusion, registry, onState }) {
       if (signal.aborted) return; // superseded while checking availability
 
       if (availability === 'available') {
+        // [Task E3] Enrich what the MODEL sees with neighbor chunks (answers often
+        // straddle a chunk boundary). This split is deliberate: `context` (primaries
+        // + neighbors) is what the model reads and what citations resolve against,
+        // while generating{chunks}/snippets/error and lastChunks keep the PRIMARY
+        // chunks — expansion must not add near-duplicate note cards to the snippets.
+        const context = await fusion.expand(chunks);
+        if (signal.aborted) return; // superseded during expansion (new await point)
         emit({ kind: 'generating', question, chunks });
         // capabilities().streaming would route to answerStream here — that's M8;
         // P1 always uses the non-streaming answer().
-        const result = await provider.answer({ question, chunks, signal });
+        const result = await provider.answer({ question, chunks: context, signal });
         if (signal.aborted) return; // superseded while the model was answering
         emit({
           kind: 'answered',
           question,
           answer: result.answer,
-          citations: resolveCitations(result.citations, chunks),
+          // Resolve against `context` (the set actually sent) so a cited NEIGHBOR
+          // maps back to a real Chunk, not just the primaries.
+          citations: resolveCitations(result.citations, context),
           grounded: result.grounded,
           provider: provider.id,
           usedModel: true,

@@ -222,6 +222,75 @@ describe('createAskIndex — empty input', () => {
   });
 });
 
+// [Task E3] neighbors(chunkId): the adjacent stored chunks of the same note, by
+// POSITION in the note's ordered chunkIds (never by string-parsing the ::n suffix,
+// since note ids may contain '::'). Feeds fusion.expand's context enrichment.
+describe('createAskIndex — neighbors', () => {
+  // Three heading sections -> three ordered chunks (a::0, a::1, a::2).
+  const multiBody = '# One\n\ntext one\n\n# Two\n\ntext two\n\n# Three\n\ntext three';
+
+  it('middle chunk -> [prev, next] in that order', () => {
+    const idx = createAskIndex();
+    idx.build([note({ id: 'a', body: multiBody })]);
+    const ids = idx.allChunks().map((c) => c.id);
+    expect(ids.length).toBe(3);
+    expect(idx.neighbors(ids[1]).map((c) => c.id)).toEqual([ids[0], ids[2]]);
+  });
+
+  it('first chunk -> [next] only', () => {
+    const idx = createAskIndex();
+    idx.build([note({ id: 'a', body: multiBody })]);
+    const ids = idx.allChunks().map((c) => c.id);
+    expect(idx.neighbors(ids[0]).map((c) => c.id)).toEqual([ids[1]]);
+  });
+
+  it('last chunk -> [prev] only', () => {
+    const idx = createAskIndex();
+    idx.build([note({ id: 'a', body: multiBody })]);
+    const ids = idx.allChunks().map((c) => c.id);
+    expect(idx.neighbors(ids[2]).map((c) => c.id)).toEqual([ids[1]]);
+  });
+
+  it('single-chunk note -> []', () => {
+    const idx = createAskIndex();
+    idx.build([note({ id: 's', body: 'just one chunk here' })]);
+    const only = idx.allChunks()[0].id;
+    expect(idx.neighbors(only)).toEqual([]);
+  });
+
+  it('unknown / malformed id -> [] (never throws)', () => {
+    const idx = createAskIndex();
+    idx.build([note({ id: 'a', body: multiBody })]);
+    expect(() => idx.neighbors('nope::99')).not.toThrow();
+    expect(idx.neighbors('nope::99')).toEqual([]);
+    expect(idx.neighbors(undefined)).toEqual([]);
+    expect(idx.neighbors(null)).toEqual([]);
+    expect(idx.neighbors('')).toEqual([]);
+  });
+
+  it('returns full stored chunk objects (noteId + text + raw), not bare ids', () => {
+    const idx = createAskIndex();
+    idx.build([note({ id: 'a', body: multiBody })]);
+    const ids = idx.allChunks().map((c) => c.id);
+    const [prev, next] = idx.neighbors(ids[1]);
+    for (const nb of [prev, next]) {
+      expect(nb.noteId).toBe('a');
+      expect(typeof nb.text).toBe('string');
+      expect(typeof nb.raw).toBe('string');
+    }
+    expect(prev.id).toBe(ids[0]);
+    expect(next.id).toBe(ids[2]);
+  });
+
+  it('locates position by chunkIds even when the note id itself contains "::"', () => {
+    const idx = createAskIndex();
+    idx.build([note({ id: 'weird::note::id', body: multiBody })]);
+    const ids = idx.allChunks().map((c) => c.id); // e.g. weird::note::id::0, ::1, ::2
+    expect(ids.length).toBe(3);
+    expect(idx.neighbors(ids[1]).map((c) => c.id)).toEqual([ids[0], ids[2]]);
+  });
+});
+
 describe('createAskIndex — allChunks', () => {
   it('returns every stored chunk currently indexed', () => {
     const idx = createAskIndex();

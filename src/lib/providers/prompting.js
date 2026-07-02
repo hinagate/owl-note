@@ -35,10 +35,16 @@ export const ANSWER_SCHEMA = {
   },
 };
 
-// Per-chunk token budget for context packing (§5.4).
-export const CHUNK_TOKEN_BUDGET = 3000;
+// Context-packing budget (§5.4, Task E3). Raised toward the real model window:
+// ~9,216 total − system ~120 − question ≤400 − framing ~200 − output headroom
+// ~1,024 ≈ 7,400 usable; a 5,000 budget leaves ~2,400 slack for estimator error.
+// The paired MAX_PACKED_CHUNKS is raised in step (6 → 10) so the extra budget can
+// actually admit more chunks — including neighbor context appended by fusion.expand.
+export const CHUNK_TOKEN_BUDGET = 5000;
 const MIN_PACKED_CHUNKS = 1;
-const MAX_PACKED_CHUNKS = 6;
+// Exported so packing tests reference the cap instead of a magic number (a future
+// bump then doesn't touch them).
+export const MAX_PACKED_CHUNKS = 10;
 
 // CJK codepoint ranges (Plan §5.2/§5.4): Han (+ Ext-A / compatibility ideographs),
 // the Kana block (Hiragana/Katakana, incl. the prolonged-sound mark), and Hangul

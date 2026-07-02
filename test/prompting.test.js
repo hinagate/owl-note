@@ -3,6 +3,7 @@ import {
   SYSTEM_PROMPT,
   ANSWER_SCHEMA,
   CHUNK_TOKEN_BUDGET,
+  MAX_PACKED_CHUNKS,
   estimateTokens,
   packChunks,
   buildUserPrompt,
@@ -96,6 +97,16 @@ describe('estimateTokens — script-aware (CJK)', () => {
   });
 });
 
+// [Task E3] The budget bump toward the real ~9,216-token window. Pinned as an
+// explicit contract for THIS change; the packing-logic tests below reference the
+// exported constants (not magic numbers) so a future bump doesn't touch them.
+describe('packing budget constants (Task E3)', () => {
+  it('CHUNK_TOKEN_BUDGET is 5000 and MAX_PACKED_CHUNKS is 10', () => {
+    expect(CHUNK_TOKEN_BUDGET).toBe(5000);
+    expect(MAX_PACKED_CHUNKS).toBe(10);
+  });
+});
+
 describe('packChunks', () => {
   it('empty input -> []', () => {
     expect(packChunks([])).toEqual([]);
@@ -118,9 +129,14 @@ describe('packChunks', () => {
   });
 
   it('a set summing just over budget drops the last chunk', () => {
-    // Three chunks, each ~1001 tokens (4004 chars) so first two total 2002,
-    // adding the third would push to 3003 > 3000 budget.
-    const raw = 'a'.repeat(4004);
+    // Three equal chunks sized from the exported budget so the first two fit but
+    // the third pushes the cumulative estimate just past CHUNK_TOKEN_BUDGET:
+    // each is 40% of the budget, so 2x = 0.8 (fits) and 3x = 1.2 (over). Derived
+    // from the constant so this boundary test stays valid across budget bumps,
+    // and the count (3) stays well under MAX_PACKED_CHUNKS so it's the BUDGET —
+    // not the max-count cap — that drops the third chunk.
+    const perChunkTokens = Math.floor(CHUNK_TOKEN_BUDGET * 0.4);
+    const raw = 'a'.repeat(perChunkTokens * 4); // exactly perChunkTokens tokens (latin: chars/4)
     const chunks = [chunk({ id: '1', raw }), chunk({ id: '2', raw }), chunk({ id: '3', raw })];
     const packed = packChunks(chunks);
     expect(packed.map((c) => c.id)).toEqual(['1', '2']);
@@ -141,11 +157,17 @@ describe('packChunks', () => {
     expect(packed.map((c) => c.id)).toEqual(['huge']);
   });
 
-  it('max 6: 7 tiny chunks -> only 6 returned', () => {
-    const chunks = Array.from({ length: 7 }, (_, i) => chunk({ id: `c${i}`, raw: 'tiny' }));
+  it('max N: MAX_PACKED_CHUNKS+1 tiny chunks -> only MAX_PACKED_CHUNKS returned', () => {
+    // A spread of many small chunks (all well within budget) is capped by count,
+    // not budget. Referenced from the exported constant so a bump doesn't touch this.
+    const chunks = Array.from({ length: MAX_PACKED_CHUNKS + 1 }, (_, i) =>
+      chunk({ id: `c${i}`, raw: 'tiny' })
+    );
     const packed = packChunks(chunks);
-    expect(packed).toHaveLength(6);
-    expect(packed.map((c) => c.id)).toEqual(['c0', 'c1', 'c2', 'c3', 'c4', 'c5']);
+    expect(packed).toHaveLength(MAX_PACKED_CHUNKS);
+    expect(packed.map((c) => c.id)).toEqual(
+      Array.from({ length: MAX_PACKED_CHUNKS }, (_, i) => `c${i}`)
+    );
   });
 });
 
