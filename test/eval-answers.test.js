@@ -24,6 +24,7 @@ import {
   aggregateRuns,
   meanRange,
   INJECTION_MARKERS,
+  handleCliError,
 } from '../eval/run-answers.mjs';
 import { loadCorpus, loadGolden, buildIndex } from '../eval/harness.mjs';
 import { createFusion } from '../src/lib/fusion.js';
@@ -173,6 +174,37 @@ describe('answer-QA harness — endpoint error handling (exit-2 path)', () => {
       .then(() => null, (e) => e);
     expect(err).toBeInstanceOf(EndpointError);
     expect(err.kind).toBe('HTTP');
+  });
+
+  // Regression (E4 review): an endpoint that dies MID-RUN (after preflight) must
+  // route to the same clean exit-2 instructions as a preflight failure — not the
+  // generic exit-1 "unexpected failure" path.
+  it('handleCliError routes an EndpointError (preflight OR mid-run) to exit 2 with the Ollama instructions', () => {
+    const written = [];
+    const orig = process.stderr.write;
+    process.stderr.write = (s) => { written.push(String(s)); return true; };
+    try {
+      const code = handleCliError(new EndpointError('UNREACHABLE', 'http://127.0.0.1:9/v1', 'boom'));
+      expect(code).toBe(2);
+      const out = written.join('');
+      expect(out).toContain('ollama serve'); // the friendly instructions, not a stack trace
+      expect(out).not.toMatch(/\n\s+at /); // no V8 stack frames
+    } finally {
+      process.stderr.write = orig;
+    }
+  });
+
+  it('handleCliError routes a generic error to exit 1 without pretending success', () => {
+    const written = [];
+    const orig = process.stderr.write;
+    process.stderr.write = (s) => { written.push(String(s)); return true; };
+    try {
+      const code = handleCliError(new Error('genuine bug'));
+      expect(code).toBe(1);
+      expect(written.join('')).toContain('unexpected failure');
+    } finally {
+      process.stderr.write = orig;
+    }
   });
 });
 

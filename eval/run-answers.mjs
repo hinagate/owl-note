@@ -345,24 +345,19 @@ async function main() {
     + `  endpoint: ${cfg.baseUrl}\n  model:    ${cfg.model}\n`,
   );
 
-  // Preflight: one trivial call. On any endpoint failure, print ONE clean
-  // message and exit 2 BEFORE any table output — no stack trace.
-  try {
-    await callModel({
-      baseUrl: cfg.baseUrl,
-      model: cfg.model,
-      apiKey: cfg.apiKey,
-      system: SYSTEM_PROMPT,
-      user: buildUserPrompt({ question: 'ping', chunks: [] }),
-      timeoutMs: cfg.timeoutMs,
-    });
-  } catch (err) {
-    if (err instanceof EndpointError) {
-      process.stderr.write(`\n${endpointHelp(err)}\n`);
-      process.exit(2);
-    }
-    throw err;
-  }
+  // Preflight: one trivial call so an unreachable endpoint fails fast, before any
+  // table output. Its EndpointError — like one thrown MID-RUN if the endpoint dies
+  // during the 3×47 loop — propagates to handleCliError at the CLI boundary, which
+  // prints ONE clean instruction and exits 2 (no stack trace, no partial table:
+  // renderTable only runs after all runs complete).
+  await callModel({
+    baseUrl: cfg.baseUrl,
+    model: cfg.model,
+    apiKey: cfg.apiKey,
+    system: SYSTEM_PROMPT,
+    user: buildUserPrompt({ question: 'ping', chunks: [] }),
+    timeoutMs: cfg.timeoutMs,
+  });
 
   const version = await probeVersion(cfg.baseUrl, cfg.timeoutMs);
   process.stdout.write(`  version:  ${version ? `Ollama ${version}` : '(endpoint did not expose /api/version)'}\n\n`);
@@ -392,12 +387,21 @@ async function main() {
   process.stdout.write(`Per-question failures (${failures.length}):\n${renderFailures(failures)}\n`);
 }
 
+// Route a CLI failure to its exit code. EndpointErrors — whether from the preflight
+// ping or from a call deep inside the 3×47 loop (an endpoint that dies or times out
+// mid-session) — get the ONE clean start-Ollama instruction and exit 2. Anything
+// else is a genuine bug → exit 1. No stack traces either way. Exported so the
+// routing is unit-testable without spawning the CLI.
+export function handleCliError(err) {
+  if (err instanceof EndpointError) {
+    process.stderr.write(`\n${endpointHelp(err)}\n`);
+    return 2;
+  }
+  process.stderr.write(`\nAsk eval: unexpected failure: ${err && err.message ? err.message : err}\n`);
+  return 1;
+}
+
 // CLI entry only — importing this module (tests) never runs main().
 if (import.meta.url === `file://${process.argv[1]}` || fileURLToPath(import.meta.url) === process.argv[1]) {
-  main().catch((err) => {
-    // A non-EndpointError here is a genuine bug — surface it, but still without
-    // pretending success.
-    process.stderr.write(`\nAsk eval: unexpected failure: ${err && err.message ? err.message : err}\n`);
-    process.exit(1);
-  });
+  main().catch((err) => process.exit(handleCliError(err)));
 }
