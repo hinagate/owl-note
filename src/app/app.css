@@ -304,6 +304,55 @@ body.resizing { user-select: none; cursor: col-resize; }
   font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
 }
 
+/* --- M3: answer, citations, progress, thinking, opt-in card --------------- */
+/* Rendered markdown answer (sanitized via renderMarkdown/DOMPurify). Keep the
+   nested block spacing tight so it reads as a chat reply, not a document. */
+#ask-panel .ask-answer { line-height: 1.6; }
+#ask-panel .ask-answer > :first-child { margin-top: 0; }
+#ask-panel .ask-answer > :last-child { margin-bottom: 0; }
+#ask-panel .ask-answer p { margin: 0 0 8px; }
+#ask-panel .ask-answer ul, #ask-panel .ask-answer ol { margin: 0 0 8px; padding-left: 20px; }
+#ask-panel .ask-answer code { background: #eef0f2; border-radius: 4px; padding: 1px 4px; font-size: 90%; }
+#ask-panel .ask-answer pre { background: #eef0f2; border-radius: 8px; padding: 8px 10px; overflow: auto; }
+#ask-panel .ask-answer pre code { background: none; padding: 0; }
+#ask-panel .ask-answer a { color: var(--accent-dark); }
+
+/* Subdued flag when the answer isn't grounded in a note. */
+#ask-panel .ask-ungrounded { font-size: 12px; color: var(--muted); font-style: italic; margin: 2px 2px 10px; }
+
+/* "Sources" label above citation cards. */
+#ask-panel .ask-sources-label {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--muted); margin: 10px 2px 6px;
+}
+
+/* Thinking indicator while the model generates. */
+#ask-panel .ask-thinking { font-size: 13px; color: var(--muted); padding: 6px 2px; }
+
+/* Model-download progress bar. */
+#ask-panel .ask-progress {
+  height: 8px; border-radius: 999px; background: #eef0f2; overflow: hidden; margin: 8px 2px;
+}
+#ask-panel .ask-progress-bar { height: 100%; background: var(--accent); transition: width 0.2s; }
+
+/* One-time on-device model download opt-in card. */
+#ask-panel .ask-optin {
+  border: 1px solid var(--border); border-radius: 10px; background: #f6f8fa;
+  padding: 12px; margin-bottom: 12px;
+}
+#ask-panel .ask-optin-text { margin: 0 0 10px; font-size: 12.5px; line-height: 1.55; color: var(--text); }
+#ask-panel .ask-optin-actions { display: flex; gap: 8px; }
+#ask-panel .ask-optin-enable {
+  border: 1px solid var(--accent); background: var(--accent); color: #fff;
+  font-weight: 600; font-size: 13px; padding: 6px 16px; border-radius: 999px; cursor: pointer;
+}
+#ask-panel .ask-optin-enable:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
+#ask-panel .ask-optin-dismiss {
+  border: 1px solid var(--border); background: #fff; color: var(--muted);
+  font-size: 13px; padding: 6px 14px; border-radius: 999px; cursor: pointer;
+}
+#ask-panel .ask-optin-dismiss:hover { background: #f1f3f5; color: var(--text); }
+
 /* Toast */
 #toast {
   position: fixed; bottom: 18px; right: 18px; background: #1d2125; color: #fff;

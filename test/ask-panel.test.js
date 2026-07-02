@@ -8,6 +8,7 @@
 //     switches folder and opens it (the cross-folder path T3.5 makes correct).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { installFakeChrome } from './helpers/fake-chrome.js';
+import { installFakeLanguageModel } from './helpers/fake-language-model.js';
 import { contentHash } from '../src/lib/note.js';
 import { renderAskPanel } from '../src/app/ask-panel.js';
 
@@ -26,7 +27,11 @@ const snippetsState = (chunks, reason = 'model-unavailable') => ({ kind: 'snippe
 
 function makePanel(over = {}) {
   const el = mount();
-  const cbs = { onAsk: vi.fn(), onCitation: vi.fn(), onClose: vi.fn(), getStats: () => ({ notes: 3, chunks: 9 }), ...over };
+  const cbs = {
+    onAsk: vi.fn(), onCitation: vi.fn(), onClose: vi.fn(),
+    onEnableModel: vi.fn(), onDeclineAi: vi.fn(),
+    getStats: () => ({ notes: 3, chunks: 9 }), ...over,
+  };
   const panel = renderAskPanel(el, cbs);
   return { el, panel, ...cbs };
 }
@@ -166,6 +171,129 @@ describe('ask-panel — state rendering', () => {
   });
 });
 
+// --- Layer 1b: M3 answer / states / opt-in card ------------------------------
+
+describe('ask-panel — M3 answer rendering & sanitization', () => {
+  it('renders a model answer as SANITIZED markdown (**x** -> <strong>)', () => {
+    const { el, panel } = makePanel();
+    panel.update({ kind: 'answered', question: 'q', answer: 'Pull a **shot** of espresso.', citations: [], grounded: true, usedModel: true });
+    const answer = el.querySelector('.ask-answer');
+    expect(answer).not.toBeNull();
+    expect(answer.querySelector('strong')).not.toBeNull();
+    expect(answer.querySelector('strong').textContent).toBe('shot');
+    expect(answer.textContent).toContain('espresso');
+  });
+
+  it('sanitizes a <script> payload in the answer — no live script, no execution', () => {
+    const { el, panel } = makePanel();
+    panel.update({
+      kind: 'answered', question: 'q',
+      answer: 'Here you go.\n\n<script>window.__pwned = 1</script>',
+      citations: [], grounded: true, usedModel: true,
+    });
+    // DOMPurify (via renderMarkdown) strips the script element entirely.
+    expect(el.querySelector('script')).toBeNull();
+    expect(window.__pwned).toBeUndefined();
+  });
+
+  it('sanitizes an <img onerror> payload in the answer — attribute stripped, no execution', () => {
+    const { el, panel } = makePanel();
+    panel.update({
+      kind: 'answered', question: 'q',
+      answer: 'text <img src=x onerror="window.__pwned2 = 1"> more',
+      citations: [], grounded: true, usedModel: true,
+    });
+    expect(el.querySelector('.ask-answer [onerror]')).toBeNull();
+    expect(window.__pwned2).toBeUndefined();
+  });
+
+  it('renders clickable citation cards from Chunk objects', () => {
+    const { el, panel, onCitation } = makePanel();
+    panel.update({
+      kind: 'answered', question: 'q', answer: 'See notes.',
+      citations: [chunk({ noteId: 'src1', noteTitle: 'Source Note', heading: 'A > B' })],
+      grounded: true, usedModel: true,
+    });
+    const card = el.querySelector('.ask-card');
+    expect(card).not.toBeNull();
+    expect(card.querySelector('.ask-card-title').textContent).toBe('Source Note');
+    card.click();
+    expect(onCitation).toHaveBeenCalledWith('src1');
+  });
+
+  it('grounded:false still shows the answer plus a subdued "not in your notes" affordance', () => {
+    const { el, panel } = makePanel();
+    panel.update({ kind: 'answered', question: 'q', answer: 'Nothing in your notes matches that.', citations: [], grounded: false, usedModel: false });
+    expect(el.textContent).toContain('Nothing in your notes matches that.');
+    expect(el.querySelector('.ask-ungrounded')).not.toBeNull();
+  });
+
+  it('generating shows a thinking indicator and clears any prior answer', () => {
+    const { el, panel } = makePanel();
+    panel.update({ kind: 'answered', question: 'q', answer: 'old answer here', citations: [], grounded: true, usedModel: true });
+    expect(el.querySelector('.ask-answer')).not.toBeNull();
+    panel.update({ kind: 'generating', question: 'q', chunks: [] });
+    expect(el.querySelector('.ask-answer')).toBeNull(); // prior answer cleared
+    expect(el.querySelector('.ask-thinking')).not.toBeNull();
+    expect(el.querySelector('.ask-status').textContent.toLowerCase()).toMatch(/think|generat/);
+  });
+
+  it('downloading renders a progress bar reflecting the fraction', () => {
+    const { el, panel } = makePanel();
+    panel.update({ kind: 'downloading', progress: 0.5 });
+    const bar = el.querySelector('.ask-progress-bar');
+    expect(bar).not.toBeNull();
+    expect(bar.style.width).toBe('50%');
+    expect(el.querySelector('.ask-status').textContent).toContain('50');
+  });
+});
+
+describe('ask-panel — M3 download opt-in card', () => {
+  it('shows the opt-in card for model-downloadable when not declined; [Enable] fires onEnableModel with the last question', () => {
+    const { el, panel, onEnableModel } = makePanel();
+    // Ask first so the panel remembers lastQuestion for the re-ask.
+    panel.open();
+    el.querySelector('.ask-input').value = 'how do rockets work';
+    el.querySelector('.ask-submit').click();
+    panel.update(snippetsState([chunk()], 'model-downloadable'));
+
+    const card = el.querySelector('.ask-optin');
+    expect(card).not.toBeNull();
+    expect(card.textContent).toContain('built-in AI'); // verbatim copy present
+    expect(card.textContent).toContain('never sent to any AI service');
+
+    card.querySelector('.ask-optin-enable').click();
+    expect(onEnableModel).toHaveBeenCalledWith('how do rockets work');
+  });
+
+  it('dismiss persists (onDeclineAi) + hides the card, and it NEVER reappears on later model-downloadable states', () => {
+    const { el, panel, onDeclineAi } = makePanel();
+    panel.update(snippetsState([chunk()], 'model-downloadable'));
+    expect(el.querySelector('.ask-optin')).not.toBeNull();
+
+    el.querySelector('.ask-optin-dismiss').click();
+    expect(onDeclineAi).toHaveBeenCalledTimes(1);
+    expect(el.querySelector('.ask-optin')).toBeNull();
+
+    // A subsequent model-downloadable state must NOT bring the card back this session.
+    panel.update(snippetsState([chunk()], 'model-downloadable'));
+    expect(el.querySelector('.ask-optin')).toBeNull();
+  });
+
+  it('does NOT show the opt-in card when the model is merely unavailable', () => {
+    const { el, panel } = makePanel();
+    panel.update(snippetsState([chunk()], 'model-unavailable'));
+    expect(el.querySelector('.ask-optin')).toBeNull();
+    expect(el.querySelectorAll('.ask-card').length).toBeGreaterThan(0); // still shows snippets
+  });
+
+  it('respects a pre-set aiDeclined pref — no card even on the first model-downloadable state', () => {
+    const { el, panel } = makePanel({ aiDeclined: true });
+    panel.update(snippetsState([chunk()], 'model-downloadable'));
+    expect(el.querySelector('.ask-optin')).toBeNull();
+  });
+});
+
 // --- Layer 2: app integration over fake-chrome -------------------------------
 
 let app, bm, encode;
@@ -243,5 +371,105 @@ describe('ask-panel — cross-notebook citation open (app integration)', () => {
     expect(document.querySelectorAll('#ask-panel .ask-card').length).toBeGreaterThan(0);
     // Degraded to retrieval-only: the model-unavailable note is shown, no answer.
     expect(document.querySelector('#ask-panel .ask-note')).not.toBeNull();
+  });
+});
+
+// --- Layer 3: built-in provider end-to-end (real registry + fake LanguageModel)
+// Installs the T7 fake Prompt API global so the REAL registry/builtin provider
+// produces answers, downloads, and the opt-in card through the whole app wiring.
+// The fake is UNINSTALLED in afterEach — a leaked global would corrupt other suites.
+
+describe('ask-panel — built-in provider answer (app integration)', () => {
+  let lm = null;
+
+  const openAndAsk = async (q) => {
+    [...document.querySelectorAll('#toolbar button')].find((b) => b.textContent === 'Ask').click();
+    document.querySelector('#ask-panel .ask-input').value = q;
+    document.querySelector('#ask-panel .ask-submit').click();
+    await settle();
+  };
+
+  beforeEach(async () => {
+    installFakeChrome();
+    document.body.innerHTML =
+      '<div id="toolbar"></div><aside id="sidebar"></aside><section id="note-list"></section>'
+      + '<main id="editor"></main><aside id="ask-panel" hidden></aside><div id="toast" hidden></div>';
+    app = await import('../src/app/app.js');
+    bm = await import('../src/lib/bookmarks.js');
+    ({ encode } = await import('../src/lib/codec.js'));
+    app.resetUI();
+    app.getAskIndex().build([]);
+  });
+
+  afterEach(async () => {
+    if (lm) { lm.uninstall(); lm = null; } // uninstall so the fake global never leaks into other suites
+    try { app.resetUI(); } catch { /* ignore */ }
+    await settle();
+  });
+
+  it('with an available model, an ask renders the markdown answer + a clickable citation that opens the note', async () => {
+    // Cite the first chunk id the prompt actually contains, so the citation resolves.
+    lm = installFakeLanguageModel({
+      availability: 'available',
+      promptResult: (input) => {
+        const m = input.match(/<<<NOTE c:([^>\s]+)/);
+        const id = m ? m[1] : '';
+        return JSON.stringify({ answer: 'Pull a **shot** of espresso.', citations: id ? [id] : [], grounded: true });
+      },
+    });
+    const root = await bm.ensureRoot();
+    await seedNote(root, { id: 'c1', title: 'Coffee', body: 'Tamp the grounds evenly before pulling a shot of espresso.' });
+    await app.initUI(root);
+    await app.rebuildAskIndex();
+
+    await openAndAsk('espresso');
+
+    const answer = document.querySelector('#ask-panel .ask-answer');
+    expect(answer).not.toBeNull();
+    expect(answer.querySelector('strong')).not.toBeNull(); // **shot** -> <strong> (markdown applied)
+    expect(answer.textContent).toContain('espresso');
+
+    const cards = document.querySelectorAll('#ask-panel .ask-card');
+    expect(cards.length).toBeGreaterThan(0);
+    cards[0].click(); // citation click opens the cited note
+    await settle();
+    expect(document.querySelector('#editor .note-title').value).toBe('Coffee');
+  });
+
+  it('a downloadable model shows the opt-in card; [Enable] triggers the model download (gesture-safe)', async () => {
+    lm = installFakeLanguageModel({ availability: 'downloadable', downloadProgress: [0.5, 1] });
+    const root = await bm.ensureRoot();
+    await seedNote(root, { id: 'r1', title: 'Rockets', body: 'A rocket engine burns liquid oxygen and kerosene.' });
+    await app.initUI(root);
+    await app.rebuildAskIndex();
+
+    await openAndAsk('rocket');
+
+    const card = document.querySelector('#ask-panel .ask-optin');
+    expect(card).not.toBeNull();
+    // USER-GESTURE: the click must reach LanguageModel.create() synchronously.
+    card.querySelector('.ask-optin-enable').click();
+    await settle();
+    expect(lm.createCalls.length).toBeGreaterThan(0); // the download was triggered from the gesture
+  });
+
+  it('dismissing the opt-in card persists ask:aiDeclined and it never reappears', async () => {
+    lm = installFakeLanguageModel({ availability: 'downloadable' });
+    const root = await bm.ensureRoot();
+    await seedNote(root, { id: 'r1', title: 'Rockets', body: 'A rocket engine burns liquid oxygen and kerosene.' });
+    await app.initUI(root);
+    await app.rebuildAskIndex();
+
+    await openAndAsk('rocket');
+    expect(document.querySelector('#ask-panel .ask-optin')).not.toBeNull();
+
+    document.querySelector('#ask-panel .ask-optin-dismiss').click();
+    await settle();
+    expect((await chrome.storage.local.get('ask:aiDeclined'))['ask:aiDeclined']).toBe(true);
+
+    // Re-ask the same downloadable state — the card must stay gone.
+    document.querySelector('#ask-panel .ask-submit').click();
+    await settle();
+    expect(document.querySelector('#ask-panel .ask-optin')).toBeNull();
   });
 });

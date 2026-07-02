@@ -5,13 +5,25 @@
 // the lib modules (ask-controller / fusion / ask-index). It never talks to the
 // model or chrome APIs directly — the host (app.js) injects the callbacks.
 //
-// SAFETY: chunk text is untrusted note content, so it is only ever placed via
-// textContent / createElement, NEVER innerHTML. There are no model answers in M2
-// (the stub provider is always 'unavailable'), so results are plain-text snippets.
-// When M3 renders real markdown answers it must route them through
-// src/lib/markdown.js (DOMPurify) — see renderAnswered below.
+// SAFETY (two distinct rules):
+//  1. Chunk text is untrusted NOTE content — only ever placed via textContent /
+//     createElement, NEVER innerHTML. That guard is unchanged from M2.
+//  2. A model ANSWER (M3) is markdown and IS rendered as HTML, but ONLY through
+//     src/lib/markdown.js's renderMarkdown() — which runs DOMPurify — so
+//     `answerEl.innerHTML = renderMarkdown(answer)` is the ONE sanctioned
+//     innerHTML-with-model-output path (see renderAnswered). Raw model text is
+//     never assigned to innerHTML.
+
+import { renderMarkdown } from '../lib/markdown.js';
 
 const SNIPPET_MAX = 220;
+
+// Verbatim opt-in copy (Plan §5.8) — do not paraphrase. The download is one-time,
+// on-device, and shared across sites, and notes never leave the device.
+const OPT_IN_COPY =
+  "Answers are generated on your device by your browser's built-in AI "
+  + '(Gemini Nano on Chrome, Phi on Edge). Your notes are never sent to any AI service. '
+  + 'The browser will download a model (~2–4 GB, one-time, shared with other sites/extensions).';
 
 // Collapse whitespace and clip to a readable length. Kept plain-text: the result
 // is assigned via textContent, so any HTML in the note stays literal.
@@ -27,9 +39,18 @@ function snippetOf(text) {
  * @param {(noteId: string) => void}   cb.onCitation   open a cited note
  * @param {() => void}                 [cb.onClose]     drawer closed
  * @param {() => { notes: number }}    [cb.getStats]    corpus size for the footer
+ * @param {(question: string) => void} [cb.onEnableModel]  user opted into the on-device
+ *        model download; MUST be invoked synchronously from the [Enable] click (gesture).
+ * @param {() => void}                 [cb.onDeclineAi]    user dismissed the opt-in card;
+ *        host persists the opt-out so it never returns.
+ * @param {boolean}                    [cb.aiDeclined]     the persisted opt-out (from the host);
+ *        when true the opt-in card is never shown.
  * @returns {{ update: (state: object) => void, open: () => void, close: () => void, destroy: () => void }}
  */
-export function renderAskPanel(container, { onAsk, onCitation, onClose = () => {}, getStats = () => ({ notes: 0 }) }) {
+export function renderAskPanel(container, {
+  onAsk, onCitation, onClose = () => {}, getStats = () => ({ notes: 0 }),
+  onEnableModel = () => {}, onDeclineAi = () => {}, aiDeclined = false,
+}) {
   container.innerHTML = ''; // build the shell ONCE; update() only mutates status/results
 
   const header = document.createElement('div');
@@ -69,10 +90,17 @@ export function renderAskPanel(container, { onAsk, onCitation, onClose = () => {
 
   container.append(header, form, status, results, footer);
 
+  // The most recent asked query — remembered so the enable→re-ask flow can re-run it
+  // after the model download completes.
+  let lastQuestion = '';
+  // Session mirror of the persisted opt-out. Starts from the host's stored value and
+  // flips true the moment the user dismisses, so the card can't reappear this session.
+  let declined = !!aiDeclined;
+
   // ---- actions -------------------------------------------------------------
   function fire() {
     const q = input.value.trim();
-    if (q) onAsk(q);
+    if (q) { lastQuestion = q; onAsk(q); }
   }
   submit.addEventListener('click', fire);
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); fire(); } });
@@ -143,27 +171,118 @@ export function renderAskPanel(container, { onAsk, onCitation, onClose = () => {
     results.appendChild(note);
   }
 
+  // A titled list of citation cards (Chunk objects). Reuses renderCards, so each is
+  // clickable → onCitation(noteId), same as a retrieval snippet.
+  function renderCitations(chunks) {
+    const label = document.createElement('div');
+    label.className = 'ask-sources-label';
+    label.textContent = chunks.length === 1 ? 'Source' : 'Sources';
+    results.appendChild(label);
+    renderCards(chunks);
+  }
+
+  // The one-time on-device model download prompt. Shown only for the
+  // 'model-downloadable' snippets reason AND only when the user hasn't opted out.
+  function renderOptInCard() {
+    const card = document.createElement('div');
+    card.className = 'ask-optin';
+
+    const text = document.createElement('p');
+    text.className = 'ask-optin-text';
+    text.textContent = OPT_IN_COPY;
+    card.appendChild(text);
+
+    const actions = document.createElement('div');
+    actions.className = 'ask-optin-actions';
+
+    const enable = document.createElement('button');
+    enable.type = 'button';
+    enable.className = 'ask-optin-enable';
+    enable.textContent = 'Enable';
+    enable.addEventListener('click', () => {
+      // USER-GESTURE (critical): onEnableModel() must be the FIRST thing this handler
+      // does — it reaches controller.enableModel()->provider.ensureReady()->
+      // LanguageModel.create(), which needs this click's user activation to permit the
+      // model download. Any await before it would spend the gesture and Chrome would
+      // refuse the download. So we call it synchronously with the remembered question.
+      onEnableModel(lastQuestion);
+    });
+
+    const dismiss = document.createElement('button');
+    dismiss.type = 'button';
+    dismiss.className = 'ask-optin-dismiss';
+    dismiss.textContent = 'Not now';
+    dismiss.addEventListener('click', () => {
+      declined = true;   // suppress for the rest of this session immediately…
+      onDeclineAi();     // …and let the host persist it so it never returns later.
+      card.remove();
+    });
+
+    actions.append(enable, dismiss);
+    card.appendChild(actions);
+    results.appendChild(card);
+  }
+
   function renderSnippets(state) {
     const n = state.chunks.length;
     setStatus(`Found ${n} matching excerpt${n === 1 ? '' : 's'}`);
     clearResults();
-    // In M2 the reason is always 'model-unavailable'; keep it explicit for forward-compat.
-    if (state.reason === 'model-unavailable') renderNote('On-device AI unavailable — showing matching excerpts.');
-    else if (state.reason === 'model-downloadable') renderNote('On-device AI not enabled — showing matching excerpts.');
+    if (state.reason === 'model-unavailable') {
+      renderNote('On-device AI unavailable — showing matching excerpts.');
+    } else if (state.reason === 'model-downloadable') {
+      renderNote('On-device AI not enabled — showing matching excerpts.');
+      if (!declined) renderOptInCard(); // offer the one-time download (unless opted out)
+    }
     renderCards(state.chunks);
   }
 
   function renderAnswered(state) {
-    // M2 only reaches this via the zero-hits canned reply (grounded:false), which is
-    // a plain string — safe as textContent. M3/T8: a real model answer is markdown
-    // and MUST be rendered through src/lib/markdown.js (DOMPurify), never innerHTML.
     setStatus('');
     clearResults();
     const msg = document.createElement('div');
-    msg.className = 'ask-message';
-    msg.textContent = state.answer || '';
+    msg.className = 'ask-message ask-answer';
+    // SANCTIONED innerHTML: renderMarkdown() runs the model answer through DOMPurify
+    // (src/lib/markdown.js), so any smuggled <script>/onerror is stripped before it
+    // reaches the DOM. This is the ONLY place model output is assigned to innerHTML —
+    // never assign the raw answer string.
+    msg.innerHTML = renderMarkdown(state.answer || '');
     results.appendChild(msg);
-    if (Array.isArray(state.citations) && state.citations.length) renderCards(state.citations);
+    // grounded:false — the model (or the zero-hit canned path) had nothing to cite.
+    // Still show the answer, but flag it subtly so the user knows it isn't from a note.
+    if (state.grounded === false) {
+      const hint = document.createElement('div');
+      hint.className = 'ask-ungrounded';
+      hint.textContent = "This answer isn't grounded in your notes.";
+      results.appendChild(hint);
+    }
+    if (Array.isArray(state.citations) && state.citations.length) renderCitations(state.citations);
+  }
+
+  function renderGenerating() {
+    // Clear any prior answer/snippets — the model is producing a fresh reply.
+    setStatus('Thinking…');
+    clearResults();
+    const el = document.createElement('div');
+    el.className = 'ask-thinking';
+    el.textContent = 'Thinking…';
+    results.appendChild(el);
+  }
+
+  function renderDownloading(state) {
+    const pct = Math.max(0, Math.min(100, Math.round((Number(state.progress) || 0) * 100)));
+    setStatus(`Downloading model… ${pct}%`);
+    clearResults();
+    const track = document.createElement('div');
+    track.className = 'ask-progress';
+    track.setAttribute('role', 'progressbar');
+    track.setAttribute('aria-valuemin', '0');
+    track.setAttribute('aria-valuemax', '100');
+    track.setAttribute('aria-valuenow', String(pct));
+    const bar = document.createElement('div');
+    bar.className = 'ask-progress-bar';
+    bar.style.width = `${pct}%`;
+    track.appendChild(bar);
+    results.appendChild(track);
   }
 
   function renderError(state) {
@@ -180,10 +299,9 @@ export function renderAskPanel(container, { onAsk, onCitation, onClose = () => {
       case 'snippets': renderSnippets(state); break;
       case 'answered': renderAnswered(state); break;
       case 'error': renderError(state); break;
-      // Unreachable in M2 (stub provider never becomes available); handled so a
-      // future model backend doesn't crash the drawer.
-      case 'downloading': setStatus('Preparing the on-device model…'); break;
-      case 'generating': setStatus('Generating an answer…'); break;
+      // M3 live states: the on-device model is downloading or generating.
+      case 'downloading': renderDownloading(state); break;
+      case 'generating': renderGenerating(state); break;
       default: break;
     }
   }

@@ -26,6 +26,7 @@ import { isEnabled, enable, disable } from '../lib/drive-sync.js';
 import { createAskIndex } from '../lib/ask-index.js';
 import { createFusion } from '../lib/fusion.js';
 import { createAskController } from '../lib/ask-controller.js';
+import { createRegistry } from '../lib/providers/registry.js';
 import { renderAskPanel } from './ask-panel.js';
 
 export { saveNote, MAX_URL_BYTES, WARN_URL_BYTES }; // moved to ../lib/save-note.js
@@ -162,19 +163,17 @@ export async function rebuildAskIndex() {
   askIndex.build(await loadNotes(ui.rootId));
 }
 
-// M2: no model wired yet — a stub provider that is always 'unavailable' makes the
-// controller degrade to retrieval-only snippets, so the Ask drawer shows matching
-// excerpts instead of a generated answer. T8 replaces retrievalOnlyRegistry with
-// the real provider registry.
-const retrievalOnlyRegistry = {
-  getActiveProvider: () => ({
-    id: 'none', label: 'Retrieval only',
-    capabilities: () => ({ streaming: false, jsonSchema: false }),
-    availability: async () => 'unavailable',
-    ensureReady: async () => {},
-    answer: async () => { throw new Error('no provider in M2'); },
-  }),
-};
+// The real provider registry (M3): defaults to the built-in on-device provider.
+// Constructed once for the app's lifetime — the built-in provider re-feature-detects
+// globalThis.LanguageModel on every call, so where the model is absent (or in jsdom
+// tests) availability()->'unavailable' and Ask degrades to retrieval-only snippets,
+// exactly as the M2 stub did. Construction cannot throw, so it's boot-safe.
+const askRegistry = createRegistry();
+
+// Persisted "don't offer the on-device model download" flag. Read once when the
+// drawer is built and passed to the panel so its opt-in card stays gated; the panel
+// writes it back through onDeclineAi (below). chrome.storage key.
+const AI_DECLINED_KEY = 'ask:aiDeclined';
 
 // Ask controller + drawer are constructed once per app lifetime (reset between
 // tests via resetUI). The controller is pure; the panel binds to the #ask-panel
@@ -183,22 +182,45 @@ const retrievalOnlyRegistry = {
 let askController = null;
 let askPanel = null;
 
-function ensureAskUI() {
+async function ensureAskUI() {
   if (!askController) {
     askController = createAskController({
       index: getAskIndex(),
       fusion: createFusion(getAskIndex()),
-      registry: retrievalOnlyRegistry,
+      registry: askRegistry,
       onState: (s) => askPanel?.update(s),
     });
   }
   if (!askPanel) {
     const el = document.getElementById('ask-panel');
     if (!el) return; // no drawer mount in this environment — controller still exists
+    // Read the persisted opt-out so the download card never re-appears after a past
+    // dismiss (best-effort; a read failure just leaves the card eligible to show).
+    let aiDeclined = false;
+    try { aiDeclined = !!(await chrome.storage.local.get(AI_DECLINED_KEY))[AI_DECLINED_KEY]; } catch { /* best-effort */ }
     askPanel = renderAskPanel(el, {
       onAsk: (q) => askController.ask(q),
       onCitation: (noteId) => openCitation(noteId),
       getStats: () => getAskIndex().stats(),
+      aiDeclined,
+      // USER-GESTURE (critical): the panel's [Enable] handler calls this synchronously
+      // from the click, and this MUST reach askController.enableModel() before any
+      // await. enableModel()->provider.ensureReady()->LanguageModel.create() needs the
+      // click's user activation to permit the model download; an intervening await
+      // would consume the gesture and Chrome would refuse it. So enableModel() is the
+      // first statement here — the re-ask is deferred to its .then().
+      onEnableModel: (question) => {
+        const done = askController.enableModel(); // fires the download NOW (still in the gesture)
+        if (question) {
+          // On success re-run the ask (downloading -> generating -> answered). Skip the
+          // re-ask if the download errored — the controller already emitted `error`
+          // (with the preserved chunks), and re-asking would clobber that message.
+          done.then(() => { if (askController.getState().kind !== 'error') askController.ask(question); })
+            .catch(() => { /* enableModel never rejects, but stay unhandled-rejection-free */ });
+        }
+      },
+      // Persist the opt-out so the card is gone for good (this session AND future ones).
+      onDeclineAi: () => { chrome.storage.local.set({ [AI_DECLINED_KEY]: true }).catch(() => {}); },
     });
   }
 }
@@ -229,7 +251,7 @@ export async function initUI(rootId) {
   // by an unpacked dev build) so clicking them opens this extension instead of being
   // blocked by Chrome. No-op once every note already uses the current id.
   try { await bm.healNoteUrls(rootId); } catch { /* best-effort; never block boot */ }
-  ensureAskUI(); // construct the Ask controller + drawer before the toolbar renders (needs askPanel)
+  await ensureAskUI(); // construct the Ask controller + drawer before the toolbar renders (needs askPanel)
   await initPanes();
   await refreshPanes();
   renderCurrentEditor();
