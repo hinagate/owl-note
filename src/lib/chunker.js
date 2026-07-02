@@ -33,13 +33,23 @@ export function chunkNote(note) {
   const body = normalize(note.body);
   if (!body.trim()) return [];
 
+  // A stored note id is untrusted: notes imported by older app versions (or synced
+  // bookmark payloads crafted elsewhere) can carry any string, and the id is the one
+  // field of the Ask prompt's <<<NOTE c:id>>> marker that CANNOT be neutralized at
+  // prompt-build time — it must round-trip verbatim through the model's citations.
+  // So sanitize it here, once, where chunk ids are minted: index docs, prompt marker,
+  // and citation resolution all use this same id and stay in agreement. Angle
+  // brackets become lookalikes (‹ ›) rather than being deleted so distinct ids stay
+  // distinct. chunk.noteId keeps the ORIGINAL id — noteMeta()/citation-open key on it.
+  const safeId = String(note.id).replace(/</g, '‹').replace(/>/g, '›');
+
   const chunks = [];
   let n = 0;
   for (const section of parseSections(body)) {
     const content = body.slice(section.start, section.end);
     for (const built of sectionToChunks(section, content)) {
       chunks.push({
-        id: `${note.id}::${n}`,
+        id: `${safeId}::${n}`,
         noteId: note.id,
         noteTitle: note.title,
         heading: section.breadcrumb,
