@@ -7,7 +7,7 @@ import * as panes from './panes.js';
 
 export function renderEditor(
   container,
-  { title = '', body = '', attachments = [], onChange = () => {}, onSave = () => {}, onDelete = null, focusTitle = false, measure = null, breadcrumb = [], onNavigate = () => {} },
+  { title = '', body = '', attachments = [], onChange = () => {}, onSave = () => {}, onDelete = null, focusTitle = false, measure = null, breadcrumb = [], onNavigate = () => {}, onSuggestTitle = null },
 ) {
   container.innerHTML = '';
   // Images live in `atts` (as data: URIs); the body only carries short owl-img refs.
@@ -84,6 +84,44 @@ export function renderEditor(
   titleInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
   const growTitle = () => { titleInput.style.height = 'auto'; titleInput.style.height = `${titleInput.scrollHeight}px`; };
 
+  // The title row holds the title field and, when the host wires it, the ✨
+  // "Suggest a title" button — the first AI surface outside the Ask panel. The
+  // model only PROPOSES: the button fills the title FIELD (via the same events a
+  // manual edit fires), so autosave/onChange treat it exactly like the user typed
+  // it. No callback -> no button (same optional-handler pattern as onDelete).
+  const titleRow = document.createElement('div');
+  titleRow.className = 'title-row';
+  titleRow.appendChild(titleInput);
+  if (onSuggestTitle) {
+    const suggestBtn = document.createElement('button');
+    suggestBtn.type = 'button';
+    suggestBtn.className = 'suggest-title';
+    suggestBtn.textContent = '✨';
+    suggestBtn.title = 'Suggest a title';
+    suggestBtn.setAttribute('aria-label', 'Suggest a title');
+    suggestBtn.addEventListener('click', async () => {
+      // Busy affordance + guard against a second click while the model runs.
+      suggestBtn.disabled = true;
+      suggestBtn.classList.add('busy');
+      try {
+        // Keep the editor dumb: hand the host the raw body and let it decide
+        // (empty-note / unavailable toasts live in app.js). A non-empty string
+        // lands in the title field; null means "no change" (host already toasted).
+        const suggested = await onSuggestTitle(ta.value);
+        if (typeof suggested === 'string' && suggested.trim()) {
+          titleInput.value = suggested;
+          // Fire the SAME event a manual keystroke fires so growTitle + fireChange
+          // (refresh + onChange + autosave) register the fill as a real edit.
+          titleInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      } finally {
+        suggestBtn.disabled = false; // always re-enable, even on failure
+        suggestBtn.classList.remove('busy');
+      }
+    });
+    titleRow.appendChild(suggestBtn);
+  }
+
   const split = document.createElement('div');
   split.className = 'editor-split';
   const editPane = document.createElement('div'); // left column: [title] stacked above [body]
@@ -99,7 +137,7 @@ export function renderEditor(
   const bodyWrap = document.createElement('div');
   bodyWrap.className = 'note-body-wrap';
   bodyWrap.append(backdrop, ta);
-  editPane.append(titleInput, bodyWrap);
+  editPane.append(titleRow, bodyWrap);
   const attachBar = document.createElement('div');
   attachBar.className = 'attachments-bar';
   editPane.append(attachBar, status); // chips under the body; status sits below the chips

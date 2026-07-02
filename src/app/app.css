@@ -195,6 +195,20 @@ body.resizing { user-select: none; cursor: col-resize; }
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .note-title::placeholder { color: #b7bcc4; font-weight: 700; }
+/* Title row: the ✨ "Suggest a title" button floats in the field's top-right so it
+   never disturbs the title textarea's box (and its auto-grow). Padding on the
+   title reserves the space the button sits over. */
+.title-row { position: relative; flex: 0 0 auto; }
+.title-row .note-title { padding-right: 52px; }
+.suggest-title {
+  position: absolute; top: 14px; right: 16px; z-index: 2;
+  border: 1px solid var(--border); background: #fff; border-radius: 8px;
+  padding: 5px 9px; font-size: 15px; line-height: 1; cursor: pointer;
+}
+.suggest-title:hover { background: #f1f3f5; border-color: var(--accent); }
+.suggest-title:disabled { cursor: default; }
+.suggest-title.busy { opacity: 0.6; animation: suggest-pulse 1s ease-in-out infinite; }
+@keyframes suggest-pulse { 50% { opacity: 0.25; } }
 .editor-split { display: grid; grid-template-columns: 1fr 1fr; height: 100%; overflow: hidden; }
 /* Left column: the title field stacked above the body textarea; holds the divider to the preview. */
 .edit-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--border); position: relative; }

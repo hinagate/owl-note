@@ -27,6 +27,7 @@ import { createAskIndex } from '../lib/ask-index.js';
 import { createFusion } from '../lib/fusion.js';
 import { createAskController } from '../lib/ask-controller.js';
 import { createRegistry } from '../lib/providers/registry.js';
+import { suggestTitle } from '../lib/providers/title.js';
 import { renderAskPanel } from './ask-panel.js';
 
 export { saveNote, MAX_URL_BYTES, WARN_URL_BYTES }; // moved to ../lib/save-note.js
@@ -631,6 +632,15 @@ function renderCurrentEditor(opts = {}) {
     onDelete: ui.current ? () => deleteCurrentNote() : null,
     breadcrumb: ui.current ? folderPath(noteFolderId) : [],
     onNavigate: (id) => navigateToFolder(id),
+    // ✨ Suggest title: the on-device model PROPOSES a title into the field. It
+    // returns null for both an empty note and an unavailable/failed model — one
+    // shared toast per case is fine in v1; the editor leaves the field untouched.
+    onSuggestTitle: async (body) => {
+      if (!body || !body.trim()) { toast('Nothing to title yet', true); return null; }
+      const title = await suggestTitle(body).catch(() => null);
+      if (title === null) toast("On-device AI isn't available — enable it in the Ask panel", true);
+      return title;
+    },
   });
 }
 

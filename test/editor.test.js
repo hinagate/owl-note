@@ -141,4 +141,56 @@ describe('editor', () => {
     renderEditor(el, { body: 'hi' });
     expect(el.querySelector('.preview-size')).toBeNull();
   });
+
+  it('renders a Suggest-title button only when onSuggestTitle is provided', () => {
+    const el = document.getElementById('editor');
+    renderEditor(el, { body: 'x' });
+    expect(el.querySelector('.suggest-title')).toBeNull();
+
+    document.body.innerHTML = '<main id="editor"></main>';
+    const el2 = document.getElementById('editor');
+    renderEditor(el2, { body: 'x', onSuggestTitle: vi.fn() });
+    const btn = el2.querySelector('.suggest-title');
+    expect(btn).not.toBeNull();
+    expect(btn.getAttribute('aria-label')).toBe('Suggest a title');
+  });
+
+  it('passes the current body to onSuggestTitle and disables the button while pending', () => {
+    let resolve;
+    const onSuggestTitle = vi.fn(() => new Promise((r) => { resolve = r; }));
+    const el = document.getElementById('editor');
+    renderEditor(el, { body: 'Milk and eggs', onSuggestTitle });
+    const btn = el.querySelector('.suggest-title');
+    btn.click();
+    expect(onSuggestTitle).toHaveBeenCalledWith('Milk and eggs');
+    expect(btn.disabled).toBe(true); // busy affordance while the model runs
+    resolve(null); // let the pending promise settle so the finally re-enables it
+  });
+
+  it('fills the title through the normal change path when onSuggestTitle resolves a title', async () => {
+    const onChange = vi.fn();
+    const onSuggestTitle = vi.fn().mockResolvedValue('Grocery list');
+    const el = document.getElementById('editor');
+    renderEditor(el, { body: 'Milk and eggs', onChange, onSuggestTitle });
+    const btn = el.querySelector('.suggest-title');
+    btn.click();
+
+    await vi.waitFor(() => expect(el.querySelector('.note-title').value).toBe('Grocery list'));
+    // Landing through the manual-edit path means onChange (autosave) saw it and the preview updated.
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ title: 'Grocery list' }));
+    expect(el.querySelector('.preview-title').textContent).toBe('Grocery list');
+    expect(btn.disabled).toBe(false); // re-enabled in finally
+  });
+
+  it('leaves the title unchanged when onSuggestTitle resolves null', async () => {
+    const onChange = vi.fn();
+    const onSuggestTitle = vi.fn().mockResolvedValue(null);
+    const el = document.getElementById('editor');
+    renderEditor(el, { title: 'Keep me', body: 'x', onChange, onSuggestTitle });
+    const btn = el.querySelector('.suggest-title');
+    btn.click();
+
+    await vi.waitFor(() => expect(btn.disabled).toBe(false));
+    expect(el.querySelector('.note-title').value).toBe('Keep me');
+  });
 });
