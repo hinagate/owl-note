@@ -260,6 +260,17 @@ export function renderAskPanel(container, {
   // orphan "Thinking…" is left hanging.
   let currentExchange = null;
 
+  // [E6 review fix] The exchange the user clicked [Enable] in. enableModel's
+  // downloading{progress} emissions are deliberately NOT signal-gated (a model
+  // download outlives any single ask), so ticks keep arriving while the user asks
+  // new questions or clears the thread. Painting the bar is therefore allowed ONLY
+  // while this captured exchange is still the current one — a newer ask (new
+  // currentExchange) or New chat (null) makes ticks fall back to the status line,
+  // never wiping finalized content or appending an orphan progress exchange.
+  // Deliberately NOT reset in clearThread(): the stale non-null pointer is what
+  // keeps suppressing paints after New chat (a fresh [Enable] click re-captures).
+  let downloadExchange = null;
+
   function clearThread() { results.textContent = ''; currentExchange = null; }
 
   // Keep the newest content in view after every update. Plain assignment — no
@@ -425,8 +436,12 @@ export function renderAskPanel(container, {
     enable.className = 'ask-optin-enable';
     enable.textContent = 'Enable';
     enable.addEventListener('click', () => {
-      // USER-GESTURE (critical): onEnableModel() must be the FIRST thing this handler
-      // does — it reaches controller.enableModel()->provider.ensureReady()->
+      // Remember which exchange hosts this download so progress ticks can't paint
+      // over a NEWER exchange later (see downloadExchange). A plain synchronous
+      // assignment — the gesture rule below is untouched.
+      downloadExchange = currentExchange;
+      // USER-GESTURE (critical): onEnableModel() must be the FIRST await-reaching thing
+      // this handler does — it reaches controller.enableModel()->provider.ensureReady()->
       // LanguageModel.create(), which needs this click's user activation to permit the
       // model download. Any await before it would spend the gesture and Chrome would
       // refuse the download. So we call it synchronously with the remembered question.
@@ -495,6 +510,11 @@ export function renderAskPanel(container, {
   function renderDownloading(state) {
     const pct = Math.max(0, Math.min(100, Math.round((Number(state.progress) || 0) * 100)));
     setStatus(`Downloading model… ${pct}%`);
+    // Paint into the thread only while the exchange that hosted the [Enable]
+    // click is still current (see downloadExchange). `!downloadExchange` keeps the
+    // direct-feed path (unit tests / any future non-card trigger) painting as
+    // before. When suppressed, the setStatus above still reports progress.
+    if (downloadExchange && currentExchange !== downloadExchange) return;
     const track = document.createElement('div');
     track.className = 'ask-progress';
     track.setAttribute('role', 'progressbar');

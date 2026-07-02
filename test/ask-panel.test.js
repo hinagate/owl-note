@@ -343,6 +343,47 @@ describe('ask-panel — M3 answer rendering & sanitization', () => {
     expect(bar.style.width).toBe('50%');
     expect(el.querySelector('.ask-status').textContent).toContain('50');
   });
+
+  // [E6 review fix] enableModel's progress ticks are not signal-gated, so they can
+  // arrive after the user moved on. They must never repaint over newer content.
+  it('a download tick arriving after a NEWER ask finalized does not clobber it (status still updates)', () => {
+    const { el, panel } = makePanel();
+    panel.open();
+    el.querySelector('.ask-input').value = 'q1';
+    el.querySelector('.ask-submit').click();
+    panel.update({ kind: 'searching', question: 'q1' });
+    panel.update(snippetsState([chunk()], 'model-downloadable'));
+    el.querySelector('.ask-optin-enable').click(); // captures the download's exchange
+
+    // User asks something new while the model downloads.
+    panel.update({ kind: 'searching', question: 'q2' });
+    panel.update({
+      kind: 'answered', question: 'q2', answer: 'Second answer', citations: [], chunks: [],
+      grounded: true, provider: 'builtin', usedModel: true,
+    });
+
+    panel.update({ kind: 'downloading', progress: 0.5 }); // late tick
+    expect(el.querySelector('.ask-answer').textContent).toContain('Second answer'); // not wiped
+    expect(el.querySelector('.ask-progress-bar')).toBeNull(); // no bar over the new exchange
+    expect(el.querySelector('.ask-status').textContent).toContain('50'); // progress still visible
+  });
+
+  it('a download tick arriving after New chat does not append an orphan progress exchange', () => {
+    const { el, panel } = makePanel();
+    panel.open();
+    el.querySelector('.ask-input').value = 'q1';
+    el.querySelector('.ask-submit').click();
+    panel.update({ kind: 'searching', question: 'q1' });
+    panel.update(snippetsState([chunk()], 'model-downloadable'));
+    el.querySelector('.ask-optin-enable').click();
+
+    el.querySelector('.ask-newchat').click(); // thread cleared mid-download
+
+    panel.update({ kind: 'downloading', progress: 0.75 }); // late tick
+    expect(el.querySelectorAll('.ask-exchange')).toHaveLength(0); // no orphan
+    expect(el.querySelector('.ask-progress-bar')).toBeNull();
+    expect(el.querySelector('.ask-status').textContent).toContain('75');
+  });
 });
 
 describe('ask-panel — M3 download opt-in card', () => {
