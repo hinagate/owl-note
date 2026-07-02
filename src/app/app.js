@@ -23,6 +23,7 @@ import { isSelfOrDescendant } from '../lib/notebook-tree.js';
 import { offloadShape } from '../lib/attachment-store.js';
 import * as noteDrive from '../lib/note-drive.js';
 import { isEnabled, enable, disable } from '../lib/drive-sync.js';
+import { createAskIndex } from '../lib/ask-index.js';
 
 export { saveNote, MAX_URL_BYTES, WARN_URL_BYTES }; // moved to ../lib/save-note.js
 
@@ -118,7 +119,7 @@ export async function reconcileLocalToDrive(save = saveNote) {
 
 const recentIds = []; // ids of notes created this session — float to the top until reload (in-memory)
 
-const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1 };
+const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1, indexReady: null };
 
 export function resetUI() {
   ui.rootId = null;
@@ -137,6 +138,20 @@ export function resetUI() {
   ui.hashWired = false;
   ui.isNew = false;
   ui.selected = new Set(); ui.anchor = null; ui.focus = -1;
+  ui.indexReady = null;
+}
+
+// Ask-Your-Notes lexical index — ONE module-level instance for the app's lifetime.
+// T4's ask-controller and the lifecycle tests query the corpus through getAskIndex().
+const askIndex = createAskIndex();
+export function getAskIndex() { return askIndex; }
+
+// Deferred, coalesced full (re)build of the whole live corpus. loadNotes(ui.rootId)
+// already yields every note under root minus Trash, bodies materialized — exactly the
+// shape build() wants. Exposed so boot/tests can await the rebuild deterministically.
+export async function rebuildAskIndex() {
+  if (!ui.rootId) return; // not booted (or reset between tests)
+  askIndex.build(await loadNotes(ui.rootId));
 }
 
 export async function initUI(rootId) {
@@ -163,6 +178,10 @@ export async function initUI(rootId) {
     ui.hashWired = true;
   }
   wireLiveRefresh();
+  // Build the ask index in the background — a FLOATING promise so indexing never
+  // delays first paint. .catch keeps a build failure from surfacing as an unhandled
+  // rejection (best-effort, like healNoteUrls above); ui.indexReady lets tests await it.
+  ui.indexReady = rebuildAskIndex().catch((e) => { console.warn('Ask index build failed:', e); });
 }
 
 export async function loadNotes(folderId) {
@@ -279,6 +298,7 @@ async function batchTrash() {
   if (!targets.length) return;
   if (!confirm(`Move ${targets.length} note(s) to Trash?`)) return;
   await trashNotes(targets, ui.trashId);
+  for (const t of targets) askIndex.removeNote(t.id); // trashed notes leave the live corpus
   if (ui.current && targets.some((t) => t.id === ui.current.id)) {
     ui.current = null; ui.activeBookmarkId = null; ui.activeLocalId = null; renderCurrentEditor();
   }
@@ -296,6 +316,7 @@ async function trashAction(kind, handle) {
     if (kind === 'empty' && !confirm(`Permanently delete ${targets.length} note(s)? This cannot be undone.`)) return;
     if (kind === 'deleteForever' && !confirm('Permanently delete this note? This cannot be undone.')) return;
     await deleteForever(targets);
+    for (const t of targets) askIndex.removeNote(t.id); // purged notes are gone for good (no-op if never indexed, e.g. already in Trash)
     toast(kind === 'empty' ? 'Trash emptied' : 'Deleted');
   }
   if (ui.current && targets.some((t) => t.id === ui.current.id)) {
@@ -317,6 +338,10 @@ async function liveRefreshNoteList() {
     do {
       liveRefreshQueued = false;
       await refreshNoteList();
+      // Rebuild the ask index on the SAME coalesced cycle as the note-list refresh:
+      // a burst of external chrome.bookmarks events (Drive sync, another tab) collapses
+      // into ONE rebuild per cycle via the do/while queue below — never one per event.
+      await rebuildAskIndex();
     } while (liveRefreshQueued);
   } finally {
     liveRefreshing = false;
@@ -476,6 +501,15 @@ function renderCurrentEditor(opts = {}) {
       ui.activeLocalId = res.bookmarkId ? null : note.id;
       ui.activeLocalFolderId = res.bookmarkId ? null : folder;
       ui.isNew = false;
+      // Keep the ask index in sync with this save. Synchronous in-memory op — do NOT
+      // await it. upsertNote replaces the note's stale chunks when its content hash
+      // changed (edit), or just refreshes citation meta when only the folder moved.
+      askIndex.upsertNote({
+        ...note, // id, title, body, hash
+        bookmarkId: ui.activeBookmarkId || null,
+        folderId: ui.activeLocalId ? (ui.activeLocalFolderId ?? folder) : folder,
+        localOnly: !!ui.activeLocalId,
+      });
       // Auto-saves stay quiet — the editor's inline status confirms them and the size
       // meter already flags oversized notes. Only manual saves pop a toast.
       if (!auto) {
@@ -505,6 +539,7 @@ async function deleteCurrentNote() {
       folderId: ui.activeLocalId ? (ui.activeLocalFolderId ?? ui.activeFolder) : ui.activeFolder,
       localOnly: !!ui.activeLocalId,
     }], ui.trashId);
+    askIndex.removeNote(ui.current.id); // note left the live corpus
   } else if (!confirm('Discard this unsaved note?')) {
     return;
   }
@@ -547,6 +582,7 @@ export async function deleteNotebook(id) {
   }
   const movedBookmarks = new Set(targets.filter((t) => t.bookmarkId).map((t) => t.bookmarkId));
   await trashNotes(targets, ui.trashId);
+  for (const t of targets) askIndex.removeNote(t.id); // the whole subtree's notes left the live corpus
 
   // The subtree now holds only empty folders — remove them. (Computed while ui.notebooks
   // still reflects the old tree.)
