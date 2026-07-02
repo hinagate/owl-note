@@ -24,6 +24,9 @@ import { offloadShape } from '../lib/attachment-store.js';
 import * as noteDrive from '../lib/note-drive.js';
 import { isEnabled, enable, disable } from '../lib/drive-sync.js';
 import { createAskIndex } from '../lib/ask-index.js';
+import { createFusion } from '../lib/fusion.js';
+import { createAskController } from '../lib/ask-controller.js';
+import { renderAskPanel } from './ask-panel.js';
 
 export { saveNote, MAX_URL_BYTES, WARN_URL_BYTES }; // moved to ../lib/save-note.js
 
@@ -139,6 +142,11 @@ export function resetUI() {
   ui.isNew = false;
   ui.selected = new Set(); ui.anchor = null; ui.focus = -1;
   ui.indexReady = null;
+  // Drop the Ask drawer/controller so the next initUI rebinds to the fresh DOM
+  // (test harnesses replace document.body between runs).
+  if (askPanel && askPanel.destroy) askPanel.destroy();
+  askPanel = null;
+  askController = null;
 }
 
 // Ask-Your-Notes lexical index — ONE module-level instance for the app's lifetime.
@@ -154,6 +162,62 @@ export async function rebuildAskIndex() {
   askIndex.build(await loadNotes(ui.rootId));
 }
 
+// M2: no model wired yet — a stub provider that is always 'unavailable' makes the
+// controller degrade to retrieval-only snippets, so the Ask drawer shows matching
+// excerpts instead of a generated answer. T8 replaces retrievalOnlyRegistry with
+// the real provider registry.
+const retrievalOnlyRegistry = {
+  getActiveProvider: () => ({
+    id: 'none', label: 'Retrieval only',
+    capabilities: () => ({ streaming: false, jsonSchema: false }),
+    availability: async () => 'unavailable',
+    ensureReady: async () => {},
+    answer: async () => { throw new Error('no provider in M2'); },
+  }),
+};
+
+// Ask controller + drawer are constructed once per app lifetime (reset between
+// tests via resetUI). The controller is pure; the panel binds to the #ask-panel
+// aside, which some test harnesses omit — then askPanel stays null and the toolbar
+// simply renders no Ask button.
+let askController = null;
+let askPanel = null;
+
+function ensureAskUI() {
+  if (!askController) {
+    askController = createAskController({
+      index: getAskIndex(),
+      fusion: createFusion(getAskIndex()),
+      registry: retrievalOnlyRegistry,
+      onState: (s) => askPanel?.update(s),
+    });
+  }
+  if (!askPanel) {
+    const el = document.getElementById('ask-panel');
+    if (!el) return; // no drawer mount in this environment — controller still exists
+    askPanel = renderAskPanel(el, {
+      onAsk: (q) => askController.ask(q),
+      onCitation: (noteId) => openCitation(noteId),
+      getStats: () => getAskIndex().stats(),
+    });
+  }
+}
+
+// Open a cited note from the Ask drawer. Uses the index's citation snapshot rather
+// than openHandle: openHandle resolves against the ACTIVE folder's ui.notes only,
+// so a citation into another notebook would miss. noteMeta().folderId (kept correct
+// across moves by T3.5) lets us switch to the note's folder first, then open it.
+async function openCitation(noteId) {
+  const meta = getAskIndex().noteMeta(noteId);
+  if (!meta) return; // note vanished (e.g. trashed after retrieval) — ignore
+  if (meta.folderId && meta.folderId !== ui.activeFolder) {
+    ui.activeFolder = meta.folderId;
+    await refreshPanes(); // load the target folder's list first so openBookmark can find it
+  }
+  if (meta.localOnly) openLocalNote(noteId);
+  else openBookmark(meta.bookmarkId);
+}
+
 export async function initUI(rootId) {
   ui.rootId = rootId;
   ui.activeFolder = rootId;
@@ -165,6 +229,7 @@ export async function initUI(rootId) {
   // by an unpacked dev build) so clicking them opens this extension instead of being
   // blocked by Chrome. No-op once every note already uses the current id.
   try { await bm.healNoteUrls(rootId); } catch { /* best-effort; never block boot */ }
+  ensureAskUI(); // construct the Ask controller + drawer before the toolbar renders (needs askPanel)
   await initPanes();
   await refreshPanes();
   renderCurrentEditor();
@@ -437,6 +502,7 @@ async function refreshPanes() {
       await refreshNoteList(); // refresh note-card sync badges right after toggling
       return result;
     },
+    onAsk: askPanel ? () => askPanel.open() : null, // Ask button only when the drawer is mounted
   });
   await refreshNoteList();
   // Editor is intentionally NOT re-rendered here. It is rendered only by

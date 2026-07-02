@@ -3,7 +3,7 @@
 // Track the active outside-click closer so re-renders don't leak stale listeners.
 let _activeCloser = null;
 
-export function renderToolbar(container, { query = '', onSearch, onSuggest = null, onPickSuggestion = null, onExportMarkdown, onExportJson, onImport, driveEnabled = false, onToggleDrive = null }) {
+export function renderToolbar(container, { query = '', onSearch, onSuggest = null, onPickSuggestion = null, onExportMarkdown, onExportJson, onImport, driveEnabled = false, onToggleDrive = null, onAsk = null }) {
   // Clean up any stale document listener from a previous render.
   if (_activeCloser) {
     document.removeEventListener('click', _activeCloser);
@@ -109,6 +109,17 @@ export function renderToolbar(container, { query = '', onSearch, onSuggest = nul
   importBtn.addEventListener('click', () => importInput.click());
 
   container.append(searchWrap, exportWrap, importBtn, importInput);
+
+  // "Ask your notes" drawer opener. Rendered only when the app supplies a handler
+  // (optional-handler pattern, like onToggleDrive). Opening the drawer is a plain
+  // synchronous action — no user-gesture-sensitive work happens here.
+  if (onAsk) {
+    const askBtn = document.createElement('button');
+    askBtn.textContent = 'Ask';
+    askBtn.title = 'Ask your notes';
+    askBtn.addEventListener('click', () => onAsk());
+    container.append(askBtn);
+  }
 
   // Drive sync opt-in toggle. Rendered only when the app supplies a handler.
   // The checkbox change is a user gesture, which chrome.permissions.request needs:
