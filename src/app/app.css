@@ -311,6 +311,13 @@ body.resizing { user-select: none; cursor: col-resize; }
   font-size: 12px; line-height: 1; padding: 2px 5px; border-radius: 999px;
 }
 #ask-panel .ask-chip-dismiss:hover { background: rgba(0, 0, 0, 0.08); color: var(--text); }
+/* [Task E9] One-click "Summarize this note" quick action — sits beside the chip. */
+#ask-panel .ask-summarize {
+  margin-left: 8px; vertical-align: middle;
+  border: 1px solid var(--accent); background: #fff; color: var(--accent);
+  font-weight: 600; font-size: 12px; padding: 4px 12px; border-radius: 999px; cursor: pointer;
+}
+#ask-panel .ask-summarize:hover { background: var(--accent); color: #fff; border-color: var(--accent-dark); }
 
 #ask-panel .ask-status { padding: 0 16px 8px; font-size: 13px; color: var(--muted); }
 #ask-panel .ask-status:empty { display: none; }

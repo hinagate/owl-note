@@ -727,6 +727,67 @@ describe('ask-panel — current-note chip (E7)', () => {
   });
 });
 
+// [Task E9] One-click "Summarize this note" quick action. A "Summarize" button in
+// the chip row (so it shares the chip's visibility lifecycle) fires a normal ask
+// exchange for the WHOLE note: onAsk('Summarize this note.', { pinnedNoteId, pinAll:true }).
+// The opts are remembered (lastAskOpts) so an enable→re-ask re-runs it AS a summarize.
+describe('ask-panel — summarize quick action (E9)', () => {
+  it('renders a Summarize button with the chip and fires onAsk(SUMMARIZE, {pinnedNoteId, pinAll:true}) as a normal exchange', () => {
+    const { el, panel, onAsk } = makePanel({ getCurrentNote: () => ({ id: 'n9', title: 'My Note' }) });
+    panel.open();
+    const btn = el.querySelector('.ask-summarize');
+    expect(btn).not.toBeNull();
+    expect(btn.getAttribute('aria-label')).toBe('Summarize this note');
+
+    btn.click();
+    expect(onAsk).toHaveBeenCalledWith('Summarize this note.', { pinnedNoteId: 'n9', pinAll: true });
+
+    // Rides on the normal exchange flow — the searching state the controller would
+    // emit renders a question bubble carrying the summarize text.
+    panel.update({ kind: 'searching', question: 'Summarize this note.' });
+    expect(el.querySelector('.ask-q').textContent).toBe('Summarize this note.');
+  });
+
+  it('shows no Summarize button when there is no current note', () => {
+    const { el, panel } = makePanel({ getCurrentNote: () => null });
+    panel.open();
+    expect(el.querySelector('.ask-summarize')).toBeNull();
+  });
+
+  it('removes the Summarize button when the chip is dismissed (shares the chip lifecycle)', () => {
+    const { el, panel } = makePanel({ getCurrentNote: () => ({ id: 'n1', title: 'Cur' }) });
+    panel.open();
+    expect(el.querySelector('.ask-summarize')).not.toBeNull();
+    el.querySelector('.ask-chip-dismiss').click();
+    expect(el.querySelector('.ask-chip')).toBeNull();
+    expect(el.querySelector('.ask-summarize')).toBeNull(); // gone with the chip (no orphan focusable)
+  });
+
+  it('enable→re-ask preserves summarize opts: [Enable] after a summarize calls onEnableModel(SUMMARIZE, {pinnedNoteId, pinAll:true})', () => {
+    const { el, panel, onEnableModel } = makePanel({ getCurrentNote: () => ({ id: 'n5', title: 'Note Five' }) });
+    panel.open();
+    el.querySelector('.ask-summarize').click(); // remembers lastQuestion + lastAskOpts
+    // pinAll on a downloadable model → snippets{chunks:[], model-downloadable} → opt-in card.
+    panel.update(snippetsState([], 'model-downloadable'));
+    expect(el.querySelector('.ask-optin')).not.toBeNull();
+
+    el.querySelector('.ask-optin-enable').click();
+    expect(onEnableModel).toHaveBeenCalledWith('Summarize this note.', { pinnedNoteId: 'n5', pinAll: true });
+  });
+
+  it('New chat resets the remembered summarize opts (a later enable→re-ask cannot resurrect them)', () => {
+    const { el, panel, onEnableModel } = makePanel({ getCurrentNote: () => ({ id: 'n5', title: 'Note Five' }) });
+    panel.open();
+    el.querySelector('.ask-summarize').click();
+    el.querySelector('.ask-newchat').click(); // clears lastQuestion AND lastAskOpts
+
+    panel.update(snippetsState([], 'model-downloadable'));
+    el.querySelector('.ask-optin-enable').click();
+    // lastQuestion reset to '' and lastAskOpts to undefined → a single-arg enable, no opts.
+    expect(onEnableModel).toHaveBeenCalledWith('');
+  });
+});
+
 // --- Layer 2: app integration over fake-chrome -------------------------------
 
 let app, bm, encode;

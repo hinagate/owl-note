@@ -394,6 +394,160 @@ describe('createAskController — pinned current-note context (E7)', () => {
   });
 });
 
+// [Task E9] "Summarize this note" (pinAll). ask(question, { pinnedNoteId, pinAll:true })
+// pins the WHOLE note (chunksOf UNSLICED) and SKIPS retrieval entirely (fusion.query
+// is never called — the literal "summarize this note" would lexically match junk).
+// It follows the availability LADDER (available→model, downloadable→opt-in snippets,
+// unavailable→snippets) rather than E7's canned no-match, EXCEPT an unknown/empty
+// note (nothing to summarize) which is the degenerate canned no-match.
+describe('createAskController — summarize this note (pinAll, E9)', () => {
+  // A note that chunks into 4 sections (one per heading), plus a decoy whose body
+  // contains the word "summarize" so that IF retrieval ran it would match it — it
+  // must NOT, proving pinAll skips fusion.query.
+  function multiChunkIndex() {
+    const idx = createAskIndex();
+    idx.build([
+      { id: 'big', title: 'Big', body: '# A\n\nalpha aaa\n\n# B\n\nbeta bbb\n\n# C\n\ngamma ccc\n\n# D\n\ndelta ddd', hash: 'h1' },
+      { id: 'decoy', title: 'Decoy', body: 'Summarize this note is a phrase that would match retrieval.', hash: 'h2' },
+    ]);
+    return idx;
+  }
+
+  it('pinAll sends ALL of the note chunks to the model, never calls fusion.query, states carry chunks:[]', async () => {
+    const idx = multiChunkIndex();
+    const allChunks = idx.chunksOf('big');
+    expect(allChunks.length).toBeGreaterThanOrEqual(4); // sanity: genuinely multi-chunk (no 2-slice)
+
+    const realFusion = createFusion(idx);
+    let queryCalls = 0;
+    const fusion = {
+      query: (...a) => { queryCalls += 1; return realFusion.query(...a); },
+      expand: (...a) => realFusion.expand(...a),
+    };
+    const provider = fakeProvider({ id: 'builtin', availability: 'available' });
+    const { states, onState } = recorder();
+    const ctrl = createAskController({ index: idx, fusion, registry: fakeRegistry(provider), onState });
+
+    await ctrl.ask('Summarize this note.', { pinnedNoteId: 'big', pinAll: true });
+
+    expect(queryCalls).toBe(0); // retrieval skipped entirely
+    expect(kinds(states)).toEqual(['searching', 'generating', 'answered']);
+    // EVERY chunk of the note reached the model, in doc order — no 2-chunk slice.
+    const sent = provider._calls.answer[0].chunks.map((c) => c.id);
+    expect(sent).toEqual(allChunks.map((c) => c.id));
+    // generating + answered carry chunks:[] (nothing was retrieved as a primary).
+    expect(states.find((s) => s.kind === 'generating').chunks).toEqual([]);
+    expect(last(states).chunks).toEqual([]);
+  });
+
+  it('pinAll + available → answered on the pinned context; a cited pinned chunk resolves', async () => {
+    const idx = multiChunkIndex();
+    const allChunks = idx.chunksOf('big');
+    const citedId = allChunks[2].id; // cite a chunk from the middle of the note
+    const provider = fakeProvider({
+      id: 'builtin',
+      availability: 'available',
+      answer: () => Promise.resolve({ answer: 'A short summary.', citations: [citedId], grounded: true }),
+    });
+    const { ctrl, states } = makeController(idx, provider);
+
+    await ctrl.ask('Summarize this note.', { pinnedNoteId: 'big', pinAll: true });
+
+    const ans = last(states);
+    expect(ans.usedModel).toBe(true);
+    expect(ans.grounded).toBe(true);
+    expect(ans.citations.map((c) => c.id)).toEqual([citedId]); // resolves vs the pinned context
+    expect(ans.chunks).toEqual([]);
+  });
+
+  it('pinAll + downloadable → snippets{chunks:[], model-downloadable} (opt-in ladder, NOT canned)', async () => {
+    const idx = multiChunkIndex();
+    const provider = fakeProvider({ id: 'builtin', availability: 'downloadable' });
+    const { ctrl, states } = makeController(idx, provider);
+
+    await ctrl.ask('Summarize this note.', { pinnedNoteId: 'big', pinAll: true });
+
+    expect(kinds(states)).toEqual(['searching', 'snippets']);
+    const snip = last(states);
+    expect(snip.reason).toBe('model-downloadable');
+    expect(snip.chunks).toEqual([]);
+    expect(provider._calls.answer.length).toBe(0);
+  });
+
+  it('pinAll + downloading → snippets{chunks:[], model-downloadable}', async () => {
+    const idx = multiChunkIndex();
+    const provider = fakeProvider({ id: 'builtin', availability: 'downloading' });
+    const { ctrl, states } = makeController(idx, provider);
+
+    await ctrl.ask('Summarize this note.', { pinnedNoteId: 'big', pinAll: true });
+
+    expect(last(states).kind).toBe('snippets');
+    expect(last(states).reason).toBe('model-downloadable');
+    expect(last(states).chunks).toEqual([]);
+    expect(provider._calls.answer.length).toBe(0);
+  });
+
+  it('pinAll + unavailable → snippets{chunks:[], model-unavailable}', async () => {
+    const idx = multiChunkIndex();
+    const provider = fakeProvider({ id: 'builtin', availability: 'unavailable' });
+    const { ctrl, states } = makeController(idx, provider);
+
+    await ctrl.ask('Summarize this note.', { pinnedNoteId: 'big', pinAll: true });
+
+    expect(kinds(states)).toEqual(['searching', 'snippets']);
+    const snip = last(states);
+    expect(snip.reason).toBe('model-unavailable');
+    expect(snip.chunks).toEqual([]);
+    expect(provider._calls.answer.length).toBe(0);
+  });
+
+  it('pinAll on an unknown/empty note → canned no-match (nothing to summarize), model untouched', async () => {
+    const idx = multiChunkIndex();
+    const provider = fakeProvider({ id: 'builtin', availability: 'available' });
+    const { ctrl, states } = makeController(idx, provider);
+
+    await ctrl.ask('Summarize this note.', { pinnedNoteId: 'does-not-exist', pinAll: true });
+
+    expect(kinds(states)).toEqual(['searching', 'answered']);
+    expect(last(states).answer).toBe('Nothing in your notes matches that.');
+    expect(last(states).chunks).toEqual([]);
+    expect(provider._calls.availability).toBe(0); // model path never reached
+    expect(provider._calls.answer.length).toBe(0);
+  });
+
+  it('a superseded pinAll ask does NOT land a stale terminal state over the newer ask', async () => {
+    const idx = multiChunkIndex();
+    let resolve1;
+    const deferred1 = new Promise((res) => { resolve1 = res; });
+    let answerCall = 0;
+    const provider = fakeProvider({
+      availability: 'available',
+      answer: () => {
+        answerCall += 1;
+        if (answerCall === 1) return deferred1; // the pinAll ask parks here
+        return Promise.resolve({ answer: 'SECOND', citations: [], grounded: true });
+      },
+    });
+    const { ctrl, states } = makeController(idx, provider);
+
+    const p1 = ctrl.ask('Summarize this note.', { pinnedNoteId: 'big', pinAll: true });
+    await flush(); // advance to generating, parked on the deferred answer
+    expect(last(states).kind).toBe('generating');
+
+    const p2 = ctrl.ask('beta'); // supersedes the pinAll ask (matches chunk B of 'big')
+    await p2;
+
+    resolve1({ answer: 'FIRST', citations: [], grounded: true }); // late resolve — must be ignored
+    await p1;
+    await flush();
+
+    const answered = states.filter((s) => s.kind === 'answered');
+    expect(answered.length).toBe(1);
+    expect(answered[0].answer).toBe('SECOND');
+    expect(states.some((s) => s.answer === 'FIRST')).toBe(false);
+  });
+});
+
 describe('createAskController — errors keep chunks', () => {
   it('provider answer throws AskError(network) → error{code:network} with chunks preserved', async () => {
     const idx = realIndex();

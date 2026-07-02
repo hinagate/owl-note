@@ -81,7 +81,7 @@ export function createAskController({ index, fusion, registry, onState }) {
     return provider ? provider.id : null;
   }
 
-  async function ask(question, { pinnedNoteId } = {}) {
+  async function ask(question, { pinnedNoteId, pinAll } = {}) {
     // Supersede any in-flight ask first, then take a fresh signal for this one.
     if (inFlight) inFlight.abort();
     const controller = new AbortController();
@@ -110,15 +110,30 @@ export function createAskController({ index, fusion, registry, onState }) {
 
     emit({ kind: 'searching', question });
 
-    const chunks = await fusion.query(question, 8);
-    if (signal.aborted) return; // superseded during retrieval
+    // [Task E9] "Summarize this note" (pinAll) vs the E7 chip ask — two deliberate
+    // differences, WHY on each:
+    //  1. All chunks, no retrieval. pinAll pins `chunksOf(pinnedNoteId)` UNSLICED (a
+    //     summary needs the WHOLE note; packChunks' 5000-token/10-chunk cap is the
+    //     budget guard, not a 2-slice) and leaves `chunks` (primaries) = [] WITHOUT
+    //     calling fusion.query — the literal words "summarize this note" would
+    //     lexically match unrelated notes and pollute both the model context and the
+    //     Related-notes list. Skipping that await is safe: the supersede gates on the
+    //     remaining awaits (availability/expand/answer) below still hold.
+    let chunks;
+    let pinned;
+    if (pinAll) {
+      pinned = pinnedNoteId ? index.chunksOf(pinnedNoteId) : [];
+      chunks = [];
+    } else {
+      chunks = await fusion.query(question, 8);
+      if (signal.aborted) return; // superseded during retrieval
+      // [Task E7] Pin the currently-open note into the model context: its first 2
+      // doc-order chunks. chunksOf is SYNCHRONOUS, so this adds no new await before the
+      // supersede gates below. Cheap guarantee — if the note is query-relevant its
+      // chunks are already in `chunks` and dedupeById collapses the overlap.
+      pinned = pinnedNoteId ? index.chunksOf(pinnedNoteId).slice(0, 2) : [];
+    }
     lastChunks = chunks;
-
-    // [Task E7] Pin the currently-open note into the model context: its first 2
-    // doc-order chunks. chunksOf is SYNCHRONOUS, so this adds no new await before the
-    // supersede gates below. Cheap guarantee — if the note is query-relevant its
-    // chunks are already in `chunks` and dedupeById collapses the overlap.
-    const pinned = pinnedNoteId ? index.chunksOf(pinnedNoteId).slice(0, 2) : [];
 
     // Zero HITS with NO pin: canned no-match, ungrounded, model never touched
     // (provider is not even queried — byte-identical to pre-E7). WITH a pin we fall
@@ -173,7 +188,11 @@ export function createAskController({ index, fusion, registry, onState }) {
       // model-context concept, so with no model there's nothing useful to show —
       // fall back to the canned no-match, exactly as the no-pin zero-hit path does.
       // (This only reaches here because a pin let us skip the earlier shortcut.)
-      if (chunks.length === 0) {
+      // [Task E9] pinAll is EXEMPT: a "summarize" on a model-less machine should
+      // surface the availability ladder below (the opt-in card IS the right response
+      // to "summarize" here), not a dead-end no-match — so it falls through to the
+      // snippets{chunks:[]} emit and its reason reflects the availability.
+      if (chunks.length === 0 && !pinAll) {
         emitNoMatch();
         return;
       }

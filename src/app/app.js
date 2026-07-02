@@ -213,13 +213,16 @@ async function ensureAskUI() {
       // click's user activation to permit the model download; an intervening await
       // would consume the gesture and Chrome would refuse it. So enableModel() is the
       // first statement here — the re-ask is deferred to its .then().
-      onEnableModel: (question) => {
+      onEnableModel: (question, opts) => {
         const done = askController.enableModel(); // fires the download NOW (still in the gesture)
         if (question) {
           // On success re-run the ask (downloading -> generating -> answered). Skip the
           // re-ask if the download errored — the controller already emitted `error`
           // (with the preserved chunks), and re-asking would clobber that message.
-          done.then(() => { if (askController.getState().kind !== 'error') askController.ask(question); })
+          // [Task E9] Thread the original opts through so the re-ask preserves the pin
+          // and pinAll — a summarize that triggered the download re-runs AS a summarize,
+          // not a plain keyword search.
+          done.then(() => { if (askController.getState().kind !== 'error') askController.ask(question, opts); })
             .catch(() => { /* enableModel never rejects, but stay unhandled-rejection-free */ });
         }
       },

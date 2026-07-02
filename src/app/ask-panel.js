@@ -20,6 +20,10 @@ const SNIPPET_MAX = 220;
 // [Task E7] Chip title clip length — keeps the pill compact; the CSS also ellipsizes,
 // but clipping the text node bounds it even when the note title is one long word.
 const CHIP_TITLE_MAX = 40;
+// [Task E9] The fixed question the one-click "Summarize" quick action asks. It becomes
+// the exchange's question bubble AND the model's QUESTION line — the Ask grounding
+// prompt handles summarization fine, so no dedicated summarize prompt is needed (YAGNI).
+const SUMMARIZE_QUESTION = 'Summarize this note.';
 
 // Centralized code -> user-facing copy for the 'error' state (ASK_ERROR_CODES,
 // see src/lib/providers/provider.js). Deliberately NEVER surfaces state.message
@@ -75,8 +79,10 @@ function relatedChunks(chunks, citations) {
  * @param {(noteId: string) => void}   cb.onCitation   open a cited note
  * @param {() => void}                 [cb.onClose]     drawer closed
  * @param {() => { notes: number }}    [cb.getStats]    corpus size for the footer
- * @param {(question: string) => void} [cb.onEnableModel]  user opted into the on-device
- *        model download; MUST be invoked synchronously from the [Enable] click (gesture).
+ * @param {(question: string, opts?: object) => void} [cb.onEnableModel]  user opted into the
+ *        on-device model download; MUST be invoked synchronously from the [Enable] click
+ *        (gesture). [Task E9] `opts` carries the ask's { pinnedNoteId, pinAll } so the
+ *        host's enable→re-ask re-runs it faithfully (e.g. a summarize re-runs as one).
  * @param {() => void}                 [cb.onDeclineAi]    user dismissed the opt-in card;
  *        host persists the opt-out so it never returns.
  * @param {boolean}                    [cb.aiDeclined]     the persisted opt-out (from the host);
@@ -165,6 +171,12 @@ export function renderAskPanel(container, {
   // The most recent asked query — remembered so the enable→re-ask flow can re-run it
   // after the model download completes.
   let lastQuestion = '';
+  // [Task E9] The opts that accompanied lastQuestion ({ pinnedNoteId } for a chip ask,
+  // { pinnedNoteId, pinAll:true } for a Summarize, or undefined for a plain ask). Kept
+  // beside lastQuestion so the enable→re-ask threads them through — otherwise a
+  // summarize that triggered the model download would re-run as a plain keyword search
+  // and lose its meaning. Reset with lastQuestion on New chat.
+  let lastAskOpts;
   // Session mirror of the persisted opt-out. Starts from the host's stored value and
   // flips true the moment the user dismisses, so the card can't reappear this session.
   let declined = !!aiDeclined;
@@ -224,6 +236,24 @@ export function renderAskPanel(container, {
     pill.appendChild(dismiss);
 
     chipRow.appendChild(pill);
+
+    // [Task E9] One-click "Summarize this note" quick action, rendered WITH the chip
+    // (same chip row → same visibility lifecycle: chipRow.textContent above clears it
+    // when the chip is hidden, so it never lingers as an orphan focusable). Fires a
+    // NORMAL exchange for the WHOLE note (pinAll) — no typing, and a follow-up
+    // question then composes naturally in the thread. Records lastQuestion/lastAskOpts
+    // so an enable→re-ask re-runs it AS a summarize.
+    const summarize = document.createElement('button');
+    summarize.type = 'button';
+    summarize.className = 'ask-summarize';
+    summarize.setAttribute('aria-label', 'Summarize this note');
+    summarize.textContent = 'Summarize';
+    summarize.addEventListener('click', () => {
+      lastQuestion = SUMMARIZE_QUESTION;
+      lastAskOpts = { pinnedNoteId: chipNoteId, pinAll: true };
+      onAsk(SUMMARIZE_QUESTION, lastAskOpts);
+    });
+    chipRow.appendChild(summarize);
   }
 
   // ---- actions -------------------------------------------------------------
@@ -233,9 +263,10 @@ export function renderAskPanel(container, {
     lastQuestion = q; // remembered for the enable→re-ask flow (survives the clear below)
     // [Task E7] Pin the open note ONLY while its chip is active (shown & not
     // dismissed). Passed as a second arg only in that case, so the plain ask keeps
-    // its single-arg shape (onAsk(q)) for callers/tests that don't pin.
-    if (chipShown && chipNoteId) onAsk(q, { pinnedNoteId: chipNoteId });
-    else onAsk(q);
+    // its single-arg shape (onAsk(q)) for callers/tests that don't pin. [Task E9]
+    // lastAskOpts mirrors what was passed so the enable→re-ask preserves the pin.
+    if (chipShown && chipNoteId) { lastAskOpts = { pinnedNoteId: chipNoteId }; onAsk(q, lastAskOpts); }
+    else { lastAskOpts = undefined; onAsk(q); }
     // [Task E6] Chat-style input: clear the box and keep focus so the user can type
     // the next question immediately (the asked text now lives in the thread bubble).
     input.value = '';
@@ -527,7 +558,11 @@ export function renderAskPanel(container, {
       // LanguageModel.create(), which needs this click's user activation to permit the
       // model download. Any await before it would spend the gesture and Chrome would
       // refuse the download. So we call it synchronously with the remembered question.
-      onEnableModel(lastQuestion);
+      // [Task E9] Thread lastAskOpts through so the re-ask preserves the pin/pinAll (a
+      // summarize re-runs AS a summarize). Kept single-arg when there are no opts so a
+      // plain ask's call shape is unchanged.
+      if (lastAskOpts) onEnableModel(lastQuestion, lastAskOpts);
+      else onEnableModel(lastQuestion);
     });
 
     const dismiss = document.createElement('button');
@@ -632,6 +667,7 @@ export function renderAskPanel(container, {
     clearThread();
     input.value = '';
     lastQuestion = '';
+    lastAskOpts = undefined; // [Task E9] clear the remembered opts alongside the question
     setStatus('');
     input.focus();
   }
