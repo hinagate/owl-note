@@ -201,12 +201,16 @@ describe('ask-panel — state rendering', () => {
     expect(el.querySelectorAll('.ask-card')).toHaveLength(0);
   });
 
-  it('searching clears results and shows a searching status', () => {
+  // [Task E6] Thread contract (was single-shot wipe): a new `searching` no longer
+  // wipes the previous exchange — it appends a NEW exchange with a pending
+  // indicator and a searching status; the prior exchange's cards stay in the thread.
+  it('searching starts a new exchange (prior exchange preserved) and shows a searching status', () => {
     const { el, panel } = makePanel();
     panel.update(snippetsState([chunk()]));
     expect(el.querySelectorAll('.ask-card')).toHaveLength(1);
     panel.update({ kind: 'searching', question: 'q' });
-    expect(el.querySelectorAll('.ask-card')).toHaveLength(0);
+    expect(el.querySelectorAll('.ask-card')).toHaveLength(1); // prior exchange preserved (thread)
+    expect(el.querySelector('.ask-thinking')).not.toBeNull();  // new exchange's pending indicator
     expect(el.querySelector('.ask-status').textContent.toLowerCase()).toContain('searching');
   });
 
@@ -462,6 +466,136 @@ describe('ask-panel — related notes section', () => {
     expect(row.querySelector('.ask-related-title').textContent).toBe('<b>Bold</b> title');
     expect(row.querySelector('.ask-related-snippet').textContent).toContain('<img');
     expect(window.__pwnedRelated).toBeUndefined();
+  });
+});
+
+// [Task E6] Chat-thread panel: each ask appends an exchange (question bubble +
+// a pending indicator that resolves into the answer), previous exchanges stay
+// live in the DOM, the input clears + keeps focus, Enter is IME-safe, and a
+// "New chat" button resets the thread.
+describe('ask-panel — chat thread (E6)', () => {
+  it('keeps prior exchanges visible AND clickable as new asks are appended (newest last)', () => {
+    const { el, panel, onCitation } = makePanel();
+    panel.open();
+
+    // Ask 1: searching -> generating -> answered (with a citation).
+    panel.update({ kind: 'searching', question: 'q1' });
+    panel.update({ kind: 'generating', question: 'q1', chunks: [] });
+    panel.update({
+      kind: 'answered', question: 'q1', answer: 'answer one',
+      citations: [chunk({ id: 'c1::0', noteId: 'note1', noteTitle: 'Cited One' })],
+      chunks: [chunk({ id: 'c1::0', noteId: 'note1', noteTitle: 'Cited One' })],
+      grounded: true, usedModel: true,
+    });
+
+    // Ask 2: a fresh exchange — does NOT wipe the first.
+    panel.update({ kind: 'searching', question: 'q2' });
+    panel.update({ kind: 'generating', question: 'q2', chunks: [] });
+    panel.update({
+      kind: 'answered', question: 'q2', answer: 'answer two',
+      citations: [], chunks: [chunk({ id: 'r2::0', noteId: 'note2', noteTitle: 'Related Two' })],
+      grounded: true, usedModel: true,
+    });
+
+    // Both answers present, oldest first / newest last.
+    const answers = el.querySelectorAll('.ask-answer');
+    expect(answers).toHaveLength(2);
+    expect(answers[0].textContent).toContain('answer one');
+    expect(answers[1].textContent).toContain('answer two');
+    expect(el.querySelectorAll('.ask-exchange')).toHaveLength(2);
+    // Both question bubbles present, in order.
+    expect([...el.querySelectorAll('.ask-q')].map((q) => q.textContent)).toEqual(['q1', 'q2']);
+
+    // The FIRST exchange's citation is still LIVE after the 2nd answer rendered —
+    // the closure over noteId survives the append (no rewiring).
+    const firstExchange = el.querySelectorAll('.ask-exchange')[0];
+    firstExchange.querySelector('.ask-card').click();
+    expect(onCitation).toHaveBeenCalledWith('note1');
+  });
+
+  it('clears the input and keeps focus after firing an ask', () => {
+    const { el, panel, onAsk } = makePanel();
+    panel.open();
+    const input = el.querySelector('.ask-input');
+    input.value = 'what is a pod';
+    el.querySelector('.ask-submit').click();
+    expect(onAsk).toHaveBeenCalledWith('what is a pod');
+    expect(input.value).toBe('');                       // cleared for the next question
+    expect(document.activeElement).toBe(input);         // ...focus kept for a follow-up
+  });
+
+  it('does NOT submit an Enter fired mid-IME-composition (CJK), but a normal Enter submits', () => {
+    const { el, panel, onAsk } = makePanel();
+    panel.open();
+    const input = el.querySelector('.ask-input');
+    input.value = '中文问题';
+    // Enter confirming an IME candidate — must NOT fire the ask.
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true }));
+    expect(onAsk).not.toHaveBeenCalled();
+    // Legacy IME signal (keyCode 229) — also must NOT fire.
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 229, bubbles: true }));
+    expect(onAsk).not.toHaveBeenCalled();
+    // A normal Enter (composition finished) DOES submit.
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(onAsk).toHaveBeenCalledWith('中文问题');
+    expect(onAsk).toHaveBeenCalledTimes(1);
+  });
+
+  it('New chat empties the thread + input, keeps focus, and lets a later ask start fresh', () => {
+    const { el, panel } = makePanel();
+    panel.open();
+    panel.update({ kind: 'searching', question: 'first q' });
+    panel.update({
+      kind: 'answered', question: 'first q', answer: 'first answer',
+      citations: [], chunks: [], grounded: true, usedModel: true,
+    });
+    expect(el.querySelector('.ask-answer')).not.toBeNull();
+
+    const input = el.querySelector('.ask-input');
+    input.value = 'typed but not sent';
+    el.querySelector('.ask-newchat').click();
+
+    expect(el.querySelector('.ask-answer')).toBeNull();          // thread wiped
+    expect(el.querySelectorAll('.ask-exchange')).toHaveLength(0);
+    expect(input.value).toBe('');                                // input wiped
+    expect(document.activeElement).toBe(input);                  // focus kept
+
+    // A subsequent ask starts a brand-new exchange.
+    panel.update({ kind: 'searching', question: 'second q' });
+    expect(el.querySelectorAll('.ask-exchange')).toHaveLength(1);
+  });
+
+  it('New chat resets lastQuestion so a later enable→re-ask cannot resurrect it', () => {
+    const { el, panel, onEnableModel } = makePanel();
+    panel.open();
+    el.querySelector('.ask-input').value = 'old question';
+    el.querySelector('.ask-submit').click();   // remembers lastQuestion = 'old question'
+    el.querySelector('.ask-newchat').click();  // ...which New chat must reset to ''
+
+    panel.update(snippetsState([chunk()], 'model-downloadable'));
+    el.querySelector('.ask-optin-enable').click();
+    expect(onEnableModel).toHaveBeenCalledWith(''); // not 'old question'
+  });
+
+  it('a superseding ask removes the prior exchange pending indicator (no orphan Thinking…)', () => {
+    const { el, panel } = makePanel();
+    panel.open();
+    panel.update({ kind: 'searching', question: 'q1' }); // exchange A, pending
+    panel.update({ kind: 'searching', question: 'q2' }); // supersedes A before it resolved
+    // Only ONE pending indicator (q2's); q1's stale indicator was removed.
+    expect(el.querySelectorAll('.ask-thinking')).toHaveLength(1);
+    // The asked question bubbles may both remain.
+    expect([...el.querySelectorAll('.ask-q')].map((q) => q.textContent)).toEqual(['q1', 'q2']);
+  });
+
+  it('an aborted error removes the pending indicator without any scary error copy', () => {
+    const { el, panel } = makePanel();
+    panel.open();
+    panel.update({ kind: 'searching', question: 'q1' });
+    expect(el.querySelector('.ask-thinking')).not.toBeNull();
+    panel.update({ kind: 'error', code: 'aborted', message: 'AbortError', chunks: [] });
+    expect(el.querySelector('.ask-thinking')).toBeNull();   // pending indicator gone
+    expect(el.textContent.toLowerCase()).not.toMatch(/something went wrong|ran into a problem|rejected|couldn.?t reach/);
   });
 });
 
