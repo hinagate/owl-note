@@ -145,4 +145,72 @@ describe('ask index lifecycle', () => {
     await app.rebuildAskIndex();
     expect(app.getAskIndex().stats().notes).toBe(2);
   });
+
+  it('restore-from-Trash reappears in the index (real onMoved event)', async () => {
+    const { ensureTrash, trashNotes, restoreNotes } = await import('../src/lib/trash.js');
+    const root = await bm.ensureRoot();
+    const { note, bookmarkId } = await seedNote(root, { id: 'rs', title: 'Restorable', body: 'a phoenix rises from ashes' });
+    await app.initUI(root);
+    await app.rebuildAskIndex();
+    const idx = app.getAskIndex();
+    expect(idx.query('phoenix').some((h) => h.noteId === 'rs')).toBe(true);
+    // Trash: real trash.js path, moves the bookmark into Trash — fires onMoved only.
+    const trashId = await ensureTrash(root);
+    await trashNotes([{ id: note.id, bookmarkId, folderId: root }], trashId);
+    await settle();
+    expect(idx.query('phoenix').length).toBe(0); // gone once trashed
+    // Restore: real trash.js path, moves the bookmark back out of Trash — fires onMoved only.
+    await restoreNotes([{ id: note.id, bookmarkId, folderId: trashId }], root);
+    await settle();
+    expect(idx.query('phoenix').some((h) => h.noteId === 'rs')).toBe(true);
+    expect(idx.stats().notes).toBe(1);
+  });
+
+  it('cross-notebook move updates noteMeta(id).folderId (real onMoved event)', async () => {
+    const root = await bm.ensureRoot();
+    const notebookB = await bm.createNotebook(root, 'Notebook B');
+    const { bookmarkId } = await seedNote(root, { id: 'mv', title: 'Movable', body: 'a wandering caravan crosses the desert' });
+    await app.initUI(root);
+    await app.rebuildAskIndex();
+    const idx = app.getAskIndex();
+    expect(idx.noteMeta('mv').folderId).toBe(root);
+    // dropNote is the real drag-to-notebook app path; the note is bookmark-backed
+    // (not local-only) so it goes through bm.moveNote -> chrome.bookmarks.move -> onMoved.
+    await app.dropNote(bookmarkId, notebookB);
+    await settle();
+    expect(idx.noteMeta('mv').folderId).toBe(notebookB);
+  });
+
+  it('coalesces a burst of onMoved events into far fewer rebuilds than events', async () => {
+    const root = await bm.ensureRoot();
+    await app.initUI(root);
+    await settle(); // let the floating boot build settle before counting
+    const idx = app.getAskIndex();
+    const origBuild = idx.build;
+    let builds = 0;
+    idx.build = (...a) => { builds += 1; return origBuild(...a); };
+    try {
+      for (let i = 0; i < 6; i += 1) chrome.bookmarks.onMoved.dispatch('x', { parentId: root }); // synchronous burst
+      await settle();
+      expect(builds).toBeGreaterThanOrEqual(1);
+      expect(builds).toBeLessThanOrEqual(2); // 6 events collapse to one coalesced cycle (a running + a queued pass)
+    } finally {
+      idx.build = origBuild;
+    }
+  });
+
+  it('does not re-add a trashed note to the index via the onMoved it fires', async () => {
+    const { ensureTrash, trashNotes } = await import('../src/lib/trash.js');
+    const root = await bm.ensureRoot();
+    const { note, bookmarkId } = await seedNote(root, { id: 'gone', title: 'Gone', body: 'kryptonite is the only weakness' });
+    await app.initUI(root);
+    await app.rebuildAskIndex();
+    const idx = app.getAskIndex();
+    expect(idx.query('kryptonite').length).toBeGreaterThan(0);
+    const trashId = await ensureTrash(root);
+    await trashNotes([{ id: note.id, bookmarkId, folderId: root }], trashId); // fires onMoved, not onRemoved
+    await settle();
+    expect(idx.query('kryptonite').length).toBe(0);
+    expect(idx.noteMeta('gone')).toBeUndefined();
+  });
 });

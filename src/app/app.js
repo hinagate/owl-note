@@ -341,7 +341,10 @@ async function liveRefreshNoteList() {
       // Rebuild the ask index on the SAME coalesced cycle as the note-list refresh:
       // a burst of external chrome.bookmarks events (Drive sync, another tab) collapses
       // into ONE rebuild per cycle via the do/while queue below — never one per event.
-      await rebuildAskIndex();
+      // .catch: a rebuild failure here (e.g. a bad note) must not become a NEW
+      // unhandled rejection or abort this refresh cycle — best-effort, like
+      // bm.healNoteUrls above.
+      await rebuildAskIndex().catch((e) => console.warn('ask index rebuild failed', e));
     } while (liveRefreshQueued);
   } finally {
     liveRefreshing = false;
@@ -354,6 +357,15 @@ function wireLiveRefresh() {
   c.bookmarks.onCreated?.addListener(liveRefreshNoteList);
   c.bookmarks.onChanged?.addListener(liveRefreshNoteList);
   c.bookmarks.onRemoved?.addListener(liveRefreshNoteList);
+  // Restore-from-Trash and cross-notebook moves (in-app drag AND remote sync)
+  // fire ONLY onMoved, not onCreated/onChanged/onRemoved. Routing it through the
+  // same coalesced liveRefreshNoteList refreshes the note list AND rebuilds the
+  // index in one collapsed cycle — for an external move the list refresh is
+  // correct (the note really moved); for an in-app move the app already
+  // refreshed, so this is an idempotent extra pass (cheap: moves are infrequent
+  // and the cycle is coalesced). Safe even for a trash-move: rebuildAskIndex ->
+  // loadNotes already filters out Trash, so it can't resurrect a trashed note.
+  c.bookmarks.onMoved?.addListener(liveRefreshNoteList);
 }
 
 async function persistCollapsed() {
