@@ -53,14 +53,20 @@ export function createEmbedClient({
   }
 
   function spawn() {
-    worker = createWorker(workerUrl);
-    worker.onmessage = (e) => handleMessage(e.data);
     // A worker-level error (uncaught throw / load failure) can't be tied to one
-    // call, so fail every in-flight request rather than hang them forever.
+    // call, so fail every in-flight request rather than hang them forever — and
+    // [V2-review fix] discard the worker + ready state so the NEXT call respawns
+    // instead of posting into a dead worker whose replies will never come (that
+    // was an indefinite hang). The dead worker is terminated best-effort.
+    const w = createWorker(workerUrl);
+    worker = w;
+    worker.onmessage = (e) => handleMessage(e.data);
     worker.onerror = (e) => {
       const err = new Error((e && e.message) || 'embed worker crashed');
       err.code = 'WORKER_ERROR';
       rejectAll(err);
+      try { w.terminate(); } catch { /* already dead */ }
+      if (worker === w) { worker = null; ready = false; readyPromise = null; }
     };
     return worker;
   }

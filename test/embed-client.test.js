@@ -155,6 +155,27 @@ describe('createEmbedClient', () => {
     });
   });
 
+  // [V2-review fix] a worker-level crash (script-load/CSP failure) must not leave
+  // the client posting into a dead worker forever — the next call respawns.
+  describe('worker crash recovery', () => {
+    it('crash rejects in-flight calls, terminates the dead worker, and the next call respawns', async () => {
+      const client = createEmbedClient({ createWorker: factory });
+      const inflight = client.ensureReady();
+      const w1 = FakeWorker.instances[0];
+
+      w1.onerror({ message: 'failed to load embed-worker.js' });
+      await expect(inflight).rejects.toMatchObject({ code: 'WORKER_ERROR' });
+      expect(w1.terminated).toBe(true);
+
+      // Before the fix this posted into the dead worker and hung forever.
+      const retry = client.ensureReady();
+      expect(FakeWorker.instances).toHaveLength(2); // a fresh worker was spawned
+      FakeWorker.instances[1].replyTo(0, { ok: true });
+      await retry;
+      expect(client.stats()).toEqual({ spawned: true, ready: true });
+    });
+  });
+
   describe('dispose', () => {
     it('terminates the worker, rejects in-flight calls, and rejects calls made after dispose', async () => {
       const client = createEmbedClient({ createWorker: factory });
