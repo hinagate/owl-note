@@ -56,6 +56,14 @@ await build({
 const ortWasm = 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.wasm';
 if (existsSync(ortWasm)) cpSync(ortWasm, 'dist/ort-wasm-simd-threaded.asyncify.wasm');
 else throw new Error(`Missing ORT WASM artifact: ${ortWasm}`);
+// The .wasm alone is NOT enough: ORT's wasm backend dynamically imports this
+// companion .mjs loader from wasmPaths at runtime. Shipping only the .wasm dies
+// with "no available backend found … Failed to fetch dynamically imported module:
+// …/ort-wasm-simd-threaded.asyncify.mjs" — caught by the live V2 smoke (weights
+// downloaded fine, then ORT couldn't bootstrap). Both artifacts ship together.
+const ortMjs = 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.mjs';
+if (existsSync(ortMjs)) cpSync(ortMjs, 'dist/ort-wasm-simd-threaded.asyncify.mjs');
+else throw new Error(`Missing ORT WASM loader: ${ortMjs}`);
 
 cpSync('src/app/app.html', 'dist/app.html');
 cpSync('src/app/app.css', 'dist/app.css');
