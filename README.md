@@ -35,17 +35,17 @@ Note apps keep getting heavier and pricier — more features you never asked for
 
 ---
 
-## 🧠 New: Ask your notes — private AI, zero cloud
+## 🦉 New: Ask Owl — it only knows your OWN notes
 
-Ask a question in plain language and get an answer built **only from your own notes**, with citations that jump straight to the source. Powered by your browser's built-in AI (Gemini Nano on Chrome, Phi on Edge) and a retrieval engine that understands **meaning, not just keywords**.
+Ask Owl a question in plain language and it answers **from your notes and nothing else** — with citations that jump straight to the source. Powered by your browser's built-in AI (Gemini Nano on Chrome, Phi on Edge) and a retrieval engine that understands **meaning, not just keywords**.
 
-- **Chat with your knowledge** — a real conversation thread: ask, follow up, start a new chat. Works in your language, CJK included.
+- **Chat with your own wisdom** — a real conversation thread: ask Owl, follow up, start a new chat. Works in your language, CJK included.
 - **Answers with receipts** — every answer cites the notes it came from, and related notes are one click away, even across notebooks.
 - **Finds what you *mean*** — optional semantic search matches "what do I pay for housing?" to a note that only ever says "rent: $1,400". One click builds it: a one-time ~130 MB on-device model download, then it's yours forever. On our benchmark corpus, this lifted recall on paraphrased questions from 45% to 100% ([measured, not vibes](eval/RESULTS.md)).
 - **One-click note tools** — **Summarize** the open note, **Tidy** its Markdown formatting (deterministic — it never rewrites your words), or let the AI **suggest a title**.
 - **The privacy absolute** — the AI runs **on your device**. Your questions and notes are never sent to any server: not ours (we don't run one), not Google's, not anyone's. Once the models are downloaded, everything — search, answers, summaries — works **fully offline**.
 
-*AI answers need a browser with built-in AI (recent Chrome/Edge on supported hardware). Everywhere else, Ask still gives you fast excerpt search over every note.*
+*AI answers need a browser with built-in AI (recent Chrome/Edge on supported hardware). Everywhere else, Ask Owl still gives you fast, meaning-aware excerpt search over every note.*
 
 ---
 
@@ -58,7 +58,7 @@ Ask a question in plain language and get an answer built **only from your own no
 - **Import & export, no lock-in** — bring in Word (`.docx`), Evernote (`.enex`), and Markdown; export everything to a zip of plain `.md` files anytime.
 - **Bulk actions, with a safety net** — multi-select like files (Ctrl/Cmd-click, Shift+↑/↓) and a **Trash** you can restore from.
 - **Nested notebooks** — organize notes into notebooks and sub-notebooks in a collapsible tree, drag to re-nest, and a breadcrumb always shows which notebook the open note lives in.
-- **Ask your notes** — on-device AI Q&A with citations, plus one-click Summarize / Tidy / title suggestions (see above). Even the AI never phones home.
+- **Ask Owl** — on-device AI Q&A that only knows your OWN notes, with citations, plus one-click Summarize / Tidy / title suggestions (see above). Even the AI never phones home.
 - **Private by design** — no backend, no telemetry; we run no server and never see your notes. Minimal permissions, built on Manifest V3. ([Full privacy policy](PRIVACY.md))
 - **Attach images & files** — paste or drop in images, or attach any file (PDF, Word, zip…) right inside a note.
 - **Optional Google Drive sync** — flip one toggle to also sync your attachments *and* any note too large to fit in a bookmark through **your own** Google Drive, so nothing stays stuck on a single device. Off by default — we still run no server and never see your notes.
