@@ -663,6 +663,38 @@ describe('ask-panel — current-note chip (E7)', () => {
     expect(el.querySelector('.ask-chip')).toBeNull();
   });
 
+  // The host calls refreshChip() from renderCurrentEditor so the chip FOLLOWS the
+  // open note live (note-list clicks, citations) — not just at drawer-open/ask time.
+  it('refreshChip() makes the chip follow the currently-open note live', () => {
+    let note = { id: 'a', title: 'First note' };
+    const { el, panel } = makePanel({ getCurrentNote: () => note });
+    panel.open();
+    expect(el.querySelector('.ask-chip-title').textContent).toBe('First note');
+
+    note = { id: 'b', title: 'Second note' }; // user opened another note
+    panel.refreshChip();
+    expect(el.querySelector('.ask-chip-title').textContent).toBe('Second note');
+
+    note = null; // note closed/deleted
+    panel.refreshChip();
+    expect(el.querySelector('.ask-chip')).toBeNull();
+  });
+
+  it('a dismissed chip stays dismissed across same-note refreshes but returns on a note change', () => {
+    let note = { id: 'a', title: 'First note' };
+    const { el, panel } = makePanel({ getCurrentNote: () => note });
+    panel.open();
+    el.querySelector('.ask-chip-dismiss').click();
+    expect(el.querySelector('.ask-chip')).toBeNull();
+
+    panel.refreshChip(); // same note — e.g. an editor re-render/autosave
+    expect(el.querySelector('.ask-chip')).toBeNull(); // dismissal survives
+
+    note = { id: 'b', title: 'Second note' };
+    panel.refreshChip(); // different note — dismissal resets
+    expect(el.querySelector('.ask-chip-title').textContent).toBe('Second note');
+  });
+
   it('shows no chip when getCurrentNote is not provided (default → null)', () => {
     const { el, panel } = makePanel(); // no getCurrentNote in the callbacks
     panel.open();

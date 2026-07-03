@@ -706,5 +706,9 @@ export function renderAskPanel(container, {
     scrollToNewest();
   }
 
-  return { update, open, close, destroy };
+  // refreshChip is exposed so the HOST can keep the context chip following the
+  // currently-open note live (app.js calls it from renderCurrentEditor — the one
+  // choke point every note open/close passes through). Per-note dismissal survives
+  // same-note refreshes, so calling this often is safe.
+  return { update, open, close, destroy, refreshChip };
 }

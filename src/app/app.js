@@ -645,6 +645,10 @@ function renderCurrentEditor(opts = {}) {
       return title;
     },
   });
+  // Every note open/close/switch funnels through this function, so this one call
+  // keeps the Ask drawer's context chip following the open note live (not just at
+  // drawer-open/ask time). Safe when the panel doesn't exist (test harnesses).
+  askPanel?.refreshChip?.();
 }
 
 async function deleteCurrentNote() {
