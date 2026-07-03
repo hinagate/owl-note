@@ -34,6 +34,10 @@ import { suggestTitle } from '../lib/providers/title.js';
 import { tidyMarkdown } from '../lib/tidy-markdown.js';
 import { renderAskPanel } from './ask-panel.js';
 import { builtinAskActions } from './ask-actions.js';
+// [Task E18] The first-run Welcome note content + its fixed id. Single source: this
+// module both creates the note (below) and gates the E17 sample offer's "only-welcome"
+// case on WELCOME_NOTE_ID, so no id string is duplicated across the two features.
+import { WELCOME_NOTE_ID, WELCOME_NOTE_TITLE, WELCOME_NOTE_BODY } from './welcome-note.js';
 // [Task E17] The bundled demo corpus (M6), the SINGLE source for the first-run
 // sample-notes offer. esbuild inlines this JSON natively at build time (and Vite does
 // the same under vitest), so there is no hand-copied duplicate to drift.
@@ -725,13 +729,75 @@ async function maybeOfferSamples() {
   // no notes AND no local-only backups, exactly what loadNotes(rootId) reports, since
   // ui.notes for the root folder is loadNotes(rootId) ordered. Guarded fallback to a
   // direct read in case that invariant ever changes.
+  // [Task E18] Widened gate: offer when the corpus is empty OR holds ONLY the first-run
+  // Welcome note. The Welcome note (created earlier in this same initUI) would otherwise
+  // suppress the offer forever, but a lone welcome note is still a "nothing of your own to
+  // ask about yet" state — so the demo offer should still show. WELCOME_NOTE_ID is the
+  // single source shared with welcome-note.js (no string duplication).
+  let showable;
+  try {
+    const notes = ui.activeFolder === ui.rootId
+      ? (ui.notes || []).filter((n) => !n.draft)
+      : await loadNotes(ui.rootId);
+    showable = notes.length === 0
+      || (notes.length === 1 && notes[0].id === WELCOME_NOTE_ID);
+  } catch { return; } // can't confirm the corpus state — don't offer
+  if (showable) showSampleOffer();
+}
+
+// --- [Task E18] First-run Welcome note [onboarding] ------------------------------
+// A brand-new install lands on a blank editor because the open-latest-note boot flow has
+// no note to open. Fix: on the FIRST run (empty corpus + owl:welcomed unset) create ONE
+// ordinary Welcome note via the REAL save path, so the landing always shows content. The
+// flag is checked BEFORE emptiness, so deleting the note never resurrects it; an existing
+// user (any notes) silently latches the flag and gets no surprise note.
+const WELCOMED_KEY = 'owl:welcomed'; // once-ever latch (persisted): first run has been handled
+
+// Test seam (mirrors __setSemanticFactoriesForTests): the failure test swaps in a save
+// that throws to prove a creation hiccup never blocks boot or leaks an unhandled rejection.
+// Production callers never touch this — the default IS the real saveNote.
+let welcomeSaveImpl = saveNote;
+export function __setWelcomeSaveForTests(fn) { welcomeSaveImpl = typeof fn === 'function' ? fn : saveNote; }
+
+// Create the first-run Welcome note when (and only when) this install has never been
+// welcomed AND the corpus is empty. Runs inside initUI — AFTER refreshPanes (so the
+// emptiness probe can reuse ui.notes, the same source the sample offer uses) and BEFORE
+// the open-latest-note flow (so the editor lands on the new note). Gated on the Ask drawer
+// being mounted (#ask-panel) for the same reason the sample offer is: the Welcome note is
+// a full-app onboarding experience (it points at Ask Owl and the sample offer), so it
+// stays inert in a bare harness/embedding without one — and app.html always mounts it.
+// Fully guarded: it must never throw into boot.
+async function maybeCreateWelcomeNote() {
+  if (typeof document === 'undefined' || !document.getElementById('ask-panel')) return;
+  let welcomed;
+  try { welcomed = !!(await chrome.storage.local.get(WELCOMED_KEY))[WELCOMED_KEY]; }
+  catch { return; } // storage unreadable — don't risk a duplicate; retried next boot
+  if (welcomed) return; // first run already handled — never recreate (survives a delete)
+  // Emptiness probe — the SAME source the sample offer uses. At this point activeFolder is
+  // still rootId, so ui.notes IS the whole corpus; guarded fallback to a direct read.
   let empty;
   try {
     empty = ui.activeFolder === ui.rootId
       ? !(ui.notes || []).some((n) => !n.draft)
       : (await loadNotes(ui.rootId)).length === 0;
-  } catch { return; } // can't confirm the corpus is empty — don't offer
-  if (empty) showSampleOffer();
+  } catch { return; } // can't confirm emptiness — don't create
+  // Existing user (any notes): latch the flag WITHOUT creating anything — no surprise note
+  // now, and a later delete-everything can't resurrect one.
+  if (!empty) { try { await chrome.storage.local.set({ [WELCOMED_KEY]: true }); } catch { /* best-effort */ } return; }
+  // Empty + unflagged: create the Welcome note through the REAL save path so it is an
+  // ordinary note (syncs, lists, deletes, indexes like any other — no special storage).
+  const note = { id: WELCOME_NOTE_ID, title: WELCOME_NOTE_TITLE, body: WELCOME_NOTE_BODY, attachments: [], version: 1, hash: contentHash(WELCOME_NOTE_BODY) };
+  try {
+    await welcomeSaveImpl(note, ui.rootId, undefined);
+    await refreshPanes(); // repopulate ui.notes so the open-latest-note flow can land on it
+    // Latch ONLY after a successful create. If this write fails, the next (now non-empty)
+    // boot hits the existing-user branch above and latches then — still no duplicate.
+    try { await chrome.storage.local.set({ [WELCOMED_KEY]: true }); } catch { /* best-effort */ }
+  } catch (e) {
+    // Storage/bookmark hiccup — leave the flag UNSET (retried next boot) and let boot
+    // proceed exactly as before (a blank editor this once). Never a blocked boot or leak.
+    console.warn('welcome note creation failed', e);
+  }
 }
 
 export async function initUI(rootId) {
@@ -751,6 +817,10 @@ export async function initUI(rootId) {
   await ensureAskUI(); // construct the Ask controller + drawer before the toolbar renders (needs askPanel)
   await initPanes();
   await refreshPanes();
+  // [Task E18] First-run onboarding: create the Welcome note on a brand-new, empty install
+  // so the open-latest-note flow below has content to land on instead of a blank editor.
+  // Self-gating (flag + emptiness) and fully guarded, so it never blocks or breaks boot.
+  await maybeCreateWelcomeNote();
   renderCurrentEditor();
   await openByHash();
   if (!ui.current) await openLatestNote(); // no specific note in the URL hash — default to the latest

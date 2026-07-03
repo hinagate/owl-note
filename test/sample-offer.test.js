@@ -13,6 +13,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { installFakeChrome } from './helpers/fake-chrome.js';
 import { contentHash } from '../src/lib/note.js';
+// [Task E18] A fresh empty boot now also auto-creates the first-run Welcome note, so it
+// coexists with the sample offer (the offer's gate was widened to fire on an only-welcome
+// corpus). Tests that count the corpus/index account for that one extra ordinary note.
+import { WELCOME_NOTE_ID } from '../src/app/welcome-note.js';
 
 // The on-disk demo corpus — the SINGLE source of truth the offer must seed from.
 // Read straight off disk (vitest's cwd is the repo root) so this test asserts the
@@ -111,9 +115,10 @@ describe('first-run sample offer — [Load samples]', () => {
     const seededIds = all.filter((n) => n.folderId === samplesId).map((n) => n.id).sort();
     expect(seededIds).toEqual(DEMO_IDS);
 
-    // ...the lexical index sees them...
+    // ...the lexical index sees them (+1 for the first-run Welcome note, now an ordinary
+    // indexed note that coexists with the seeded samples)...
     await app.rebuildAskIndex();
-    expect(app.getAskIndex().stats().notes).toBe(demoOnDisk.notes.length);
+    expect(app.getAskIndex().stats().notes).toBe(demoOnDisk.notes.length + 1);
 
     // ...the flag is latched and the offer is gone.
     expect((await chrome.storage.local.get('owl:sampleOffered'))['owl:sampleOffered']).toBe(true);
@@ -163,7 +168,11 @@ describe('first-run sample offer — [Start empty]', () => {
 
     expect((await chrome.storage.local.get('owl:sampleOffered'))['owl:sampleOffered']).toBe(true);
     expect(document.getElementById('sample-banner')).toBeNull();
-    expect(await app.loadNotes(root)).toHaveLength(0); // nothing created
+    // [Task E18] "Start empty" creates no SAMPLE notes — the only note is the first-run
+    // Welcome note (a separate feature), and no Samples notebook is created.
+    const remaining = await app.loadNotes(root);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].id).toBe(WELCOME_NOTE_ID);
     expect(await samplesFolderId(root)).toBeNull();    // no Samples notebook
 
     // Re-init: corpus still empty, but the flag suppresses the offer forever.
