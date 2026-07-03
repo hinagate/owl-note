@@ -5,7 +5,7 @@
 ### Your notes are browser bookmarks. Your AI runs on your device.
 
 **Free, private Markdown notes — with code & math — synced by your own browser account.**
-Now with a built-in AI that answers questions **from your own notes**, entirely on-device.
+Now with **Ask Owl**: answers from your own notes, powered by **Google Gemini Nano** / **Microsoft Phi** — entirely on-device.
 No server. No account. No subscription. No lock-in. A lightweight, no-bloat alternative to Evernote.
 
 [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/hjkbpgkmiaeojfhkpnhmokgjipenhcfl?label=Chrome%20Web%20Store&logo=googlechrome&logoColor=white&color=2dbe60)](https://chromewebstore.google.com/detail/hjkbpgkmiaeojfhkpnhmokgjipenhcfl)
@@ -37,7 +37,7 @@ Note apps keep getting heavier and pricier — more features you never asked for
 
 ## 🦉 New: Ask Owl — it only knows your OWN notes
 
-Ask Owl a question in plain language and it answers **from your notes and nothing else** — with citations that jump straight to the source. Powered by your browser's built-in AI (Gemini Nano on Chrome, Phi on Edge) and a retrieval engine that understands **meaning, not just keywords**.
+Ask Owl a question in plain language and it answers **from your notes and nothing else** — with citations that jump straight to the source. Under the hood: **Google Gemini Nano** (Chrome) or **Microsoft Phi** (Edge) — the same compact frontier models your browser ships built-in — plus a retrieval engine that understands **meaning, not just keywords**. All of it runs on your device.
 
 - **Chat with your own wisdom** — a real conversation thread: ask Owl, follow up, start a new chat. Works in your language, CJK included.
 - **Answers with receipts** — every answer cites the notes it came from, and related notes are one click away, even across notebooks.
@@ -100,7 +100,7 @@ That’s why it’s so lightweight and private — we’re not building another 
 ## Good to know
 
 - By default, notes sync as bookmarks; a note too large for that (e.g. with big images or lots of text) stays on the current device. Turn on **Google Drive sync** (optional) and those sync too, via your own Drive.
-- **AI features are strictly opt-in and on-device.** Answers use your browser's built-in model (a one-time browser-managed download, offered only when you click Enable). Semantic search is a separate one-time ~130 MB on-device model, downloaded only when you click Build. Neither ever sends your notes anywhere; both keep working offline afterwards.
+- **AI features are strictly opt-in and on-device.** Answers use your browser's built-in model — Google Gemini Nano on Chrome, Microsoft Phi on Edge (a one-time browser-managed download, offered only when you click Enable). Semantic search is a separate one-time ~130 MB on-device model, downloaded only when you click Build. Neither ever sends your notes anywhere; both keep working offline afterwards.
 - On devices without built-in browser AI, Ask runs in retrieval-only mode — still a great meaning-aware search.
 - Works on Chrome, Edge, and other Chromium browsers.
 
