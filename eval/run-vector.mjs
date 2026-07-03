@@ -35,10 +35,20 @@ import {
   summarize,
 } from './harness.mjs';
 
+// The RRF math is imported from the SHIPPED fusion module — the eval that tunes the
+// weights and the runtime that uses them share one implementation and cannot drift
+// (Task V3). fusion.js is a pure module (no DOM/chrome), so it imports cleanly here.
+import { rrfFuse, RRF_K } from '../src/lib/fusion.js';
+
 const K = 5; // final cut for recall@5 / MRR
 const FUSE_K = 8; // breadth of each rank list fed to RRF (matches the app's k=8)
-const RRF_K = 60; // Reciprocal Rank Fusion constant; k=60 is the Cormack et al. convention
 const TAG_ORDER = ['direct', 'paraphrase', 'cjk', 'injection', 'multi-note'];
+
+// [Task V3] --sweep mode: candidate vector weights for weighted RRF (w_lex fixed at
+// 1). e5 only — the model is already in the node HF cache from E15.
+const SWEEP = process.argv.includes('--sweep');
+const SWEEP_WEIGHTS = [1, 1.5, 2, 3, 4];
+const E5_LABEL = 'multilingual-e5-small';
 
 // Candidate models (plan §9). MiniLM is the English-centric default; e5-small is
 // the multilingual alternative — and the user's notes are CHINESE, so the cjk
@@ -97,23 +107,8 @@ function vectorRank(queryVec, chunks, chunkVecs) {
     .map((r) => r.chunk);
 }
 
-// Reciprocal Rank Fusion of two chunk-level rank lists. score(d) = Σ 1/(k+rank_i(d))
-// over the lists in which d appears (1-based ranks, k=60). Documents = chunks
-// (both input lists are chunk lists), so the fused top-5 is scored by noteTitle
-// exactly like the other two columns. Deterministic tie-break by chunk id.
-function rrfFuse(lists, k = RRF_K) {
-  const score = new Map();
-  const byId = new Map();
-  for (const list of lists) {
-    list.forEach((chunk, i) => {
-      byId.set(chunk.id, chunk);
-      score.set(chunk.id, (score.get(chunk.id) || 0) + 1 / (k + i + 1));
-    });
-  }
-  return [...score.entries()]
-    .sort((a, b) => (b[1] - a[1]) || (a[0] < b[0] ? -1 : 1))
-    .map(([id]) => byId.get(id));
-}
+// (Reciprocal Rank Fusion now lives in src/lib/fusion.js and is imported above, so
+// the eval and the shipped runtime fuse with the identical weighted-RRF math.)
 
 // Approximate on-disk download size of a cached model (sum of every file under
 // cacheDir/<owner>/<name>). Reported as "approximate download size".
@@ -172,8 +167,9 @@ async function runModel(model, { corpus, golden, index, chunks, answerable }) {
     const vecList = vectorRank(qv, chunks, chunkVecs);
     const vec = scoreHits(vecList, q, K);
 
-    // hybrid RRF(lexical top-8, vector top-8)
-    const fused = rrfFuse([lexList.slice(0, FUSE_K), vecList.slice(0, FUSE_K)]);
+    // hybrid RRF(lexical top-8, vector top-8) — E15 measured EQUAL weights [1, 1]
+    // (the --sweep mode below is what tunes w_vec); made explicit for the shared helper.
+    const fused = rrfFuse([lexList.slice(0, FUSE_K), vecList.slice(0, FUSE_K)], [1, 1], RRF_K);
     const hyb = scoreHits(fused, q, K);
 
     perQuestion.push({
@@ -260,6 +256,84 @@ function renderPerf(perf) {
 }
 
 // ---------------------------------------------------------------------------
+// [Task V3] Weight sweep. Embed the corpus + queries ONCE with e5, then fuse each
+// question's lexical top-8 + vector top-8 with weighted RRF for every candidate
+// w_vec (w_lex fixed at 1) and aggregate overall + per-tag recall@5 / MRR. Uses the
+// SHARED rrfFuse imported from src/lib/fusion.js so the chosen weight and the shipped
+// runtime cannot drift. Returns one row per weight.
+async function runSweep({ index, chunks, answerable }) {
+  const model = MODELS.find((m) => m.label === E5_LABEL);
+  process.stderr.write(`\n[sweep] loading e5 + embedding ${chunks.length} chunks + ${answerable.length} queries...\n`);
+  const extractor = await pipeline('feature-extraction', model.id, { dtype: 'q8' });
+  const embed = async (text) => (await extractor(text, { pooling: 'mean', normalize: true })).data;
+
+  const chunkVecs = [];
+  for (const c of chunks) chunkVecs.push(await embed(model.docPrefix + c.text));
+  const queryVecs = new Map();
+  for (const q of answerable) queryVecs.set(q.id, await embed(model.queryPrefix + q.question));
+
+  // The lexical + vector rank lists are weight-INDEPENDENT, so build them once.
+  const lists = answerable.map((q) => ({
+    q,
+    tag: primaryTag(q),
+    lexList: index.query(q.question, FUSE_K),
+    vecList: vectorRank(queryVecs.get(q.id), chunks, chunkVecs).slice(0, FUSE_K),
+  }));
+
+  const rows = [];
+  for (const wVec of SWEEP_WEIGHTS) {
+    const scored = lists.map(({ q, tag, lexList, vecList }) => {
+      // Lexical list first (weight 1), vector list second (weight w_vec) — the exact
+      // order and helper the runtime uses.
+      const fused = rrfFuse([lexList, vecList], [1, wVec], RRF_K);
+      return { tag, ...scoreHits(fused, q, K) };
+    });
+    const byTag = (tag) => scored.filter((r) => r.tag === tag);
+    rows.push({
+      wVec,
+      overall: summarize(scored),
+      byTag: Object.fromEntries(TAG_ORDER.map((t) => [t, summarize(byTag(t))])),
+    });
+  }
+  return rows;
+}
+
+// Selection rule (Task V3 brief): maximize paraphrase R@5, then paraphrase MRR,
+// among the weights that satisfy cjk R@5 ≥ 0.9, overall R@5 ≥ 0.821 (baseline), and
+// direct R@5 = 1.000 (no regression). Tie-break: smallest w_vec — the least
+// departure from equal-weight fusion, so the lexical list keeps maximal influence on
+// the tags embeddings are weaker at. Float comparisons use a small epsilon.
+function selectWeight(rows) {
+  const EPS = 1e-9;
+  const eligible = rows.filter((r) =>
+    r.byTag.cjk.recall >= 0.9 - EPS
+    && r.overall.recall >= 0.821 - EPS
+    && r.byTag.direct.recall >= 1 - EPS);
+  const ranked = [...eligible].sort((a, b) =>
+    (b.byTag.paraphrase.recall - a.byTag.paraphrase.recall)
+    || (b.byTag.paraphrase.mrr - a.byTag.paraphrase.mrr)
+    || (a.wVec - b.wVec));
+  return { chosen: ranked[0], eligible };
+}
+
+function renderSweep(rows, chosen) {
+  const out = [];
+  out.push('  w_vec |  overall        |  direct  | paraphrase      |   cjk    | injection| multi-note');
+  out.push('        | R@5     MRR     |  R@5     | R@5     MRR     |  R@5     |  R@5     |  R@5    MRR');
+  out.push('  ----- | ------  ------  |  ------  | ------  ------  |  ------  |  ------  | ------  ------');
+  for (const r of rows) {
+    const t = r.byTag;
+    const mark = chosen && r.wVec === chosen.wVec ? ' <= chosen' : '';
+    out.push(
+      `  ${String(r.wVec).padEnd(5)} | ${f3(r.overall.recall)}   ${f3(r.overall.mrr)}  |  `
+      + `${f3(t.direct.recall)}  | ${f3(t.paraphrase.recall)}   ${f3(t.paraphrase.mrr)}  |  `
+      + `${f3(t.cjk.recall)}  |  ${f3(t.injection.recall)}  | ${f3(t['multi-note'].recall)}   ${f3(t['multi-note'].mrr)}${mark}`,
+    );
+  }
+  return out.join('\n');
+}
+
+// ---------------------------------------------------------------------------
 async function main() {
   // Quiet the transformers.js progress spam so the tables are readable.
   env.allowLocalModels = false;
@@ -269,6 +343,28 @@ async function main() {
   const index = buildIndex(corpus);
   const chunks = index.allChunks(); // { id, noteId, noteTitle, heading, text, raw }
   const answerable = golden.questions.filter((q) => q.answerable);
+
+  // [Task V3] --sweep: tune the vector weight for weighted RRF, then stop.
+  if (SWEEP) {
+    const rows = await runSweep({ index, chunks, answerable });
+    const { chosen, eligible } = selectWeight(rows);
+    const block = [];
+    block.push('M9 weighted-RRF weight sweep (Task V3) — multilingual-e5-small, q8');
+    block.push('');
+    block.push(`  corpus: ${index.stats().notes} notes / ${chunks.length} chunks   scored: ${answerable.length} answerable`);
+    block.push(`  weighted RRF: k=${RRF_K}, w_lex=1, w_vec ∈ {${SWEEP_WEIGHTS.join(', ')}}, lists top-${FUSE_K}, cut top-${K}`);
+    block.push('  selection: max paraphrase R@5 then MRR, s.t. cjk R@5 ≥ 0.9, overall ≥ 0.821, direct = 1.000');
+    block.push('');
+    block.push(renderSweep(rows, chosen));
+    block.push('');
+    block.push(`  eligible weights (pass all constraints): ${eligible.map((r) => r.wVec).join(', ') || '(none)'}`);
+    block.push(chosen
+      ? `  CHOSEN w_vec = ${chosen.wVec}  → paraphrase R@5 ${f3(chosen.byTag.paraphrase.recall)}, MRR ${f3(chosen.byTag.paraphrase.mrr)}; overall R@5 ${f3(chosen.overall.recall)}`
+      : '  CHOSEN: (none satisfied the constraints)');
+    block.push('');
+    process.stdout.write(block.join('\n') + '\n');
+    return;
+  }
 
   const out = [];
   out.push('M9 semantic-retrieval spike (Task E15) — lexical vs vector-only vs hybrid RRF');

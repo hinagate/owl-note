@@ -295,3 +295,54 @@ proceed/drop decision (including MiniLM-vs-e5 selection) is left to the controll
 index is deterministic, so a single run is authoritative (the two retrieval-metric
 tables were verified byte-identical across two runs). No §6 variance loop is needed
 for this spike.
+
+## Weighted-RRF weight sweep (M9 fusion tuning, Task V3)
+
+E15 found that with **equal** weights RRF *dragged* e5's paraphrase retrieval:
+hybrid paraphrase R@5 = 0.818 sat **below** vector-only's 1.000, because fusing a
+lexical list that is wrong for paraphrase injects wrong-note chunks. So the fusion
+weights are **tuned against this corpus, not guessed**. This sweep runs weighted RRF
+`score(d) = Σ w_list / (60 + rank_i(d))` with the vector list up-weighted, over the
+same 39 answerable questions, and feeds the chosen `w_vec` into
+`FUSION_WEIGHTS.vector` in `src/lib/fusion.js`. The eval and the shipped runtime
+import the **same** `rrfFuse` from `fusion.js`, so the tuned number and the code that
+uses it cannot drift.
+
+Regenerate with `node eval/run-vector.mjs --sweep` (e5 only; uses the cached model).
+
+| Field | Value |
+| --- | --- |
+| Model | `Xenova/multilingual-e5-small`, `dtype: 'q8'` |
+| Fusion | weighted RRF, `w_lex` = 1, `w_vec` ∈ {1, 1.5, 2, 3, 4}, k = 60, lists top-8, final cut top-5 |
+| Scored | 39 answerable golden questions (same corpus/golden as above) |
+| Selection rule | maximize **paraphrase R@5, then paraphrase MRR**, subject to **cjk R@5 ≥ 0.9**, **overall R@5 ≥ 0.821** (baseline), **direct R@5 = 1.000** (no regression). Tie-break: **smallest `w_vec`** — least departure from equal-weight fusion, so lexical keeps maximal influence on the tags embeddings are weaker at. |
+
+```
+  w_vec |  overall        |  direct  | paraphrase      |   cjk    | injection| multi-note
+        | R@5     MRR     |  R@5     | R@5     MRR     |  R@5     |  R@5     |  R@5    MRR
+  ----- | ------  ------  |  ------  | ------  ------  |  ------  |  ------  | ------  ------
+  1     | 0.949   0.880  |  1.000  | 0.818   0.576  |  1.000  |  1.000  | 1.000   1.000
+  1.5   | 1.000   0.907  |  1.000  | 1.000   0.670  |  1.000  |  1.000  | 1.000   1.000
+  2     | 1.000   0.909  |  1.000  | 1.000   0.677  |  1.000  |  1.000  | 1.000   1.000
+  3     | 1.000   0.926  |  1.000  | 1.000   0.738  |  1.000  |  1.000  | 1.000   1.000  <= chosen
+  4     | 1.000   0.926  |  1.000  | 1.000   0.738  |  1.000  |  1.000  | 1.000   1.000
+```
+
+**Chosen: `w_vec = 3`** (so `FUSION_WEIGHTS = { lexical: 1, vector: 3 }`).
+
+- All five weights satisfy the constraints (cjk R@5 = 1.000, overall R@5 ≥ 0.949,
+  direct R@5 = 1.000 throughout), so the constraints alone don't decide it.
+- **Paraphrase R@5** — the metric to maximize — jumps from 0.818 (`w_vec` = 1) to
+  1.000 for every `w_vec ≥ 1.5`, so the maximizers are {1.5, 2, 3, 4}.
+- Among those, **paraphrase MRR** is the secondary objective: 0.670 → 0.677 → **0.738**
+  → 0.738. It peaks at 0.738, reached first at `w_vec` = 3 (and unchanged at 4).
+- Tie-break (3 vs 4, identical rows): the **smaller** weight, `w_vec = 3` — it is the
+  least departure from equal-weight fusion, keeping the most lexical influence while
+  still fully closing the paraphrase gap.
+
+At `w_vec = 3` the fused table equals vector-only on R@5 everywhere (overall 1.000)
+and lifts paraphrase MRR to 0.738 vs equal-weight's 0.576 — i.e. it reverses the E15
+equal-weights drag while the lexical list (`w_lex` = 1) still contributes and remains
+the never-fail fallback. Recall@5 saturates at 1.000 on this 60-chunk corpus (see the
+Limitations above), so **MRR is the discriminating column** and is what separates the
+weights here; on a larger, messier note set the weights would separate further.

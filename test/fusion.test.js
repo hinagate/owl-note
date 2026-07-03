@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createAskIndex } from '../src/lib/ask-index.js';
-import { createFusion } from '../src/lib/fusion.js';
+import { createFusion, rrfFuse, FUSION_WEIGHTS, RRF_K } from '../src/lib/fusion.js';
 
 const note = (o) => ({ id: 'x', title: 'T', body: '', hash: 'h', ...o });
 
@@ -186,5 +186,186 @@ describe('createFusion — expand (neighbor enrichment)', () => {
     expect(neighborIds.length).toBe(2); // prev + next
     // Primary first, then its two real neighbors appended.
     expect(out.map((c) => c.id)).toEqual([primaries[0].id, ...neighborIds]);
+  });
+});
+
+// [Task V3] rrfFuse is the PURE weighted-RRF helper, EXPORTED so eval/run-vector.mjs
+// imports the identical math the runtime uses (they can't drift). Unit-tested here
+// directly so the shared contract is locked independently of createFusion.
+describe('rrfFuse — pure weighted Reciprocal Rank Fusion (shared with the eval)', () => {
+  const c = (id) => ({ id, noteId: id });
+
+  it('exports the eval-tuned weights and the RRF constant', () => {
+    expect(FUSION_WEIGHTS).toEqual({ lexical: 1, vector: 3 });
+    expect(RRF_K).toBe(60);
+  });
+
+  it('sums per-list weighted reciprocal ranks (weights [1,3], k=60)', () => {
+    const lex = [c('A'), c('C')]; // A rank1, C rank2
+    const vec = [c('B'), c('C')]; // B rank1, C rank2
+    const out = rrfFuse([lex, vec], [1, 3], 60);
+    // A: 1/61 ; B: 3/61 ; C: 1/62 + 3/62 = 4/62 → desc: C, B, A.
+    expect(out.map((x) => x.id)).toEqual(['C', 'B', 'A']);
+    expect(out[0].score).toBeCloseTo(4 / 62, 12);
+    expect(out[1].score).toBeCloseTo(3 / 61, 12);
+    expect(out[2].score).toBeCloseTo(1 / 61, 12);
+  });
+
+  it('defaults a missing weight to 1 and k to RRF_K, tie-breaking by id ascending', () => {
+    const out = rrfFuse([[c('B')], [c('A')]]); // equal weight 1, k=60 → A,B tie on score
+    expect(out.map((x) => x.id)).toEqual(['A', 'B']); // deterministic id-ascending tie-break
+    expect(out[0].score).toBeCloseTo(1 / (RRF_K + 1), 12);
+  });
+
+  it('dedupes by id (first-seen object wins) and returns copies carrying .score', () => {
+    const weak = { id: 'C', noteId: 'C', weak: true }; // lexical (first list)
+    const plain = { id: 'C', noteId: 'C' };            // vector (second list)
+    const out = rrfFuse([[weak], [plain]], [1, 3], 60);
+    expect(out.length).toBe(1);          // one distinct id
+    expect(out[0].weak).toBe(true);      // first-seen (lexical) object preserved
+    expect(out[0]).not.toBe(weak);       // a copy, not the input reference
+    expect(out[0].score).toBeCloseTo(1 / 61 + 3 / 61, 12);
+  });
+});
+
+// [Task V3] Hybrid retrieval: weighted RRF over the lexical list + a vector list,
+// with the lexical result as a never-fail fallback. FUSION_WEIGHTS = { lexical: 1,
+// vector: 3 } (tuned in eval/RESULTS.md's sweep). These use a REAL ask-index (so
+// query/chunkById are the shipped code) with a FAKE vector index + embedQuery, so the
+// two rank lists — and thus the hand-computed RRF math — are fully deterministic.
+describe('createFusion — hybrid (weighted RRF) retrieval', () => {
+  // A real index whose lexical query('widget') returns note A (title match → rank 1)
+  // then note C (body match → rank 2). Note B does NOT contain 'widget', so it is
+  // lexical-invisible yet still indexed (chunkById resolves it) — it reaches the
+  // result ONLY through the vector list.
+  function realIndexABC() {
+    const idx = createAskIndex();
+    idx.build([
+      note({ id: 'A', title: 'Widget Guide', body: 'alpha content here' }),
+      note({ id: 'C', title: 'Cee', body: 'a widget lives in this body' }),
+      note({ id: 'B', title: 'Bee', body: 'entirely unrelated material' }),
+    ]);
+    const id = {};
+    for (const ch of idx.allChunks()) id[ch.noteId] = ch.id;
+    return { idx, id };
+  }
+
+  const readyVector = (hits) => ({
+    stats: () => ({ notes: 3, chunks: 3, ready: true }),
+    query: () => hits,
+  });
+  const embedOK = async () => new Float32Array([1, 0, 0]);
+
+  it('orders results by hand-computed weighted RRF (A lex-only, B vec-only, C in both)', async () => {
+    const { idx, id } = realIndexABC();
+    // sanity: the lexical list really is [A, C].
+    expect(idx.query('widget', 8).map((ch) => ch.noteId)).toEqual(['A', 'C']);
+
+    const vector = readyVector([
+      { chunkId: id.B, noteId: 'B', score: 0.9 }, // vector rank 1
+      { chunkId: id.C, noteId: 'C', score: 0.8 }, // vector rank 2
+    ]);
+    const fusion = createFusion(idx, { vector, embedQuery: embedOK });
+
+    const out = await fusion.query('widget', 8);
+
+    // Hand math — weights [lexical 1, vector 3], k = 60, 1-based ranks:
+    //   A: lex r1          = 1/61          = 0.016393
+    //   B: vec r1          = 3/61          = 0.049180
+    //   C: lex r2 + vec r2 = 1/62 + 3/62   = 4/62 = 0.064516
+    // descending → C, B, A.
+    expect(out.map((ch) => ch.noteId)).toEqual(['C', 'B', 'A']);
+    expect(out[0].score).toBeCloseTo(4 / 62, 10);
+    expect(out[1].score).toBeCloseTo(3 / 61, 10);
+    expect(out[2].score).toBeCloseTo(1 / 61, 10);
+    // C is in BOTH lists but appears exactly once (deduped).
+    expect(out.filter((ch) => ch.noteId === 'C').length).toBe(1);
+  });
+
+  it('resolves vector-only chunks via chunkById and drops a stale id (no ghost chunk)', async () => {
+    const { idx, id } = realIndexABC();
+    const vector = readyVector([
+      { chunkId: 'ghost::404', noteId: 'GONE', score: 0.99 }, // NOT in the lexical index
+      { chunkId: id.A, noteId: 'A', score: 0.80 },
+    ]);
+    const fusion = createFusion(idx, { vector, embedQuery: embedOK });
+
+    const out = await fusion.query('widget', 8);
+    // The stale id never surfaces...
+    expect(out.map((ch) => ch.id)).not.toContain('ghost::404');
+    expect(out.every((ch) => ch.noteId !== 'GONE')).toBe(true);
+    // ...only the real chunks do (A from both lists, C from the lexical list).
+    expect(out.map((ch) => ch.noteId).sort()).toEqual(['A', 'C']);
+  });
+
+  it('falls back to the lexical result when embedQuery rejects — vector.query is never consulted', async () => {
+    const { idx } = realIndexABC();
+    let vectorQueried = 0;
+    const vector = {
+      stats: () => ({ notes: 3, chunks: 3, ready: true }),
+      query: () => { vectorQueried += 1; return []; },
+    };
+    const embedQuery = async () => { throw new Error('embedder unavailable'); };
+    const fusion = createFusion(idx, { vector, embedQuery });
+
+    const out = await fusion.query('widget', 8);
+    // Identical to a pure lexical query — an ask never fails because vectors hiccup.
+    expect(out).toEqual(idx.query('widget', 8));
+    // embedQuery rejected BEFORE vector.query could be reached.
+    expect(vectorQueried).toBe(0);
+  });
+
+  it('short-circuits to lexical when the vector index is not ready — embedQuery is never called', async () => {
+    const { idx } = realIndexABC();
+    let embedCalls = 0;
+    const embedQuery = async () => { embedCalls += 1; return new Float32Array([1]); };
+    const throwingQuery = () => { throw new Error('vector.query must not be called'); };
+
+    // Both not-ready signals: ready:false, and ready but chunks:0.
+    for (const stats of [{ notes: 0, chunks: 0, ready: false }, { notes: 3, chunks: 0, ready: true }]) {
+      const vector = { stats: () => stats, query: throwingQuery };
+      const fusion = createFusion(idx, { vector, embedQuery });
+      const out = await fusion.query('widget', 8);
+      expect(out).toEqual(idx.query('widget', 8));
+    }
+    expect(embedCalls).toBe(0);
+  });
+
+  it('preserves a lexical weak flag through fusion; vector-only chunks carry none', async () => {
+    const idx = createAskIndex();
+    idx.build([
+      note({ id: 'A', body: 'alpha lonely word' }),
+      note({ id: 'B', body: 'beta distinct material' }),
+    ]);
+    const id = {};
+    for (const ch of idx.allChunks()) id[ch.noteId] = ch.id;
+
+    // 'alpha zzznope' has no AND match (zzznope matches nothing) → OR retry → weak.
+    const weakLex = idx.query('alpha zzznope', 8);
+    expect(weakLex.length).toBe(1);
+    expect(weakLex[0].noteId).toBe('A');
+    expect(weakLex[0].weak).toBe(true);
+
+    const vector = readyVector([{ chunkId: id.B, noteId: 'B', score: 0.9 }]);
+    const fusion = createFusion(idx, { vector, embedQuery: embedOK });
+
+    const out = await fusion.query('alpha zzznope', 8);
+    const a = out.find((ch) => ch.noteId === 'A');
+    const b = out.find((ch) => ch.noteId === 'B');
+    expect(a.weak).toBe(true);       // lexical weak flag survives fusion
+    expect(b.weak).toBeUndefined();  // vector-only chunk was never weak-tagged
+  });
+
+  it('respects k, cutting the fused list to the requested size', async () => {
+    const { idx, id } = realIndexABC();
+    const vector = readyVector([
+      { chunkId: id.B, noteId: 'B', score: 0.9 },
+      { chunkId: id.C, noteId: 'C', score: 0.8 },
+    ]);
+    const fusion = createFusion(idx, { vector, embedQuery: embedOK });
+
+    expect((await fusion.query('widget', 8)).length).toBe(3); // C, B, A
+    const top2 = await fusion.query('widget', 2);
+    expect(top2.map((ch) => ch.noteId)).toEqual(['C', 'B']); // top-2 of the fused order
   });
 });

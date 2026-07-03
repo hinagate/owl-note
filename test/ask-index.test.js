@@ -344,6 +344,54 @@ describe('createAskIndex — chunksOf', () => {
   });
 });
 
+// [Task V3] chunkById(chunkId): the stored chunk object for one id, or undefined
+// for an unknown id — the resolver fusion uses to turn a vector-index hit (chunkId
+// only) back into a usable chunk, dropping ids the lexical index no longer knows.
+describe('createAskIndex — chunkById', () => {
+  const multiBody = '# One\n\ntext one\n\n# Two\n\ntext two\n\n# Three\n\ntext three';
+
+  it('returns the full stored chunk object for a known id', () => {
+    const idx = createAskIndex();
+    idx.build([note({ id: 'a', body: multiBody })]);
+    const [first] = idx.allChunks();
+    const got = idx.chunkById(first.id);
+    expect(got.id).toBe(first.id);
+    expect(got.noteId).toBe('a');
+    expect(typeof got.text).toBe('string');
+    expect(typeof got.raw).toBe('string');
+    // The whole stored shape round-trips (matches allChunks' view of that chunk).
+    expect(got).toEqual(first);
+  });
+
+  it('returns a copy, not a live store reference (mutating it cannot corrupt the index)', () => {
+    const idx = createAskIndex();
+    idx.build([note({ id: 'a', body: multiBody })]);
+    const id = idx.allChunks()[0].id;
+    const got = idx.chunkById(id);
+    got.text = 'mutated';
+    expect(idx.chunkById(id).text).not.toBe('mutated');
+  });
+
+  it('returns undefined for an unknown / malformed / empty id (never throws)', () => {
+    const idx = createAskIndex();
+    idx.build([note({ id: 'a', body: multiBody })]);
+    expect(() => idx.chunkById('nope::99')).not.toThrow();
+    expect(idx.chunkById('nope::99')).toBeUndefined();
+    expect(idx.chunkById(undefined)).toBeUndefined();
+    expect(idx.chunkById(null)).toBeUndefined();
+    expect(idx.chunkById('')).toBeUndefined();
+  });
+
+  it('returns undefined for a chunk id after its note is removed (stale-id drop path)', () => {
+    const idx = createAskIndex();
+    idx.build([note({ id: 'a', body: multiBody })]);
+    const id = idx.allChunks()[0].id;
+    expect(idx.chunkById(id)).toBeDefined();
+    idx.removeNote('a');
+    expect(idx.chunkById(id)).toBeUndefined();
+  });
+});
+
 describe('createAskIndex — allChunks', () => {
   it('returns every stored chunk currently indexed', () => {
     const idx = createAskIndex();

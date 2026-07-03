@@ -195,6 +195,20 @@ export function createAskIndex() {
       return out;
     },
 
+    // [Task V3] The stored chunk object for ONE chunk id (its full stored fields),
+    // or undefined for an id this index does not know — the direct getStoredFields
+    // idiom, mirroring neighbors()/chunksOf(). Fusion uses this to resolve a
+    // vector-index hit (which carries only a chunkId) back into a usable chunk, and
+    // DROPS ids we return undefined for: the vector and lexical indexes commit
+    // independently, so a vector row can outlive its note's lexical reindex, and that
+    // stale id must never surface a ghost chunk. Returns a copy (never a live store
+    // reference) and never a `.weak` flag — that's a lexical-query semantic, not a
+    // property of a stored chunk.
+    chunkById(chunkId) {
+      const stored = mini.getStoredFields(chunkId); // undefined for unknown/malformed id
+      return stored ? { ...stored } : undefined;
+    },
+
     // [Task E7] The ordered stored chunks of ONE note (its full chunk set, in the
     // note's document order via chunkIds) — used to pin the currently-open note into
     // the model context. Same notes-Map → getStoredFields pattern as neighbors() and
