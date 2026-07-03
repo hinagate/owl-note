@@ -26,6 +26,21 @@ async function waitFor(fn, ms = 1500) {
 }
 
 describe('app integration', () => {
+  it('shows import progress: lazy-creates the bar, fills it by done/total, hides on null', async () => {
+    const app = await import('../src/app/app.js');
+    app.renderImportProgress({ done: 1, total: 4 });
+    const el = document.getElementById('import-progress');
+    expect(el).toBeTruthy(); // created on first use, no app.html dependency
+    expect(el.hidden).toBe(false);
+    expect(el.textContent).toContain('1 / 4');
+    expect(el.querySelector('[role="progressbar"]')).toBeTruthy();
+    expect(el.querySelector('.import-progress-bar').style.width).toBe('25%');
+    app.renderImportProgress({ done: 4, total: 4 });
+    expect(el.querySelector('.import-progress-bar').style.width).toBe('100%');
+    app.renderImportProgress(null); // import finished — bar goes away, summary toast takes over
+    expect(el.hidden).toBe(true);
+  });
+
   it('creates a notebook implicitly under root, saves a note, and lists it', async () => {
     const app = await import('../src/app/app.js');
     const bm = await import('../src/lib/bookmarks.js');
