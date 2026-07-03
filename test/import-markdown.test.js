@@ -71,6 +71,32 @@ describe('importFiles', () => {
     expect(typeof byTitle['Idea'].id).toBe('string');
   });
 
+  it('reports progress with a total that grows as container files are parsed', async () => {
+    await bm.ensureRoot();
+    const zip = await zipFile('export.zip', [
+      { path: 'A/One.md', text: md('title: "One"\nnotebook: "A"\nid: "p1"', 'one') },
+      { path: 'A/Two.md', text: md('title: "Two"\nnotebook: "A"\nid: "p2"', 'two') },
+    ]);
+    const loose = textFile('Three.md', md('title: "Three"', '# Three\nx'));
+    const ticks = [];
+    await importFiles([zip, loose], (p) => ticks.push({ ...p }));
+    expect(ticks[0]).toEqual({ done: 0, total: 2 }); // one unit per file, known upfront
+    for (let i = 1; i < ticks.length; i++) {
+      expect(ticks[i].done).toBeGreaterThanOrEqual(ticks[i - 1].done); // never moves backwards
+      expect(ticks[i].total).toBeGreaterThanOrEqual(ticks[i - 1].total);
+    }
+    expect(ticks.at(-1)).toEqual({ done: 4, total: 4 }); // 2 file units + 2 discovered zip entries
+  });
+
+  it('drives progress to completion even when a file cannot be read', async () => {
+    await bm.ensureRoot();
+    const bad = { name: 'broken.zip', text: async () => '', arrayBuffer: async () => { throw new Error('unreadable'); } };
+    const ticks = [];
+    const t = await importFiles([bad], (p) => ticks.push({ ...p }));
+    expect(t.skipped).toBe(1);
+    expect(ticks.at(-1)).toEqual({ done: 1, total: 1 });
+  });
+
   it('imports a JSON backup into root as real bookmarks (fixes the old no-op)', async () => {
     const root = await bm.ensureRoot();
     const json = JSON.stringify({ version: 1, notes: [{ id: 'j1', title: 'FromJson', body: 'hi', attachments: [], version: 1, hash: 'h' }] });

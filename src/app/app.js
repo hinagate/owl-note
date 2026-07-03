@@ -66,6 +66,35 @@ export function toast(message, isWarn = false) {
   setTimeout(() => { el.hidden = true; }, 3000);
 }
 
+// Import progress bar — lives where the toast does, but persists for the whole
+// batch instead of auto-hiding. Lazily created so it needs no app.html slot.
+// Pass {done, total} ticks to show/update, null to hide when the batch ends.
+export function renderImportProgress(p) {
+  let el = document.getElementById('import-progress');
+  if (!p) { if (el) el.hidden = true; return; }
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'import-progress';
+    const label = document.createElement('span');
+    label.className = 'import-progress-label';
+    const track = document.createElement('div');
+    track.className = 'import-progress-track';
+    track.setAttribute('role', 'progressbar');
+    track.setAttribute('aria-valuemin', '0');
+    const bar = document.createElement('div');
+    bar.className = 'import-progress-bar';
+    track.append(bar);
+    el.append(label, track);
+    document.body.append(el);
+  }
+  el.querySelector('.import-progress-label').textContent = `Importing… ${p.done} / ${p.total}`;
+  const track = el.querySelector('.import-progress-track');
+  track.setAttribute('aria-valuemax', String(p.total));
+  track.setAttribute('aria-valuenow', String(p.done));
+  el.querySelector('.import-progress-bar').style.width = `${p.total ? Math.round((p.done / p.total) * 100) : 0}%`;
+  el.hidden = false;
+}
+
 // Turn Drive attachment sync on/off from the toolbar checkbox. Runs inside the
 // checkbox's change handler (a user gesture) so enable() can call
 // chrome.permissions.request. Returns the resulting enabled state so the toolbar
@@ -976,27 +1005,41 @@ async function importMarkdown(text, path, fromZip, ctx) {
 }
 
 // Import .zip / .md / .json files. Pure of DOM/toast concerns so it is testable.
-export async function importFiles(files) {
+// Progress: each file is one unit of work; parsing a container (.zip/.enex/.json)
+// grows the total by its inner note count. onProgress (optional) receives monotonic
+// {done, total} ticks and always ends with done === total, even on unreadable files.
+export async function importFiles(files, onProgress) {
   const root = ui.rootId ?? (await bm.ensureRoot());
   const ctx = { root, idMap: await buildIdMap(root), nbCache: new Map(), tally: { created: 0, updated: 0, skipped: 0, tooLarge: 0 }, touched: new Set() };
+  const progress = { done: 0, total: files.length };
+  const report = () => { if (onProgress) onProgress({ ...progress }); };
+  report();
   for (const file of files) {
     const name = (file.name || '').toLowerCase();
+    let pending = 1; // this file's unfinished units: its own parse + discovered notes
+    const discover = (n) => { progress.total += n; pending += n; report(); };
+    const step = () => { progress.done += 1; pending -= 1; report(); };
     try {
       if (name.endsWith('.zip')) {
-        for (const entry of await unzip(new Uint8Array(await file.arrayBuffer()))) {
-          if (entry.path.toLowerCase().endsWith('.md')) {
-            await importMarkdown(new TextDecoder().decode(entry.bytes), entry.path, true, ctx);
-          }
+        const entries = (await unzip(new Uint8Array(await file.arrayBuffer())))
+          .filter((e) => e.path.toLowerCase().endsWith('.md'));
+        discover(entries.length); step(); // file parsed; each entry is now its own unit
+        for (const entry of entries) {
+          await importMarkdown(new TextDecoder().decode(entry.bytes), entry.path, true, ctx);
+          step();
         }
       } else if (name.endsWith('.md')) {
         await importMarkdown(await file.text(), file.name, false, ctx);
+        step();
       } else if (name.endsWith('.enex')) {
         const notes = parseEnexNotes(await file.text());
         const folder = await findOrCreateNotebook(ctx.root, enexStem(file.name) || 'Imported', ctx.nbCache);
+        discover(notes.length); step();
         for (const n of notes) {
-          if (!n.body.trim()) { ctx.tally.skipped += 1; continue; }
+          if (!n.body.trim()) { ctx.tally.skipped += 1; step(); continue; }
           const prepared = await prepareImport(n.body);
           await importOne({ id: n.meta.id, title: n.title, body: prepared.body, attachments: prepared.attachments }, folder, ctx);
+          step();
         }
       } else if (name.endsWith('.docx')) {
         const md = await docxToMarkdown(await file.arrayBuffer());
@@ -1007,23 +1050,33 @@ export async function importFiles(files) {
             { title: docxStem(file.name), body: prepared.body, attachments: prepared.attachments },
             ctx.root, ctx);
         }
+        step();
       } else if (name.endsWith('.json')) {
         const data = JSON.parse(await file.text());
-        for (const n of Array.isArray(data.notes) ? data.notes : []) {
-          if (!n || typeof n.id !== 'string') continue;
+        const notes = Array.isArray(data.notes) ? data.notes : [];
+        discover(notes.length); step();
+        for (const n of notes) {
+          if (!n || typeof n.id !== 'string') { step(); continue; }
           const prepared = await prepareImport(n.body || '', n.attachments || []);
           await importOne({ id: n.id, title: n.title || extractTitle(prepared.body), body: prepared.body, attachments: prepared.attachments }, root, ctx);
+          step();
         }
       } else {
         ctx.tally.skipped += 1;
+        step();
       }
-    } catch { ctx.tally.skipped += 1; } // couldn't read this file — continue the batch
+    } catch { // couldn't read this file — continue the batch
+      ctx.tally.skipped += 1;
+      progress.done += pending; pending = 0; report(); // close out its units so the bar still completes
+    }
   }
   return { ...ctx.tally, touched: [...ctx.touched] };
 }
 
 async function doImportFiles(files) {
-  const t = await importFiles(files);
+  let t;
+  try { t = await importFiles(files, renderImportProgress); }
+  finally { renderImportProgress(null); } // the summary toast (or the error) takes over from here
   const parts = [`${t.created} new`, `${t.updated} updated`];
   if (t.tooLarge) parts.push(`${t.tooLarge} local-only (not synced — use Export → Import to copy to other devices)`);
   if (t.skipped) parts.push(`${t.skipped} skipped`);
