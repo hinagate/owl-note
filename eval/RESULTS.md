@@ -171,3 +171,127 @@ abstention, injection-compliance detection, degraded parse, the unreachable
 exit-2 path, and 3-run mean ± range aggregation). To fill this section, a
 maintainer runs `npm run eval:answers` against a real model and pastes the
 printed table + version block above.
+
+## Semantic retrieval spike (M9 gate)
+
+Eval-first feasibility spike for the M9 embedding/fusion upgrade (Task E15): run
+real on-device-class embedding models in **node** against the same synthetic
+corpus + golden set and measure whether hybrid retrieval beats the committed
+lexical baseline **before** any extension code is written. No `src/` changes — a
+DEV-only `@huggingface/transformers` dependency + `eval/run-vector.mjs`. This
+section records the measured numbers as **verdict inputs**; the proceed/drop call
+is the controller's, not this document's.
+
+Regenerate with `node eval/run-vector.mjs` (deterministic — see below).
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-07-03 |
+| Corpus | 48 notes / 60 chunks (same as Retrieval v1) |
+| Golden set | 39 answerable questions scored (8 unanswerable skipped) |
+| Candidate models | `Xenova/all-MiniLM-L6-v2` (English-centric default), `Xenova/multilingual-e5-small` (multilingual) |
+| Quantization | `dtype: 'q8'` → `model_quantized.onnx` (int8) |
+| transformers.js | 4.2.0 (`@huggingface/transformers`, devDep) |
+| Runtime | onnxruntime-node (native CPU), Node v23.9.0 |
+| Fusion | RRF k=60 over lexical top-8 + vector top-8, final cut top-5 |
+| e5 prefixes | passages `passage: {text}`, queries `query: {text}` (mandatory for e5) |
+
+**What is measured.** The lexical column is the real `createAskIndex()` recomputed
+live (it reproduces the committed 0.821 baseline exactly). Vector-only ranks all
+60 chunk embeddings by cosine (dot product of L2-normalized, mean-pooled vectors).
+Hybrid fuses the lexical top-8 and vector top-8 chunk lists with Reciprocal Rank
+Fusion (`score(d) = Σ 1/(60 + rank_i(d))`). All three columns use the **same**
+recall@5 / MRR + hit definition as Retrieval v1 (`chunk.noteTitle ∈ relevantNotes`,
+multi-note fractional), so the columns are directly comparable.
+
+### MiniLM-L6-v2 (`Xenova/all-MiniLM-L6-v2`, q8)
+
+```
+  tag           n  | lex R@5  lex MRR | vec R@5  vec MRR | hyb R@5  hyb MRR
+  ----------  ---  |  ------   ------  |  ------   ------  |  ------   ------
+  overall      39  |  0.821    0.821  |  1.000    0.898  |  1.000    0.904
+  direct       15  |  1.000    1.000  |  1.000    0.967  |  1.000    0.967
+  paraphrase   11  |  0.455    0.364  |  1.000    0.909  |  1.000    0.705
+  cjk           6  |  1.000    1.000  |  1.000    0.700  |  1.000    1.000
+  injection     3  |  1.000    1.000  |  1.000    0.778  |  1.000    1.000
+  multi-note    4  |  0.750    1.000  |  1.000    1.000  |  1.000    1.000
+```
+
+Misses diff (lexical → hybrid): **6 lexical misses FIXED**, all paraphrase
+(q16, q17, q18, q20, q24, q26 — the entire baseline miss list). **0 regressions**
+(no lexical hit lost by hybrid).
+
+Perf: 60 chunks embedded in 0.39 s → **6.4 ms/chunk**; model load 4.82 s;
+approx download ≈ **22.6 MB** (`model_quantized.onnx` 21.9 MB + tokenizer 0.7 MB).
+
+### multilingual-e5-small (`Xenova/multilingual-e5-small`, q8)
+
+```
+  tag           n  | lex R@5  lex MRR | vec R@5  vec MRR | hyb R@5  hyb MRR
+  ----------  ---  |  ------   ------  |  ------   ------  |  ------   ------
+  overall      39  |  0.821    0.821  |  1.000    0.947  |  0.949    0.880
+  direct       15  |  1.000    1.000  |  1.000    1.000  |  1.000    1.000
+  paraphrase   11  |  0.455    0.364  |  1.000    0.871  |  0.818    0.576
+  cjk           6  |  1.000    1.000  |  1.000    1.000  |  1.000    1.000
+  injection     3  |  1.000    1.000  |  1.000    0.778  |  1.000    1.000
+  multi-note    4  |  0.750    1.000  |  1.000    1.000  |  1.000    1.000
+```
+
+Misses diff (lexical → hybrid): **4 lexical misses FIXED** (q16, q17, q18, q26).
+**0 regressions vs lexical.** But note a **fusion cost vs vector-only**: e5
+vector-only fixes ALL 6 paraphrase misses (paraphrase R@5 1.000), whereas RRF drags
+two back below the top-5 (q20, q24), so hybrid paraphrase is 0.818 and hybrid
+overall (0.949) is *below* e5 vector-only (1.000). Fusing a lexical list that is
+wrong for paraphrase injects wrong-note chunks — for e5, **vector-only is the
+single strongest config here**, not hybrid.
+
+Perf: 60 chunks embedded in 0.91 s → **15.1 ms/chunk**; model load 8.49 s;
+approx download ≈ **129.1 MB** (`model_quantized.onnx` 112.8 MB + tokenizer 16.3 MB).
+
+### Gate criteria (verdict inputs — controller decides)
+
+Thresholds (per Task E15 brief), evaluated on the **hybrid** column:
+
+| Criterion | Threshold | MiniLM (hybrid) | e5-small (hybrid) |
+| --- | --- | --- | --- |
+| paraphrase recall@5 | ≥ 0.70 (baseline 0.455) | 1.000 — **PASS** | 0.818 — **PASS** |
+| cjk recall@5 | ≥ 0.90 (baseline 1.000) | 1.000 — **PASS** | 1.000 — **PASS** |
+| overall recall@5 | ≥ 0.821 (no net regression) | 1.000 — **PASS** | 0.949 — **PASS** |
+| catastrophic per-question regressions | zero unexplained | 0 — **PASS** | 0 — **PASS** |
+
+Both candidate models pass all four gate criteria on the hybrid config. The
+proceed/drop decision (including MiniLM-vs-e5 selection) is left to the controller.
+
+### Limitations (read the numbers with these)
+
+- **recall@5 saturates on this corpus.** With only 60 chunks, both models reach
+  vector-only overall recall@5 = 1.000 — the metric cannot discriminate them at
+  this scale. **MRR** is the more informative column here, and on a real, larger,
+  messier note set the models would separate further. These numbers show the
+  *direction* (embeddings close the paraphrase gap), not a precise ceiling.
+- **MiniLM's CJK recall is partly a small-corpus artifact.** MiniLM is
+  English-centric, yet scores cjk recall@5 = 1.000 — because the handful of CJK
+  notes cluster away from the English notes in a 60-chunk corpus, so the right one
+  lands in the top-5 by separation, not comprehension. Its cjk **MRR is only
+  0.700** (right note not reliably rank-1), while e5's cjk MRR = 1.000. For a user
+  whose notes are **Chinese**, e5's genuinely multilingual embedding is the safer
+  bet even though recall@5 does not reveal the gap here.
+- **Hybrid is not strictly better than vector-only.** For e5, RRF fusion *lowers*
+  paraphrase and overall vs vector-only (see above); for MiniLM, hybrid ties
+  vector-only on recall but lexical rescues cjk/injection **MRR** back to 1.000.
+  Whether to ship vector-only or RRF hybrid is a real open question, not settled
+  by these numbers.
+- **Download / ship size.** int8 weights are ~22.6 MB (MiniLM) vs ~129.1 MB
+  (e5-small, dominated by the 250k-token XLM-R embedding matrix + 16 MB
+  tokenizer) — a ~5.7× difference that matters for an on-device extension bundle.
+- **Node CPU ≠ browser WASM.** Timings are onnxruntime-node (native CPU). The
+  extension would run transformers.js on **WASM in the browser, ~2–4× slower**, so
+  budget roughly 13–26 ms/chunk (MiniLM) / 30–60 ms/chunk (e5) for a real embed
+  pass, plus a one-time model download on first use.
+- **Synthetic corpus.** Same caveat as Retrieval v1 — 48 invented notes with clean
+  ground truth; real notes will behave differently.
+
+**Determinism.** Embeddings are deterministic per model version and the lexical
+index is deterministic, so a single run is authoritative (the two retrieval-metric
+tables were verified byte-identical across two runs). No §6 variance loop is needed
+for this spike.
