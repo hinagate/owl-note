@@ -65,6 +65,37 @@ describe('suggestTitle', () => {
     expect(fake.lastSession.destroyCount).toBe(1);
   });
 
+  // The user hit this: an on-device model that TRUNCATES mid-JSON leaked the raw
+  // `{"title":"...` first line into the field. Salvage the title value instead of
+  // ever emitting JSON-shaped garbage.
+  it('salvages the title value from JSON truncated mid-string', async () => {
+    const fake = installFakeLanguageModel({ promptResult: '{"title":"Grocery run' });
+    cleanup = fake.uninstall;
+
+    expect(await suggestTitle('body')).toBe('Grocery run');
+  });
+
+  it('unescapes an escaped quote/backslash while salvaging a truncated title', async () => {
+    const fake = installFakeLanguageModel({ promptResult: '{"title":"He said \\"hi\\" to a path C:\\\\tmp' });
+    cleanup = fake.uninstall;
+
+    expect(await suggestTitle('body')).toBe('He said "hi" to a path C:\\tmp');
+  });
+
+  it('returns null (never JSON garbage) when the raw looks like JSON but has no salvageable title', async () => {
+    const fake = installFakeLanguageModel({ promptResult: '{"garbled' });
+    cleanup = fake.uninstall;
+
+    expect(await suggestTitle('body')).toBeNull();
+  });
+
+  it('returns null when JSON parses but the title field is not a string (no first-line leak)', async () => {
+    const fake = installFakeLanguageModel({ promptResult: '{"title": 42}' });
+    cleanup = fake.uninstall;
+
+    expect(await suggestTitle('body')).toBeNull();
+  });
+
   it('returns null (no throw) when session.prompt fails generically, and still destroys the session', async () => {
     const fake = installFakeLanguageModel({ promptThrows: new Error('model blew up') });
     cleanup = fake.uninstall;

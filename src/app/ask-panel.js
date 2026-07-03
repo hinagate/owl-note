@@ -24,16 +24,6 @@ const CHIP_TITLE_MAX = 40;
 // the exchange's question bubble AND the model's QUESTION line — the Ask grounding
 // prompt handles summarization fine, so no dedicated summarize prompt is needed (YAGNI).
 const SUMMARIZE_QUESTION = 'Summarize this note.';
-// [Task E10] The fixed request the one-click "Format" quick action shows as its
-// exchange bubble. Unlike Summarize this is NOT sent to the ask-controller — it's a
-// label for a direct reformat proposal (see runFormat), so it needs no model
-// grounding prompt.
-const FORMAT_REQUEST = 'Format this note.';
-// [Task E10] Content-loss soft guard: a reformat that drops >20% of the note's
-// CONTENT characters gets a warning. Compare STRIPPED lengths so the marks and
-// whitespace reformatting legitimately ADDS (#, -, *, `, >, |, …) never count as
-// "lost content" — only real characters disappearing do.
-const FORMAT_LOSS_RATIO = 0.2;
 
 // Centralized code -> user-facing copy for the 'error' state (ASK_ERROR_CODES,
 // see src/lib/providers/provider.js). Deliberately NEVER surfaces state.message
@@ -82,23 +72,6 @@ function relatedChunks(chunks, citations) {
   return out;
 }
 
-// [Task E10] Count a text's CONTENT characters: strip the Markdown structural marks
-// a reformat adds (#, *, _, `, ~, >, |, =, +, -) and ALL whitespace. Applied to both
-// the original and the proposal, so the comparison reflects real content, not
-// formatting. Content punctuation (. ! ? , : ; ( ) [ ]) is left intact in both.
-function contentLength(text) {
-  return String(text ?? '').replace(/[#*_`~>|=+-]/g, '').replace(/\s+/g, '').length;
-}
-
-// True when the proposal's content shrank by MORE than FORMAT_LOSS_RATIO vs the
-// original — the signal that the model likely dropped lines. Guards against an
-// empty original (nothing to lose → never warns).
-function formatShrankTooMuch(original, proposal) {
-  const before = contentLength(original);
-  if (!before) return false;
-  return contentLength(proposal) < before * (1 - FORMAT_LOSS_RATIO);
-}
-
 /**
  * @param {HTMLElement} container  the <aside id="ask-panel"> element
  * @param {Object} cb
@@ -116,20 +89,16 @@ function formatShrankTooMuch(original, proposal) {
  *        when true the opt-in card is never shown.
  * @param {() => ({ id: string, title: string }|null)} [cb.getCurrentNote]  the currently-open
  *        note (or null) — drives the E7 context chip that pins it into the model context.
- * @param {(noteId: string) => Promise<{ markdown: string, original: string }|null>} [cb.onFormatNote]
- *        [Task E10] Reformat the chip's note. The host does the model call + all gates and
- *        returns { markdown, original } for review, or null when it already toasted (unavailable
- *        / empty / oversize). No handler → no Format button (optional like onDelete).
- * @param {(noteId: string, markdown: string) => boolean} [cb.onApplyFormat]  [Task E10] Apply a
- *        reviewed proposal to the note. Returns false when the host refuses (the note is no
- *        longer open) — the panel then withholds the "Applied" confirmation.
+ * @param {(noteId: string) => void} [cb.onTidyNote]  [Task E11] Tidy the chip's note. The host
+ *        does a synchronous read→tidyMarkdown→replaceBody apply (no model, no proposal, no
+ *        exchange) and toasts the result — the panel just forwards the chip's note id.
  * @returns {{ update: (state: object) => void, open: () => void, close: () => void, destroy: () => void }}
  */
 export function renderAskPanel(container, {
   onAsk, onCitation, onClose = () => {}, getStats = () => ({ notes: 0 }),
   onEnableModel = () => {}, onDeclineAi = () => {}, aiDeclined = false,
   getCurrentNote = () => null,
-  onFormatNote = null, onApplyFormat = () => false,
+  onTidyNote = () => {},
 }) {
   container.innerHTML = ''; // build the shell ONCE; update() only mutates status/results
 
@@ -292,23 +261,22 @@ export function renderAskPanel(container, {
     });
     chipRow.appendChild(summarize);
 
-    // [Task E10] One-click "Format" quick action, rendered WITH the chip beside
+    // [Task E11] One-click "Tidy" quick action, rendered WITH the chip beside
     // Summarize (same chip row → same visibility lifecycle: chipRow.textContent
     // above clears it when the chip is hidden, so it never lingers as an orphan
-    // focusable). Only shown when the host wired onFormatNote (optional-handler
-    // pattern like onDelete). It reformats the CHIP'S tagged note via a
-    // propose → review → apply flow (runFormat), NOT an ask-controller query.
-    if (onFormatNote) {
-      const format = document.createElement('button');
-      format.type = 'button';
-      format.className = 'ask-format';
-      format.setAttribute('aria-label', 'Format this note as Markdown');
-      format.textContent = 'Format';
-      // Read chipNoteId at click time (the chip's currently-tagged note), matching
-      // Summarize above.
-      format.addEventListener('click', () => runFormat(chipNoteId));
-      chipRow.appendChild(format);
-    }
+    // focusable). It runs the deterministic markdown tidy on the CHIP'S tagged note
+    // via onTidyNote — the host does a synchronous read→tidy→replaceBody apply and
+    // toasts the result. No exchange, no proposal, no ask-controller (this replaced
+    // E10's async Format proposal flow, which the model made unreadable).
+    const tidy = document.createElement('button');
+    tidy.type = 'button';
+    tidy.className = 'ask-tidy';
+    tidy.setAttribute('aria-label', 'Tidy the note formatting');
+    tidy.textContent = 'Tidy';
+    // Read chipNoteId at click time (the chip's currently-tagged note), matching
+    // Summarize above.
+    tidy.addEventListener('click', () => onTidyNote(chipNoteId));
+    chipRow.appendChild(tidy);
   }
 
   // ---- actions -------------------------------------------------------------
@@ -539,85 +507,6 @@ export function renderAskPanel(container, {
     note.className = 'ask-note';
     note.textContent = text;
     target.appendChild(note);
-  }
-
-  // [Task E10] Run the Format quick action for `noteId`. Deliberately BYPASSES the
-  // ask-controller: this is NOT a retrieval ask — there is no query, no index
-  // lookup, and no answer/citation state machine. It's a one-shot model call whose
-  // result is a DOCUMENT proposal, so it drives the thread with the panel's own
-  // startExchange/setPending/resolve primitives directly (exactly as if a question
-  // had been asked), never touching onAsk → controller.ask. The host (onFormatNote)
-  // does the model call and all the gates; a null return means it already toasted.
-  async function runFormat(noteId) {
-    const ex = startExchange(FORMAT_REQUEST);
-    setPending(thinkingIndicator('Formatting…'));
-    scrollToNewest();
-
-    let result = null;
-    try { result = await onFormatNote(noteId); } catch { result = null; } // never throw into the UI
-
-    // Resolve the CAPTURED exchange, not currentExchange: the user may have started
-    // another exchange while the model ran, so we must not clobber it.
-    ex.body.textContent = '';
-    ex.indicatorEl = null;
-    if (!result || typeof result.markdown !== 'string') {
-      // null / unusable → the standard unavailable note (host already toasted why).
-      renderNote(ex.body, "On-device AI isn't available — enable it in the Ask panel.");
-    } else {
-      renderFormatProposal(ex.body, noteId, result);
-    }
-    scrollToNewest();
-  }
-
-  // [Task E10] Render a reviewed format proposal into `target`: the SANITIZED
-  // markdown, an optional content-loss warning, and Apply/Discard buttons. The RAW
-  // markdown string is held in this closure and handed to onApplyFormat verbatim —
-  // it is NEVER read back from the rendered/sanitized DOM (which would have lost the
-  // #/-/``` marks). `original` is the pre-format body, used only for the loss check.
-  function renderFormatProposal(target, noteId, { markdown, original }) {
-    const proposal = document.createElement('div');
-    proposal.className = 'ask-message ask-format-proposal';
-    // SANCTIONED innerHTML: the proposal is MODEL output, so it goes through the
-    // same renderMarkdown()/DOMPurify path as an answer — smuggled <script>/onerror
-    // is stripped before it reaches the DOM. Never assign the raw string to innerHTML.
-    proposal.innerHTML = renderMarkdown(markdown || '');
-    target.appendChild(proposal);
-
-    if (formatShrankTooMuch(original, markdown)) {
-      const warn = document.createElement('div');
-      warn.className = 'ask-format-warning';
-      warn.textContent = 'Review carefully — some content may have been dropped.';
-      target.appendChild(warn);
-    }
-
-    const actions = document.createElement('div');
-    actions.className = 'ask-format-actions';
-
-    const apply = document.createElement('button');
-    apply.type = 'button';
-    apply.className = 'ask-format-apply';
-    apply.textContent = 'Apply to note';
-    apply.addEventListener('click', () => {
-      // Pass the CLOSURE-held raw markdown for the ORIGINAL noteId — the host
-      // re-checks it's still the open note and may refuse (returns false).
-      if (onApplyFormat(noteId, markdown) === false) return; // refused → leave the proposal actionable
-      apply.disabled = true;
-      discard.disabled = true;
-      const done = document.createElement('div');
-      done.className = 'ask-format-applied';
-      done.textContent = 'Applied — Ctrl+Z in the editor undoes it.';
-      target.appendChild(done);
-    });
-
-    const discard = document.createElement('button');
-    discard.type = 'button';
-    discard.className = 'ask-format-discard';
-    discard.textContent = 'Discard';
-    // Discard only drops the buttons — the proposal stays as thread history.
-    discard.addEventListener('click', () => { actions.remove(); });
-
-    actions.append(apply, discard);
-    target.appendChild(actions);
   }
 
   // A titled list of citation cards (Chunk objects). Reuses renderCards, so each is

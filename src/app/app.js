@@ -28,7 +28,7 @@ import { createFusion } from '../lib/fusion.js';
 import { createAskController } from '../lib/ask-controller.js';
 import { createRegistry } from '../lib/providers/registry.js';
 import { suggestTitle } from '../lib/providers/title.js';
-import { formatNote } from '../lib/providers/format.js';
+import { tidyMarkdown } from '../lib/tidy-markdown.js';
 import { renderAskPanel } from './ask-panel.js';
 
 export { saveNote, MAX_URL_BYTES, WARN_URL_BYTES }; // moved to ../lib/save-note.js
@@ -177,13 +177,6 @@ const askRegistry = createRegistry();
 // writes it back through onDeclineAi (below). chrome.storage key.
 const AI_DECLINED_KEY = 'ask:aiDeclined';
 
-// [Task E10] Max note length the Format quick action will send on-device. The gate
-// lives HERE (not in format.js) on purpose: truncating a format to fit would
-// silently drop the tail of the note from the result, so instead we refuse an
-// oversized note outright and leave it untouched. Sized to stay inside the model's
-// window/output limits with room for the reformatted (often longer) output.
-const FORMAT_MAX_CHARS = 6000;
-
 // Ask controller + drawer are constructed once per app lifetime (reset between
 // tests via resetUI). The controller is pure; the panel binds to the #ask-panel
 // aside, which some test harnesses omit — then askPanel stays null and the toolbar
@@ -236,33 +229,21 @@ async function ensureAskUI() {
       },
       // Persist the opt-out so the card is gone for good (this session AND future ones).
       onDeclineAi: () => { chrome.storage.local.set({ [AI_DECLINED_KEY]: true }).catch(() => {}); },
-      // [Task E10] Format quick action: reformat the CHIP'S note as clean markdown.
-      // The panel only PROPOSES — nothing is written until the user clicks Apply
-      // (onApplyFormat below). ALL the gates live here so the panel stays dumb: a
-      // missing/mismatched/empty/oversized/unavailable note toasts + returns null,
-      // and the panel then shows a friendly "enable it" note instead of a proposal.
-      onFormatNote: async (noteId) => {
-        // Operate strictly on the note the chip tagged AND that's still open — never
-        // reformat a different note than the user is looking at.
-        if (!ui.current || ui.current.id !== noteId) { toast('Open the note first', true); return null; }
+      // [Task E11] Tidy quick action: run the deterministic, rule-based markdown tidy
+      // (src/lib/tidy-markdown.js) on the CHIP'S note and apply it directly. Fully
+      // SYNCHRONOUS — no model, no proposal, no pending state — so there is no
+      // stale-edit window: read → tidy → replaceBody in one go. tidyMarkdown is
+      // content-preserving by construction (it only fixes structural whitespace and
+      // markers), so it applies without review. replaceBody keeps the editor's native
+      // undo stack, so a single Ctrl+Z reverts it; when nothing changes we skip the
+      // write entirely and just say so.
+      onTidyNote: (noteId) => {
+        if (!ui.current || ui.current.id !== noteId || !ui.editor) { toast('Open the note first', true); return; }
         const body = ui.current.body || '';
-        if (!body.trim()) { toast('Nothing to format yet', true); return null; }
-        // Size gate (see FORMAT_MAX_CHARS): refuse rather than truncate-and-lose.
-        if (body.length > FORMAT_MAX_CHARS) { toast('Too long to format on-device', true); return null; }
-        const markdown = await formatNote(body).catch(() => null);
-        if (markdown === null) { toast("On-device AI isn't available — enable it in the Ask panel", true); return null; }
-        return { markdown, original: body };
-      },
-      // [Task E10] Apply a reviewed format via the editor's undo-preserving
-      // replaceBody, so a single Ctrl+Z reverts it and the normal change path
-      // (onChange + autosave) persists it. Refuses (returns false → panel withholds
-      // the "Applied" confirmation) if the proposal's note is no longer the open one
-      // — the user switched away between propose and apply.
-      onApplyFormat: (noteId, markdown) => {
-        if (!ui.current || ui.current.id !== noteId || !ui.editor) { toast('That note is no longer open', true); return false; }
-        ui.editor.replaceBody(markdown);
-        toast('Formatted — Ctrl+Z to undo');
-        return true;
+        const tidied = tidyMarkdown(body);
+        if (tidied === body) { toast('Already tidy'); return; }
+        ui.editor.replaceBody(tidied); // undo-preserving apply (single Ctrl+Z reverts)
+        toast('Tidied — Ctrl+Z to undo');
       },
     });
   }

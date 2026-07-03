@@ -318,40 +318,13 @@ body.resizing { user-select: none; cursor: col-resize; }
   font-weight: 600; font-size: 12px; padding: 4px 12px; border-radius: 999px; cursor: pointer;
 }
 #ask-panel .ask-summarize:hover { background: var(--accent); color: #fff; border-color: var(--accent-dark); }
-/* [Task E10] "Format" quick action — sits beside Summarize in the chip row. */
-#ask-panel .ask-format {
+/* [Task E11] "Tidy" quick action — sits beside Summarize in the chip row. */
+#ask-panel .ask-tidy {
   margin-left: 6px; vertical-align: middle;
   border: 1px solid var(--accent); background: #fff; color: var(--accent);
   font-weight: 600; font-size: 12px; padding: 4px 12px; border-radius: 999px; cursor: pointer;
 }
-#ask-panel .ask-format:hover { background: var(--accent); color: #fff; border-color: var(--accent-dark); }
-
-/* [Task E10] Format proposal in the thread: the rendered markdown (sanitized like
-   an answer), an optional content-loss warning, and the Apply/Discard controls. */
-#ask-panel .ask-format-proposal {
-  line-height: 1.6; border: 1px solid var(--border); border-radius: 10px;
-  background: #fff; padding: 10px 12px; margin-bottom: 8px;
-}
-#ask-panel .ask-format-proposal > :first-child { margin-top: 0; }
-#ask-panel .ask-format-proposal > :last-child { margin-bottom: 0; }
-#ask-panel .ask-format-warning {
-  font-size: 12px; color: #8a5a00; background: #fff6e5;
-  border: 1px solid #f0d493; border-radius: 8px; padding: 6px 10px; margin-bottom: 8px;
-}
-#ask-panel .ask-format-actions { display: flex; gap: 8px; margin-bottom: 10px; }
-#ask-panel .ask-format-apply {
-  border: 1px solid var(--accent); background: var(--accent); color: #fff;
-  font-weight: 600; font-size: 13px; padding: 6px 16px; border-radius: 999px; cursor: pointer;
-}
-#ask-panel .ask-format-apply:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
-#ask-panel .ask-format-apply:disabled { opacity: 0.55; cursor: default; }
-#ask-panel .ask-format-discard {
-  border: 1px solid var(--border); background: #fff; color: var(--muted);
-  font-size: 13px; padding: 6px 14px; border-radius: 999px; cursor: pointer;
-}
-#ask-panel .ask-format-discard:hover { background: #f1f3f5; color: var(--text); }
-#ask-panel .ask-format-discard:disabled { opacity: 0.55; cursor: default; }
-#ask-panel .ask-format-applied { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+#ask-panel .ask-tidy:hover { background: var(--accent); color: #fff; border-color: var(--accent-dark); }
 
 #ask-panel .ask-status { padding: 0 16px 8px; font-size: 13px; color: var(--muted); }
 #ask-panel .ask-status:empty { display: none; }

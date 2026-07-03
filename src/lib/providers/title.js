@@ -47,6 +47,21 @@ function cleanTitle(text) {
   return s.slice(0, MAX_TITLE_CHARS);
 }
 
+// Fallback when the response isn't a clean { title } object. The bug this guards:
+// an on-device model that TRUNCATES mid-JSON — a plain first-line fallback would then
+// dump raw `{"title":"...` garbage into the field. So if the raw LOOKS like JSON
+// (starts with `{`), regex-salvage the title value if it's there, else emit nothing
+// (null) rather than JSON-shaped junk. Non-JSON raw keeps the first-line fallback.
+function salvageTitle(raw) {
+  const s = String(raw ?? '');
+  if (s.trim().startsWith('{')) {
+    const m = s.match(/"title"\s*:\s*"((?:[^"\\]|\\.)*)/);
+    if (!m) return null; // JSON-looking but no title value — never surface the braces
+    return m[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\'); // undo the two escapes we may have captured
+  }
+  return s.split('\n')[0]; // plain-text raw — first line, as before
+}
+
 /**
  * Ask the on-device model to propose a title for `body`.
  *
@@ -87,16 +102,16 @@ export async function suggestTitle(body, { signal } = {}) {
     const raw = await session.prompt(userPrompt, { responseConstraint: TITLE_SCHEMA, signal });
 
     // Parse HOSTILELY: a valid { title } string wins; anything else (malformed
-    // JSON, or JSON without a string title) degrades to the raw text's first
-    // line. Weird model output must never throw.
+    // JSON, or JSON without a string title) degrades through salvageTitle. Weird
+    // model output must never throw — and must never leak JSON-shaped garbage.
     let candidate;
     try {
       const parsed = JSON.parse(raw);
-      candidate = parsed && typeof parsed.title === 'string' ? parsed.title : String(raw ?? '').split('\n')[0];
+      candidate = parsed && typeof parsed.title === 'string' ? parsed.title : salvageTitle(raw);
     } catch {
-      candidate = String(raw ?? '').split('\n')[0];
+      candidate = salvageTitle(raw);
     }
-    return cleanTitle(candidate) || null; // empty result -> null
+    return cleanTitle(candidate) || null; // empty/null result -> null
   } catch (err) {
     // A cancelled suggestion must surface as AskError('aborted') so the caller can
     // distinguish "user cancelled" from "model failed"; everything else soft-fails.
