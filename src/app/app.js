@@ -189,6 +189,10 @@ export function resetUI() {
   embedClient = null;
   semanticEnabled = false;
   semanticStatus = { state: 'off' };
+  // [Task E16] Drop the in-memory review-ask latch (re-read from storage on the next
+  // initUI) and clear any lingering banner so each test boot starts clean.
+  reviewAsked = false;
+  if (typeof document !== 'undefined') document.getElementById('review-banner')?.remove();
 }
 
 // Ask-Your-Notes lexical index — ONE module-level instance for the app's lifetime.
@@ -367,6 +371,24 @@ function removeSemantic(id) {
     .catch((e) => console.warn('semantic removeNote failed', e));
 }
 
+// --- [Task E16] Gentle one-time review ask [growth flywheel] ---------------------
+// One respectful, policy-safe prompt shown at a VALUE moment, at most ONCE per install
+// EVER. Two triggers race — whichever comes first wins: the 20th successful save, or
+// the first Ask answer that actually ran the on-device model. Any dismissal (Rate it /
+// No thanks / ✕) — or the mere act of showing it — persists owl:reviewAsked, so it can
+// never reappear. It is a SEPARATE persistent card, never the transient #toast.
+const REVIEW_ASKED_KEY = 'owl:reviewAsked';    // once-ever latch (persisted)
+const REVIEW_SAVE_COUNT_KEY = 'owl:saveCount';  // successful-save tally toward the threshold
+const REVIEW_SAVE_THRESHOLD = 20;               // trigger (a): the 20th save
+// The Chrome Web Store review page for OWL-Note. (A future Edge Add-ons store would
+// need its own URL + a store-detect — deliberately out of scope here.)
+const REVIEW_STORE_URL = 'https://chromewebstore.google.com/detail/hjkbpgkmiaeojfhkpnhmokgjipenhcfl/reviews';
+
+// In-memory mirror of REVIEW_ASKED_KEY for a cheap synchronous guard on the hot save
+// and ask paths. Loaded at boot (initUI), reset in resetUI. Once true we stop counting
+// saves entirely — the guard means no unbounded storage churn.
+let reviewAsked = false;
+
 // Ask controller + drawer are constructed once per app lifetime (reset between
 // tests via resetUI). The controller is pure; the panel binds to the #ask-panel
 // aside, which some test harnesses omit — then askPanel stays null and the toolbar
@@ -394,7 +416,9 @@ async function ensureAskUI() {
       index: getAskIndex(),
       fusion: createFusion(getAskIndex(), { vector: vectorProxy, embedQuery }),
       registry: askRegistry,
-      onState: (s) => askPanel?.update(s),
+      // Update the panel, then let the review ask observe the state — the FIRST answer
+      // that used the on-device model (usedModel:true) is trigger (b). [Task E16]
+      onState: (s) => { askPanel?.update(s); maybeReviewOnAskState(s); },
     });
   }
   if (!askPanel) {
@@ -499,6 +523,97 @@ async function openCitation(noteId) {
   else openBookmark(meta.bookmarkId);
 }
 
+// --- [Task E16] Review-ask wiring ------------------------------------------------
+
+// Persist the once-ever latch. Fire-and-forget + .catch — a write failure must never
+// break a click handler, block a save, or leak an unhandled rejection.
+function persistReviewAsked() {
+  try { chrome.storage.local.set({ [REVIEW_ASKED_KEY]: true }).catch(() => {}); } catch { /* best-effort */ }
+}
+
+// Open the Chrome Web Store review page in a new tab. Called only from the [Rate it]
+// click — a user gesture — so window.open is not popup-blocked. Wrapped so a blocked
+// or failed open never throws into the handler (the banner still dismisses).
+function openReviewPage() {
+  try { window.open(REVIEW_STORE_URL, '_blank', 'noopener'); } catch { /* best-effort */ }
+}
+
+// Remove the banner. Re-affirms the latch (idempotent — the flag was already set when
+// the banner showed) so any dismissal path provably persists owl:reviewAsked.
+function dismissReviewBanner() {
+  persistReviewAsked();
+  document.getElementById('review-banner')?.remove();
+}
+
+// Show the one-time review ask: a slim persistent card in the bottom-right corner,
+// ABOVE the transient #toast (NOT the toast — the toast auto-fades; this must wait for
+// a deliberate choice). Showing it latches owl:reviewAsked immediately so it can never
+// reappear, even if the user navigates away without touching a button. textContent
+// only; it never steals focus and never blocks a save or an ask.
+function showReviewBanner() {
+  if (reviewAsked) return; // once EVER
+  if (typeof document === 'undefined' || !document.body) return; // no DOM (non-UI import)
+  if (document.getElementById('review-banner')) return; // already up — don't stack
+  reviewAsked = true;   // in-memory latch: stop counting + block re-entry this session
+  persistReviewAsked(); // and persist across future boots
+
+  const card = document.createElement('div');
+  card.id = 'review-banner';
+  card.setAttribute('role', 'complementary');
+  card.setAttribute('aria-label', 'Rate OWL-Note');
+
+  const msg = document.createElement('span');
+  msg.className = 'review-msg';
+  msg.textContent = 'Enjoying OWL-Note? A rating helps a lot 🦉';
+
+  const rate = document.createElement('button');
+  rate.type = 'button';
+  rate.className = 'review-rate';
+  rate.textContent = 'Rate it';
+  rate.addEventListener('click', () => { openReviewPage(); dismissReviewBanner(); });
+
+  const no = document.createElement('button');
+  no.type = 'button';
+  no.className = 'review-dismiss';
+  no.textContent = 'No thanks';
+  no.addEventListener('click', dismissReviewBanner);
+
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'review-close';
+  close.setAttribute('aria-label', 'Dismiss');
+  close.textContent = '✕';
+  close.addEventListener('click', dismissReviewBanner);
+
+  const actions = document.createElement('div');
+  actions.className = 'review-actions';
+  actions.append(rate, no);
+
+  card.append(close, msg, actions);
+  document.body.append(card);
+}
+
+// Trigger (a): count a successful save. Cheap guard first — once the ask has been
+// shown/dismissed we stop counting, so there's no unbounded storage growth. The whole
+// body is try/caught so, called fire-and-forget, it can never break a save or leak an
+// unhandled rejection. Both manual and auto saves count — either is a real value moment.
+async function countSaveTowardReview() {
+  if (reviewAsked) return; // already asked once, ever
+  try {
+    const n = (((await chrome.storage.local.get(REVIEW_SAVE_COUNT_KEY))[REVIEW_SAVE_COUNT_KEY]) || 0) + 1;
+    await chrome.storage.local.set({ [REVIEW_SAVE_COUNT_KEY]: n });
+    if (n >= REVIEW_SAVE_THRESHOLD) showReviewBanner();
+  } catch { /* best-effort — never block a save */ }
+}
+
+// Trigger (b): the FIRST Ask answer that actually ran the on-device model — the moment
+// the feature's value lands. Retrieval-only snippets and the canned no-match (both
+// usedModel:false) do NOT count. Called from the controller's onState.
+function maybeReviewOnAskState(state) {
+  if (reviewAsked) return;
+  if (state && state.kind === 'answered' && state.usedModel === true) showReviewBanner();
+}
+
 export async function initUI(rootId) {
   ui.rootId = rootId;
   ui.activeFolder = rootId;
@@ -506,6 +621,9 @@ export async function initUI(rootId) {
   // Per-device sidebar collapse state (bookmark ids differ per device, so don't sync it).
   const storedCollapsed = (await chrome.storage.local.get('owl:collapsed'))['owl:collapsed'];
   ui.collapsed = new Set(Array.isArray(storedCollapsed) ? storedCollapsed : []);
+  // [Task E16] Load the once-ever review-ask latch so a prior dismissal stays
+  // suppressed across boots. Best-effort — a read failure just leaves it eligible.
+  try { reviewAsked = !!(await chrome.storage.local.get(REVIEW_ASKED_KEY))[REVIEW_ASKED_KEY]; } catch { /* best-effort */ }
   // Repair notes whose bookmark URL embeds an old/foreign extension id (e.g. created
   // by an unpacked dev build) so clicking them opens this extension instead of being
   // blocked by Chrome. No-op once every note already uses the current id.
@@ -894,6 +1012,10 @@ function renderCurrentEditor(opts = {}) {
       // fire-and-forget, .catch-guarded discipline as the lexical upsert above; hash-
       // diff means an unchanged body (e.g. a folder-only move) re-embeds nothing.
       upsertSemantic(note);
+      // [Task E16] Count this successful save toward the one-time review ask. Fire-and-
+      // forget (its body is fully .catch-guarded) so it never delays or blocks the save;
+      // a cheap in-memory guard stops all counting once the ask has been shown.
+      countSaveTowardReview();
       // Auto-saves stay quiet — the editor's inline status confirms them and the size
       // meter already flags oversized notes. Only manual saves pop a toast.
       if (!auto) {

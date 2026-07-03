@@ -474,6 +474,35 @@ body.resizing { user-select: none; cursor: col-resize; }
 }
 #import-progress .import-progress-bar { height: 100%; width: 0; background: var(--accent); transition: width 0.15s; }
 
+/* [Task E16] One-time review ask — a slim persistent card ABOVE the toast slot.
+   Not a toast: it waits for a deliberate choice instead of auto-fading. */
+#review-banner {
+  position: fixed; right: 18px; bottom: 64px; z-index: 101;
+  display: flex; flex-direction: column; gap: 8px;
+  max-width: 280px; padding: 12px 14px;
+  background: #fff; color: var(--text);
+  border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.16);
+  font-size: 13px; line-height: 1.45;
+}
+#review-banner .review-msg { padding-right: 18px; }
+#review-banner .review-actions { display: flex; gap: 8px; }
+#review-banner .review-rate {
+  background: var(--accent); border: 1px solid var(--accent); color: #fff; font-weight: 600;
+  padding: 6px 12px; border-radius: 8px; font-size: 13px; cursor: pointer;
+}
+#review-banner .review-rate:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
+#review-banner .review-dismiss {
+  background: #fff; border: 1px solid var(--border); color: var(--muted);
+  padding: 6px 12px; border-radius: 8px; font-size: 13px; cursor: pointer;
+}
+#review-banner .review-dismiss:hover { background: #f1f3f5; }
+#review-banner .review-close {
+  position: absolute; top: 6px; right: 8px;
+  background: none; border: 0; color: var(--muted); font-size: 13px; line-height: 1; cursor: pointer; padding: 2px;
+}
+#review-banner .review-close:hover { color: var(--text); }
+
 /* Attachments (future) */
 .attachment { display: inline-flex; gap: 6px; align-items: center; margin: 2px 6px 2px 0; padding: 3px 10px; background: #f1f3f5; border-radius: 999px; font-size: 12px; }
 
