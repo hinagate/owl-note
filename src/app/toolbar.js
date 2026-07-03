@@ -115,8 +115,8 @@ export function renderToolbar(container, { query = '', onSearch, onSuggest = nul
   // synchronous action — no user-gesture-sensitive work happens here.
   if (onAsk) {
     const askBtn = document.createElement('button');
-    askBtn.textContent = 'Ask';
-    askBtn.title = 'Ask your notes';
+    askBtn.textContent = '🦉 Ask Owl';
+    askBtn.title = 'Ask Owl';
     askBtn.addEventListener('click', () => onAsk());
     container.append(askBtn);
   }

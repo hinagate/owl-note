@@ -119,13 +119,13 @@ export function renderAskPanel(container, {
   // name, and (with the focus trap below) treats the page behind it as inert.
   container.setAttribute('role', 'dialog');
   container.setAttribute('aria-modal', 'true');
-  container.setAttribute('aria-label', 'Ask your notes');
+  container.setAttribute('aria-label', 'Ask Owl');
 
   const header = document.createElement('div');
   header.className = 'ask-header';
   const heading = document.createElement('h2');
   heading.className = 'ask-title';
-  heading.textContent = 'Ask your notes';
+  heading.textContent = 'Ask Owl';
   const closeBtn = document.createElement('button');
   closeBtn.type = 'button';
   closeBtn.className = 'ask-close';
@@ -155,9 +155,9 @@ export function renderAskPanel(container, {
   const input = document.createElement('input');
   input.type = 'text';
   input.className = 'ask-input';
-  input.placeholder = 'Ask a question about your notes…';
+  input.placeholder = 'Ask Owl about your notes…';
   // Accessible name for the input (a placeholder is not a reliable label for AT).
-  input.setAttribute('aria-label', 'Ask a question about your notes');
+  input.setAttribute('aria-label', 'Ask Owl about your notes');
   const submit = document.createElement('button');
   submit.type = 'button';
   submit.className = 'ask-submit';
@@ -788,7 +788,7 @@ export function renderAskPanel(container, {
         break;
 
       // M3 live states route into the CURRENT exchange's pending slot.
-      case 'generating': setStatus('Thinking…'); setPending(thinkingIndicator('Thinking…')); break;
+      case 'generating': setStatus('Owl is thinking…'); setPending(thinkingIndicator('Owl is thinking…')); break;
       case 'downloading': renderDownloading(state); break;
 
       // Terminal states resolve the current exchange's pending indicator.

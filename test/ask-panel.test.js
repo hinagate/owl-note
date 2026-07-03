@@ -1146,7 +1146,7 @@ describe('ask-panel — cross-notebook citation open (app integration)', () => {
     await app.rebuildAskIndex(); // deterministic corpus (don't race the floating boot build)
 
     // Drawer opens from the toolbar Ask button.
-    const askBtn = [...document.querySelectorAll('#toolbar button')].find((b) => b.textContent === 'Ask');
+    const askBtn = [...document.querySelectorAll('#toolbar button')].find((b) => b.textContent === '🦉 Ask Owl');
     expect(askBtn).toBeTruthy();
     askBtn.click();
     expect(document.getElementById('ask-panel').hidden).toBe(false);
@@ -1176,7 +1176,7 @@ describe('ask-panel — cross-notebook citation open (app integration)', () => {
     await app.initUI(root);
     await app.rebuildAskIndex();
 
-    [...document.querySelectorAll('#toolbar button')].find((b) => b.textContent === 'Ask').click();
+    [...document.querySelectorAll('#toolbar button')].find((b) => b.textContent === '🦉 Ask Owl').click();
     document.querySelector('#ask-panel .ask-input').value = 'espresso';
     document.querySelector('#ask-panel .ask-submit').click();
     await settle();
@@ -1196,7 +1196,7 @@ describe('ask-panel — built-in provider answer (app integration)', () => {
   let lm = null;
 
   const openAndAsk = async (q) => {
-    [...document.querySelectorAll('#toolbar button')].find((b) => b.textContent === 'Ask').click();
+    [...document.querySelectorAll('#toolbar button')].find((b) => b.textContent === '🦉 Ask Owl').click();
     document.querySelector('#ask-panel .ask-input').value = q;
     document.querySelector('#ask-panel .ask-submit').click();
     await settle();
