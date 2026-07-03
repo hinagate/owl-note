@@ -16,10 +16,13 @@
 // everything after it. ~~~ tilde fences are deliberately not handled (chunker parity).
 const FENCE_MARKER = /^```/;
 
-// Heading = 1–6 hashes followed by whitespace OR a non-hash, non-space char (so
-// `#Title` and `# Title` are headings, but `#######x` (7 hashes) and a bare `#`
-// are not). Mirrors the brief's /^#{1,6}(?=\s|[^#\s])/.
-const HEADING_RE = /^#{1,6}(?=\s|[^#\s])/;
+// Heading = 1–6 hashes followed by WHITESPACE only. `#Title` (no space) is
+// deliberately NOT treated as a heading and never "fixed": the same shape is a
+// hashtag line (`#tag #another`), a shebang (`#!/bin/bash`), or `#1 issue` — all
+// common note content that inserting a space would corrupt into a heading. A rare
+// unspaced heading typo is the user's to fix; misclassifying prose is worse.
+// (E11-review finding — the original /^#{1,6}(?=\s|[^#\s])/ hit all three.)
+const HEADING_RE = /^#{1,6}\s/;
 // List item: optional indent, then a `-`/`*`/`+` bullet or an ordered `1.`/`1)`
 // marker, then whitespace. Used to space list blocks and to know when NOT to.
 const LIST_ITEM_RE = /^\s*([-*+]|\d+[.)])\s/;
@@ -68,7 +71,9 @@ export function tidyMarkdown(body) {
     }
     let text = line;
     text = text.replace(UNICODE_BULLET_RE, '$1- ');          // rule 6 (before list/heading classify)
-    text = text.replace(/^(#{1,6})([^#\s])/, '$1 $2');        // rule 4a: `#Title` → `# Title`
+    // rule 4a (`#Title` → `# Title`) was REMOVED: it corrupted hashtags/shebangs/
+    // `#1 issue` into headings (see HEADING_RE comment). Only already-valid
+    // headings get the rule-4b blank-line spacing below.
     text = stripTrailing(text);                              // rule 2
     return {
       text,

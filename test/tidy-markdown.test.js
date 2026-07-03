@@ -40,9 +40,17 @@ describe('tidyMarkdown — rule 3: collapse blank-line runs', () => {
 });
 
 describe('tidyMarkdown — rule 4: headings', () => {
-  it('inserts the missing space after the hashes', () => {
-    expect(tidyMarkdown('#Title')).toBe('# Title\n');
-    expect(tidyMarkdown('###Sub')).toBe('### Sub\n');
+  // [E11-review fix] `#Word` is deliberately NOT "fixed" into a heading: the same
+  // shape is a hashtag line, a shebang, or `#1 issue` — inserting a space would
+  // corrupt real note content into headings. Only already-spaced headings count.
+  it('leaves unspaced #Word lines alone (hashtags/shebangs are not headings)', () => {
+    expect(tidyMarkdown('#Title')).toBe('#Title\n');
+    expect(tidyMarkdown('###Sub')).toBe('###Sub\n');
+    expect(tidyMarkdown('#tag #another')).toBe('#tag #another\n');
+    expect(tidyMarkdown('#!/bin/bash')).toBe('#!/bin/bash\n');
+    expect(tidyMarkdown('#1 issue')).toBe('#1 issue\n');
+    // ...and no blank lines are forced around them (they are not headings).
+    expect(tidyMarkdown('text\n#tag #b\nmore')).toBe('text\n#tag #b\nmore\n');
   });
   it('does NOT treat 7+ hashes as a heading (no space inserted)', () => {
     expect(tidyMarkdown('#######notaheading')).toBe('#######notaheading\n');
@@ -191,13 +199,16 @@ describe('tidyMarkdown — idempotence on a gnarly all-rules fixture', () => {
 
 describe('tidyMarkdown — CJK safety (structure only, word content untouched)', () => {
   it('fixes heading spacing and bullets in a Chinese note without altering words', () => {
-    const body = '#购物清单\n买牛奶和鸡蛋\n•鸡蛋\n•面包';
+    const body = '# 购物清单\n买牛奶和鸡蛋\n•鸡蛋\n•面包';
     const out = tidyMarkdown(body);
     expect(out).toBe('# 购物清单\n\n买牛奶和鸡蛋\n\n- 鸡蛋\n- 面包\n');
     // Every CJK word is present and unchanged — only markers/whitespace moved.
     for (const word of ['购物清单', '买牛奶和鸡蛋', '鸡蛋', '面包']) {
       expect(out).toContain(word);
     }
+    // [E11-review fix] An UNSPACED `#购物清单` could equally be a Chinese hashtag —
+    // it is left exactly as written (no space insertion, no forced blank lines).
+    expect(tidyMarkdown('#购物清单\n买牛奶')).toBe('#购物清单\n买牛奶\n');
   });
 
   it('does not insert spaces between CJK characters or reflow the text', () => {
