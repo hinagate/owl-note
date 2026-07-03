@@ -106,6 +106,12 @@ export function renderAskPanel(container, {
   onEnableModel = () => {}, onDeclineAi = () => {}, aiDeclined = false,
   getCurrentNote = () => null,
   actions = [],
+  // [Task V4] Footer semantic segment. getSemanticStatus() → { state, progress? };
+  // the DEFAULT is null so a host that doesn't wire semantics renders NO extra footer
+  // control (and the focus trap keeps .ask-submit as its last focusable). onBuildSemantic
+  // fires on the Build button click; the host owns the one-time build + the status.
+  getSemanticStatus = () => null,
+  onBuildSemantic = () => {},
 }) {
   container.innerHTML = ''; // build the shell ONCE; update() only mutates status/results
 
@@ -391,8 +397,60 @@ export function renderAskPanel(container, {
   // ---- rendering -----------------------------------------------------------
   function setStatus(text) { status.textContent = text; }
   function renderFooter() {
+    footer.textContent = '';
     const n = (getStats() || {}).notes || 0;
-    footer.textContent = `Searching ${n} note${n === 1 ? '' : 's'}`;
+    const count = document.createElement('span');
+    count.className = 'ask-footer-count';
+    count.textContent = `Searching ${n} note${n === 1 ? '' : 's'}`;
+    footer.appendChild(count);
+    renderSemanticSegment();
+  }
+
+  // [Task V4] Append the semantic status to the footer. Cheap refresh points: open()
+  // (via renderFooter) and the host's refreshFooter() push during a build / on ready.
+  //   off      → a compact Build button whose title/aria disclose the ~130 MB one-time
+  //              on-device download (honest copy, mirroring the opt-in card's tone).
+  //   building → the two phases as inline text (Downloading model… % / Embedding n/total).
+  //   ready    → "· semantic ✓".
+  // Null/unknown status renders nothing (default for a host that doesn't wire semantics).
+  function renderSemanticSegment() {
+    const st = getSemanticStatus();
+    if (!st) return;
+    if (st.state === 'off') {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'ask-build-semantic';
+      btn.textContent = '⚡ Build semantic index';
+      const hint = 'Adds meaning-based (semantic) search. ~130 MB one-time download; '
+        + 'the model runs on this device — your notes never leave it.';
+      btn.title = hint;
+      btn.setAttribute('aria-label', hint);
+      btn.addEventListener('click', () => onBuildSemantic());
+      footer.appendChild(btn);
+    } else if (st.state === 'building') {
+      const seg = document.createElement('span');
+      seg.className = 'ask-semantic-building';
+      seg.textContent = ` · ${semanticProgressText(st.progress)}`;
+      footer.appendChild(seg);
+    } else if (st.state === 'ready') {
+      const seg = document.createElement('span');
+      seg.className = 'ask-semantic-ready';
+      seg.textContent = ' · semantic ✓';
+      footer.appendChild(seg);
+    }
+  }
+
+  function semanticProgressText(p) {
+    if (!p) return 'Preparing…';
+    if (p.phase === 'download') {
+      const pct = p.progress != null ? ` ${Math.round(p.progress * 100)}%` : '';
+      return `Downloading model…${pct}`;
+    }
+    if (p.phase === 'embed') {
+      const t = p.total ? ` ${p.done}/${p.total}` : '';
+      return `Embedding notes…${t}`;
+    }
+    return 'Preparing…';
   }
 
   // ---- thread model --------------------------------------------------------
@@ -746,5 +804,8 @@ export function renderAskPanel(container, {
   // currently-open note live (app.js calls it from renderCurrentEditor — the one
   // choke point every note open/close passes through). Per-note dismissal survives
   // same-note refreshes, so calling this often is safe.
-  return { update, open, close, destroy, refreshChip };
+  // refreshFooter is exposed so the HOST can push semantic build status into the
+  // footer (progress ticks, ready) without reopening the drawer. Re-reads
+  // getSemanticStatus + getStats — cheap (one small row).
+  return { update, open, close, destroy, refreshChip, refreshFooter: renderFooter };
 }

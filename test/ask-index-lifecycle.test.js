@@ -214,3 +214,181 @@ describe('ask index lifecycle', () => {
     expect(idx.noteMeta('gone')).toBeUndefined();
   });
 });
+
+// [Task V4] Semantic (vector) index wiring: an explicit one-time Build, then silent
+// automatic sync (boot catch-up / save / delete). The load-bearing guarantee is
+// CONSENT — nothing semantic (no worker, no download, no embed) happens before the
+// user's Build click. Fake factories stand in for the real vector-index/embed-client
+// (no Worker in jsdom) via app.__setSemanticFactoriesForTests, so these assert the
+// orchestration without touching a real model.
+describe('semantic index lifecycle (V4)', () => {
+  let vecCalls, embCalls, factoryCalls, order, embedShouldReject;
+
+  // A deterministic in-memory stand-in for src/lib/vector-index.js. Tracks calls and
+  // honors the hash-diff (skip unchanged notes) so a rejecting embed can surface.
+  function makeFakeVector() {
+    const stored = new Map(); // id -> hash
+    let opened = false;
+    return {
+      async open() { vecCalls.open += 1; opened = true; },
+      async upsertMissing(notes, embed) {
+        vecCalls.upsertMissing.push(notes);
+        order.push('upsertMissing');
+        for (const n of notes) {
+          if (!(stored.has(n.id) && stored.get(n.id) === n.hash)) {
+            await embed(n.chunks.map((c) => c.text)); // may reject (rejecting-embed test)
+            stored.set(n.id, n.hash);
+          }
+        }
+      },
+      async removeNote(id) { vecCalls.removeNote.push(id); stored.delete(id); },
+      stats: () => ({ notes: stored.size, chunks: stored.size, ready: opened }),
+      query: () => [],
+      async clear() { stored.clear(); },
+    };
+  }
+  // A stand-in for src/lib/embed-client.js.
+  function makeFakeEmbed() {
+    return {
+      async ensureReady(opts) {
+        embCalls.ensureReady += 1;
+        order.push('ensureReady');
+        if (opts && opts.onProgress) opts.onProgress({ status: 'progress', loaded: 5, total: 10 });
+      },
+      async embedPassages(texts) {
+        embCalls.embedPassages += 1;
+        if (embedShouldReject) throw new Error('fake embed boom');
+        return texts.map(() => new Float32Array([0.1, 0.2, 0.3]));
+      },
+      async embedQuery() { embCalls.embedQuery += 1; return new Float32Array([0.1, 0.2, 0.3]); },
+      stats: () => ({ spawned: true, ready: true }),
+      dispose() {},
+    };
+  }
+
+  beforeEach(() => {
+    vecCalls = { open: 0, upsertMissing: [], removeNote: [] };
+    embCalls = { ensureReady: 0, embedPassages: 0, embedQuery: 0 };
+    factoryCalls = { vector: 0, embed: 0 };
+    order = [];
+    embedShouldReject = false;
+    app.__setSemanticFactoriesForTests({
+      createVectorIndex: () => { factoryCalls.vector += 1; return makeFakeVector(); },
+      createEmbedClient: () => { factoryCalls.embed += 1; return makeFakeEmbed(); },
+    });
+  });
+
+  afterEach(() => {
+    app.__setSemanticFactoriesForTests(null); // restore the real factories for other suites
+  });
+
+  it('no flag → initUI constructs NO vector/worker (factories never called) and asks stay lexical', async () => {
+    const root = await bm.ensureRoot();
+    await seedNote(root, { id: 'n1', title: 'Photosynthesis', body: 'Plants use chloroplasts to capture sunlight.' });
+    await app.initUI(root);
+    await app.rebuildAskIndex();
+    await settle();
+    // THE consent guarantee: neither semantic factory ran before a Build click.
+    expect(factoryCalls.vector).toBe(0);
+    expect(factoryCalls.embed).toBe(0);
+    expect(embCalls.embedQuery).toBe(0); // the query-embed path is unreachable pre-flag
+    // Retrieval still works — lexically.
+    expect(app.getAskIndex().query('chloroplasts').some((h) => h.noteId === 'n1')).toBe(true);
+  });
+
+  it('buildSemanticIndex: factories called once, ensureReady BEFORE upsertMissing, notes shaped {id,hash,chunks:[{id,text}]}, flag persisted, two progress phases', async () => {
+    const root = await bm.ensureRoot();
+    await seedNote(root, { id: 'n1', title: 'Kubernetes', body: 'A pod is the smallest deployable unit.' });
+    await app.initUI(root);
+    await app.rebuildAskIndex();
+
+    const progress = [];
+    await app.buildSemanticIndex({ onProgress: (p) => progress.push(p) });
+
+    expect(factoryCalls.vector).toBe(1);
+    expect(factoryCalls.embed).toBe(1);
+    // The model must be loaded (ensureReady) before any note is embedded (upsertMissing).
+    expect(order.indexOf('ensureReady')).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf('ensureReady')).toBeLessThan(order.indexOf('upsertMissing'));
+    // Corpus shaped to vector-index's contract.
+    const notes = vecCalls.upsertMissing[0];
+    expect(notes).toHaveLength(1);
+    expect(notes[0].id).toBe('n1');
+    expect(typeof notes[0].hash).toBe('string');
+    expect(Array.isArray(notes[0].chunks)).toBe(true);
+    expect(typeof notes[0].chunks[0].id).toBe('string');
+    expect(typeof notes[0].chunks[0].text).toBe('string');
+    // Flag persisted only on success.
+    expect((await chrome.storage.local.get('ask:semanticBuilt'))['ask:semanticBuilt']).toBe(true);
+    // Two distinct phases surfaced.
+    expect(progress.some((p) => p.phase === 'download')).toBe(true);
+    expect(progress.some((p) => p.phase === 'embed')).toBe(true);
+  });
+
+  it('flag set at boot → semantic catch-up runs (upsertMissing) with no user gesture', async () => {
+    await chrome.storage.local.set({ 'ask:semanticBuilt': true });
+    const root = await bm.ensureRoot();
+    await seedNote(root, { id: 'n1', title: 'Sourdough', body: 'Ferment the levain overnight before baking.' });
+    await app.initUI(root);
+    await app.rebuildAskIndex();
+    await app.whenSemanticReady(); // deterministically await the floating boot catch-up
+
+    expect(factoryCalls.vector).toBe(1); // opted-in on a prior run → constructed at boot
+    expect(factoryCalls.embed).toBe(1);
+    expect(embCalls.ensureReady).toBeGreaterThan(0);
+    expect(vecCalls.upsertMissing.length).toBeGreaterThan(0); // caught up, no gesture
+  });
+
+  it('save with semantic enabled → upsertMissing([thatNote]) (fire-and-forget)', async () => {
+    await chrome.storage.local.set({ 'ask:semanticBuilt': true });
+    const root = await bm.ensureRoot();
+    await app.initUI(root);
+    await app.whenSemanticReady();
+    const before = vecCalls.upsertMissing.length;
+
+    document.querySelector('button.new').click();
+    typeAndSave({ title: 'Recipe', body: 'The dish uses saffron and cardamom.' });
+    await settle();
+
+    const after = vecCalls.upsertMissing.slice(before);
+    const single = after.find((notes) => notes.length === 1);
+    expect(single).toBeTruthy(); // the one saved note was mirrored to the vector index
+    expect(typeof single[0].id).toBe('string');
+    expect(Array.isArray(single[0].chunks)).toBe(true);
+  });
+
+  it('delete with semantic enabled → vector removeNote(id) alongside the lexical removeNote', async () => {
+    await chrome.storage.local.set({ 'ask:semanticBuilt': true });
+    const root = await bm.ensureRoot();
+    await app.initUI(root);
+    await app.whenSemanticReady();
+
+    document.querySelector('button.new').click();
+    typeAndSave({ title: 'Deletable', body: 'a unique zebra roams the savanna' });
+    await settle();
+    window.confirm = () => true;
+    document.querySelector('#editor button.delete').click(); // editor delete → trash
+    await settle();
+
+    expect(vecCalls.removeNote.length).toBeGreaterThan(0);
+  });
+
+  it('a rejecting fake embed leaves asks working (lexical) with no unhandled rejection', async () => {
+    embedShouldReject = true;
+    await chrome.storage.local.set({ 'ask:semanticBuilt': true });
+    const root = await bm.ensureRoot();
+    await seedNote(root, { id: 'n1', title: 'Photosynthesis', body: 'Plants use chloroplasts to capture sunlight.' });
+    await app.initUI(root);
+    await app.rebuildAskIndex();
+    await app.whenSemanticReady(); // boot catch-up embed rejects internally; the .catch swallows it
+
+    // Lexical retrieval is unaffected by the semantic failure.
+    expect(app.getAskIndex().query('chloroplasts').some((h) => h.noteId === 'n1')).toBe(true);
+
+    // A save also survives a rejecting embed (fire-and-forget + .catch), staying lexical.
+    document.querySelector('button.new').click();
+    typeAndSave({ title: 'Spices', body: 'a second note about turmeric and paprika' });
+    await settle();
+    expect(app.getAskIndex().query('turmeric').length).toBeGreaterThan(0);
+  });
+});

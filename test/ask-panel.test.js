@@ -1031,6 +1031,82 @@ describe('ask-panel — pluggable action registry (E12)', () => {
   });
 });
 
+// [Task V4] Footer semantic segment: an explicit one-time "Build semantic index"
+// button (off), the two-phase progress text (building), and a "semantic ✓" marker
+// (ready). getSemanticStatus() drives it; onBuildSemantic() fires on click. The
+// panel default is NO segment (getSemanticStatus → null) so a host that doesn't wire
+// semantics adds no stray footer control (and the focus-trap tests above still see
+// .ask-submit as the last focusable).
+describe('ask-panel — semantic build footer (V4)', () => {
+  it("'off' shows a Build button whose title/aria disclose the ~130 MB one-time on-device download; click fires onBuildSemantic", () => {
+    const onBuildSemantic = vi.fn();
+    const { el, panel } = makePanel({ getSemanticStatus: () => ({ state: 'off' }), onBuildSemantic });
+    panel.open();
+    const btn = el.querySelector('.ask-footer .ask-build-semantic');
+    expect(btn).not.toBeNull();
+    expect(btn.textContent).toContain('Build semantic index');
+    // Honest copy (mirrors the opt-in card's tone): size + one-time + on-device.
+    expect(btn.title).toMatch(/130\s*MB/i);
+    expect(btn.title.toLowerCase()).toContain('one-time');
+    expect(btn.title.toLowerCase()).toContain('device');
+    expect(btn.getAttribute('aria-label')).toMatch(/130\s*MB/i);
+    btn.click();
+    expect(onBuildSemantic).toHaveBeenCalledTimes(1);
+  });
+
+  it("'building' surfaces the two distinct phases (Downloading model… %, then Embedding notes… n/total) and hides the Build button", () => {
+    let status = { state: 'building', progress: { phase: 'download', progress: 0.4 } };
+    const { el, panel } = makePanel({ getSemanticStatus: () => status });
+    panel.open();
+    let txt = el.querySelector('.ask-footer').textContent;
+    expect(txt.toLowerCase()).toContain('downloading');
+    expect(txt).toContain('40'); // 0.4 → 40%
+    expect(el.querySelector('.ask-build-semantic')).toBeNull(); // no Build button mid-build
+
+    status = { state: 'building', progress: { phase: 'embed', done: 3, total: 8 } };
+    panel.refreshFooter();
+    txt = el.querySelector('.ask-footer').textContent;
+    expect(txt.toLowerCase()).toContain('embedding');
+    expect(txt).toContain('3');
+    expect(txt).toContain('8');
+  });
+
+  it("'ready' shows the semantic ✓ marker and no Build button", () => {
+    const { el, panel } = makePanel({ getSemanticStatus: () => ({ state: 'ready' }) });
+    panel.open();
+    const txt = el.querySelector('.ask-footer').textContent;
+    expect(txt).toContain('✓');
+    expect(txt.toLowerCase()).toContain('semantic');
+    expect(el.querySelector('.ask-build-semantic')).toBeNull();
+  });
+
+  it('refreshFooter() re-renders the segment from getSemanticStatus (host push during a build)', () => {
+    let status = { state: 'off' };
+    const { el, panel } = makePanel({ getSemanticStatus: () => status });
+    panel.open();
+    expect(el.querySelector('.ask-build-semantic')).not.toBeNull();
+    status = { state: 'ready' };
+    panel.refreshFooter();
+    expect(el.querySelector('.ask-build-semantic')).toBeNull();
+    expect(el.querySelector('.ask-footer').textContent).toContain('✓');
+  });
+
+  it('keeps the corpus note count alongside the semantic segment', () => {
+    const { el, panel } = makePanel({ getStats: () => ({ notes: 12, chunks: 30 }), getSemanticStatus: () => ({ state: 'ready' }) });
+    panel.open();
+    const txt = el.querySelector('.ask-footer').textContent;
+    expect(txt).toContain('12');
+    expect(txt).toContain('✓');
+  });
+
+  it('renders NO semantic segment when getSemanticStatus is not provided (default → null)', () => {
+    const { el, panel } = makePanel(); // no getSemanticStatus in the callbacks
+    panel.open();
+    expect(el.querySelector('.ask-build-semantic')).toBeNull();
+    expect(el.querySelector('.ask-footer').textContent).toContain('note'); // just the count
+  });
+});
+
 // --- Layer 2: app integration over fake-chrome -------------------------------
 
 let app, bm, encode;

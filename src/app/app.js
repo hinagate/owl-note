@@ -25,6 +25,9 @@ import * as noteDrive from '../lib/note-drive.js';
 import { isEnabled, enable, disable } from '../lib/drive-sync.js';
 import { createAskIndex } from '../lib/ask-index.js';
 import { createFusion } from '../lib/fusion.js';
+import { createVectorIndex } from '../lib/vector-index.js';
+import { createEmbedClient } from '../lib/embed-client.js';
+import { chunkNote } from '../lib/chunker.js';
 import { createAskController } from '../lib/ask-controller.js';
 import { createRegistry } from '../lib/providers/registry.js';
 import { suggestTitle } from '../lib/providers/title.js';
@@ -180,6 +183,12 @@ export function resetUI() {
   if (askPanel && askPanel.destroy) askPanel.destroy();
   askPanel = null;
   askController = null;
+  // Drop the semantic singletons + gate so the next boot starts un-opted-in — keeps
+  // test runs isolated (each begins with no worker/vector and the flag unread).
+  vectorIndex = null;
+  embedClient = null;
+  semanticEnabled = false;
+  semanticStatus = { state: 'off' };
 }
 
 // Ask-Your-Notes lexical index — ONE module-level instance for the app's lifetime.
@@ -207,6 +216,157 @@ const askRegistry = createRegistry();
 // writes it back through onDeclineAi (below). chrome.storage key.
 const AI_DECLINED_KEY = 'ask:aiDeclined';
 
+// --- Semantic (vector) index orchestration [Task V4] ----------------------------
+// The hybrid Ask feature's expensive half. Everything here is gated behind ONE
+// explicit user opt-in (the footer's Build button), persisted as a flag, because
+// enabling it fetches a ~130MB on-device model. NOTHING semantic — no worker spawn,
+// no download, no embedding — may happen before that click.
+//
+// The persisted opt-in. Once true, later boots silently catch the vector index up to
+// the live corpus (rule 2). Read at boot and after a Build; never assumed.
+const SEMANTIC_BUILT_KEY = 'ask:semanticBuilt';
+
+// Lazy singletons — NULL until opt-in. Constructing either spawns a Worker / opens
+// IndexedDB (and can trigger the model download), so they are built ONLY inside
+// ensureSemantic(), called from the Build click or a flag-gated boot catch-up —
+// NEVER implicitly. jsdom has no Worker, so this lazy construction is ALSO what keeps
+// every existing (Worker-free) test green.
+let vectorIndex = null;
+let embedClient = null;
+// In-memory mirror of SEMANTIC_BUILT_KEY for cheap synchronous gating on the hot
+// save/delete paths. Flipped true only after a successful Build or a flag-set boot.
+let semanticEnabled = false;
+// Footer status surfaced to the panel via getSemanticStatus(); pushed with
+// refreshFooter(). 'off' before opt-in, 'building' during a Build, 'ready' after.
+let semanticStatus = { state: 'off' };
+
+// Factory seam (documented test choice): production callers never pass factories;
+// tests swap in fakes via __setSemanticFactoriesForTests so no real Worker/IndexedDB
+// is touched. The consent test asserts these are NEVER called before the Build click.
+let semanticFactories = { createVectorIndex, createEmbedClient };
+export function __setSemanticFactoriesForTests(f) {
+  semanticFactories = f
+    ? { createVectorIndex, createEmbedClient, ...f }
+    : { createVectorIndex, createEmbedClient };
+}
+
+// Construct the semantic singletons ONCE (idempotent). The ONLY place either factory
+// runs. Callers must already have decided the user opted in — this does not check the
+// flag, it just materializes the machinery.
+function ensureSemantic() {
+  if (!vectorIndex) vectorIndex = semanticFactories.createVectorIndex();
+  if (!embedClient) embedClient = semanticFactories.createEmbedClient();
+}
+
+// Passage embedder handed to vector-index.upsertMissing — resolves the LIVE singleton
+// at call time (non-null because upsertMissing only runs after ensureSemantic).
+const embedPassages = (texts) => embedClient.embedPassages(texts);
+
+async function isSemanticBuilt() {
+  try { return !!(await chrome.storage.local.get(SEMANTIC_BUILT_KEY))[SEMANTIC_BUILT_KEY]; }
+  catch { return false; } // storage read failed — treat as not-built (stay lexical)
+}
+
+// Normalize a worker load-progress event to a 0..1 fraction (or null). The worker
+// forwards Transformers.js progress, whose `progress` is 0..100; loaded/total is the
+// authoritative pair when present.
+function progressFraction(e) {
+  if (!e) return null;
+  if (typeof e.loaded === 'number' && typeof e.total === 'number' && e.total > 0) return e.loaded / e.total;
+  if (typeof e.progress === 'number') return e.progress > 1 ? e.progress / 100 : e.progress;
+  return null;
+}
+
+// Push the footer status to the panel (safe no-op when no drawer is mounted).
+function setSemanticStatus(s) { semanticStatus = s; askPanel?.refreshFooter?.(); }
+
+// The live corpus shaped to vector-index's contract: { id, hash, chunks:[{id,text}] }.
+// Reuses loadNotes(ui.rootId) — the SAME source the lexical rebuild uses (every note
+// under root minus Trash, bodies materialized) — then chunks each note. The chunk
+// TEXT field is what gets embedded (matches the eval's indexing).
+async function corpusNotes() {
+  const notes = ui.rootId ? await loadNotes(ui.rootId) : [];
+  return notes.map(noteToCorpusShape);
+}
+function noteToCorpusShape(note) {
+  return { id: note.id, hash: note.hash, chunks: chunkNote(note) };
+}
+
+// The Build click path: the one-time semantic index build. Ordered so nothing
+// downloads or embeds until this explicit opt-in.
+//   1. construct + open the vector store,
+//   2. ensureReady() — where the ~130MB model downloads (progress PHASE 1),
+//   3. upsertMissing() — embed every note's chunks (progress PHASE 2; hash-diff so a
+//      re-run is cheap),
+//   4. persist the flag (ONLY on success) + refresh the footer.
+// Exported so the panel's Build handler and the app tests can drive it.
+export async function buildSemanticIndex({ onProgress } = {}) {
+  ensureSemantic();
+  await vectorIndex.open();
+  // PHASE 1 — model download/load. ensureReady emits the worker's load-progress.
+  onProgress?.({ phase: 'download' });
+  await embedClient.ensureReady({
+    onProgress: (e) => onProgress?.({ phase: 'download', progress: progressFraction(e) }),
+  });
+  // PHASE 2 — embed the corpus. upsertMissing skips notes whose hash is unchanged.
+  const notes = await corpusNotes();
+  onProgress?.({ phase: 'embed', done: 0, total: notes.length });
+  await vectorIndex.upsertMissing(notes, embedPassages, {
+    onProgress: (done, total) => onProgress?.({ phase: 'embed', done, total }),
+  });
+  // Success ONLY: flip the gate and persist. A failed/aborted build leaves the user
+  // un-opted-in (retrieval stays lexical) rather than claiming a half-built index.
+  semanticEnabled = true;
+  try { await chrome.storage.local.set({ [SEMANTIC_BUILT_KEY]: true }); } catch { /* best-effort */ }
+  setSemanticStatus({ state: 'ready' });
+}
+
+// Bring the vector index up to date with `notes` (defaults to the whole live corpus).
+// ensureReady FIRST so the embedder is loaded before upsertMissing embeds any changed
+// note; hash-diff means unchanged notes cost nothing (no embed call). Only ever called
+// when semantic is enabled — the caller's job to gate on semanticEnabled.
+async function syncSemantic(notes) {
+  ensureSemantic();
+  await vectorIndex.open();
+  await embedClient.ensureReady();
+  await vectorIndex.upsertMissing(notes || await corpusNotes(), embedPassages);
+}
+
+// Boot catch-up: if the user opted into semantic search on a PRIOR run, silently
+// re-sync the vector index to the current corpus. Gated on the persisted flag so a
+// never-opted-in user spawns NO worker and downloads NOTHING at boot. ensureSemantic
+// runs BEFORE flipping semanticEnabled so removeSemantic never sees a null singleton.
+async function maybeCatchUpSemantic() {
+  if (!(await isSemanticBuilt())) return; // never opted in — do nothing semantic
+  ensureSemantic();
+  semanticEnabled = true;
+  setSemanticStatus({ state: 'ready' });
+  await syncSemantic(); // hash-diff makes this cheap when nothing changed
+}
+
+// Test/boot accessor for the floating boot catch-up (mirrors how tests await
+// ui.indexReady via rebuildAskIndex): resolves once the catch-up settles.
+export function whenSemanticReady() { return ui.semanticReady || Promise.resolve(); }
+
+// Mirror a lexical save into the vector index when semantic is on. Fire-and-forget +
+// .catch (the ui.indexReady discipline): a semantic hiccup must never break saving or
+// leak an unhandled rejection. hash-diff: a folder-only move (body unchanged) embeds
+// nothing.
+function upsertSemantic(note) {
+  if (!semanticEnabled) return;
+  syncSemantic([noteToCorpusShape(note)]).catch((e) => console.warn('semantic upsert failed', e));
+}
+
+// Mirror a lexical removeNote into the vector index. Fire-and-forget + .catch
+// (removeNote is async — it hits IndexedDB). No-op before opt-in, or if the singleton
+// isn't up yet (the note isn't tracked, so there's nothing to remove).
+function removeSemantic(id) {
+  if (!semanticEnabled || !vectorIndex) return;
+  Promise.resolve()
+    .then(() => vectorIndex.removeNote(id))
+    .catch((e) => console.warn('semantic removeNote failed', e));
+}
+
 // Ask controller + drawer are constructed once per app lifetime (reset between
 // tests via resetUI). The controller is pure; the panel binds to the #ask-panel
 // aside, which some test harnesses omit — then askPanel stays null and the toolbar
@@ -216,9 +376,23 @@ let askPanel = null;
 
 async function ensureAskUI() {
   if (!askController) {
+    // Null-safe proxy handed to fusion as its `vector`: consults the LIVE singleton
+    // (null until opt-in) and reports not-ready whenever semantic is off, so fusion's
+    // short-circuit (`if (!stats.ready || stats.chunks<=0) return lex`) keeps the
+    // hybrid path — and embedQuery below — UNREACHABLE before the Build click. WHY
+    // this matters: an implicit ensure here would be a 130MB download without consent.
+    const vectorProxy = {
+      stats: () => (vectorIndex ? vectorIndex.stats() : { notes: 0, chunks: 0, ready: false }),
+      query: (vec, k) => (vectorIndex ? vectorIndex.query(vec, k) : []),
+    };
+    // Query embedder wrapper. Fusion only reaches this AFTER vectorProxy.stats()
+    // reports ready+populated — which only happens post-Build — so it is provably
+    // unreachable before the flag. It must NEVER trigger the download itself:
+    // ensureReady is the Build path's job, not the query path's.
+    const embedQuery = (q) => embedClient.embedQuery(q);
     askController = createAskController({
       index: getAskIndex(),
-      fusion: createFusion(getAskIndex()),
+      fusion: createFusion(getAskIndex(), { vector: vectorProxy, embedQuery }),
       registry: askRegistry,
       onState: (s) => askPanel?.update(s),
     });
@@ -288,8 +462,26 @@ async function ensureAskUI() {
       onDeclineAi: () => { chrome.storage.local.set({ [AI_DECLINED_KEY]: true }).catch(() => {}); },
       // [Task E12] Chip quick actions as data (Summarize + Tidy, composed above).
       actions: askActions,
+      // [Task V4] Footer semantic segment: the host owns the status; the panel reads
+      // it back on open()/refreshFooter(). onBuildSemantic drives the one-time build.
+      getSemanticStatus: () => semanticStatus,
+      onBuildSemantic: () => startSemanticBuild(),
     });
   }
+}
+
+// The Build click driver. Flip the footer to 'building', run buildSemanticIndex with
+// progress surfaced to the footer, then 'ready'. .catch so a failed build resets the
+// footer to 'off' (retryable) and never leaks an unhandled rejection — retrieval keeps
+// working lexically throughout.
+function startSemanticBuild() {
+  if (semanticStatus.state === 'building') return; // ignore double-clicks
+  setSemanticStatus({ state: 'building', progress: null });
+  buildSemanticIndex({ onProgress: (progress) => setSemanticStatus({ state: 'building', progress }) })
+    .catch((e) => {
+      console.warn('semantic build failed', e);
+      setSemanticStatus({ state: 'off' }); // nothing persisted on failure — let the user retry
+    });
 }
 
 // Open a cited note from the Ask drawer. Uses the index's citation snapshot rather
@@ -336,6 +528,13 @@ export async function initUI(rootId) {
   // delays first paint. .catch keeps a build failure from surfacing as an unhandled
   // rejection (best-effort, like healNoteUrls above); ui.indexReady lets tests await it.
   ui.indexReady = rebuildAskIndex().catch((e) => { console.warn('Ask index build failed:', e); });
+  // Boot catch-up: if the user opted into semantic search on a PRIOR run, silently
+  // re-sync the vector index to the current corpus — a FLOATING, .catch-guarded promise
+  // (same discipline as ui.indexReady) so it never delays first paint and a failure
+  // (or a rejecting embed) degrades to lexical rather than surfacing. Gated inside
+  // maybeCatchUpSemantic on the persisted flag, so a never-opted-in user does nothing
+  // semantic at boot. ui.semanticReady lets tests await it deterministically.
+  ui.semanticReady = maybeCatchUpSemantic().catch((e) => { console.warn('semantic boot catch-up failed:', e); });
 }
 
 export async function loadNotes(folderId) {
@@ -452,7 +651,7 @@ async function batchTrash() {
   if (!targets.length) return;
   if (!confirm(`Move ${targets.length} note(s) to Trash?`)) return;
   await trashNotes(targets, ui.trashId);
-  for (const t of targets) askIndex.removeNote(t.id); // trashed notes leave the live corpus
+  for (const t of targets) { askIndex.removeNote(t.id); removeSemantic(t.id); } // trashed notes leave the live corpus (lexical + vector)
   if (ui.current && targets.some((t) => t.id === ui.current.id)) {
     ui.current = null; ui.activeBookmarkId = null; ui.activeLocalId = null; renderCurrentEditor();
   }
@@ -470,7 +669,7 @@ async function trashAction(kind, handle) {
     if (kind === 'empty' && !confirm(`Permanently delete ${targets.length} note(s)? This cannot be undone.`)) return;
     if (kind === 'deleteForever' && !confirm('Permanently delete this note? This cannot be undone.')) return;
     await deleteForever(targets);
-    for (const t of targets) askIndex.removeNote(t.id); // purged notes are gone for good (no-op if never indexed, e.g. already in Trash)
+    for (const t of targets) { askIndex.removeNote(t.id); removeSemantic(t.id); } // purged notes are gone for good (no-op if never indexed, e.g. already in Trash)
     toast(kind === 'empty' ? 'Trash emptied' : 'Deleted');
   }
   if (ui.current && targets.some((t) => t.id === ui.current.id)) {
@@ -499,6 +698,12 @@ async function liveRefreshNoteList() {
       // unhandled rejection or abort this refresh cycle — best-effort, like
       // bm.healNoteUrls above.
       await rebuildAskIndex().catch((e) => console.warn('ask index rebuild failed', e));
+      // Mirror the coalesced rebuild into the vector index when semantic is on: an
+      // external burst (Drive sync, another tab, a cross-notebook move/restore)
+      // collapses into ONE catch-up per cycle, hash-diff-cheap (moves don't change
+      // content → no-op by hash; restores re-add). .catch for the same reason as the
+      // lexical rebuild above — a semantic hiccup must not abort this cycle or leak.
+      if (semanticEnabled) await syncSemantic().catch((e) => console.warn('semantic rebuild failed', e));
     } while (liveRefreshQueued);
   } finally {
     liveRefreshing = false;
@@ -685,6 +890,10 @@ function renderCurrentEditor(opts = {}) {
         folderId: ui.activeLocalId ? (ui.activeLocalFolderId ?? folder) : folder,
         localOnly: !!ui.activeLocalId,
       });
+      // Mirror the save into the vector index too, when semantic search is on. Same
+      // fire-and-forget, .catch-guarded discipline as the lexical upsert above; hash-
+      // diff means an unchanged body (e.g. a folder-only move) re-embeds nothing.
+      upsertSemantic(note);
       // Auto-saves stay quiet — the editor's inline status confirms them and the size
       // meter already flags oversized notes. Only manual saves pop a toast.
       if (!auto) {
@@ -727,7 +936,7 @@ async function deleteCurrentNote() {
       folderId: ui.activeLocalId ? (ui.activeLocalFolderId ?? ui.activeFolder) : ui.activeFolder,
       localOnly: !!ui.activeLocalId,
     }], ui.trashId);
-    askIndex.removeNote(ui.current.id); // note left the live corpus
+    askIndex.removeNote(ui.current.id); removeSemantic(ui.current.id); // note left the live corpus (lexical + vector)
   } else if (!confirm('Discard this unsaved note?')) {
     return;
   }
@@ -770,7 +979,7 @@ export async function deleteNotebook(id) {
   }
   const movedBookmarks = new Set(targets.filter((t) => t.bookmarkId).map((t) => t.bookmarkId));
   await trashNotes(targets, ui.trashId);
-  for (const t of targets) askIndex.removeNote(t.id); // the whole subtree's notes left the live corpus
+  for (const t of targets) { askIndex.removeNote(t.id); removeSemantic(t.id); } // the whole subtree's notes left the live corpus (lexical + vector)
 
   // The subtree now holds only empty folders — remove them. (Computed while ui.notebooks
   // still reflects the old tree.)
