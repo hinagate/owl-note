@@ -21,8 +21,10 @@
 // node cache under node_modules/@huggingface/transformers/.cache — tens of MB,
 // allow a few minutes).
 
-import { statSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { statSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 
 import { pipeline, env } from '@huggingface/transformers';
 
@@ -40,6 +42,8 @@ import {
 // (Task V3). fusion.js is a pure module (no DOM/chrome), so it imports cleanly here.
 import { rrfFuse, RRF_K } from '../src/lib/fusion.js';
 
+const HERE = dirname(fileURLToPath(import.meta.url));
+
 const K = 5; // final cut for recall@5 / MRR
 const FUSE_K = 8; // breadth of each rank list fed to RRF (matches the app's k=8)
 const TAG_ORDER = ['direct', 'paraphrase', 'cjk', 'injection', 'multi-note'];
@@ -49,6 +53,13 @@ const TAG_ORDER = ['direct', 'paraphrase', 'cjk', 'injection', 'multi-note'];
 const SWEEP = process.argv.includes('--sweep');
 const SWEEP_WEIGHTS = [1, 1.5, 2, 3, 4];
 const E5_LABEL = 'multilingual-e5-small';
+
+// [Task V5] --write-fixtures mode: run e5 ONCE and freeze every corpus-chunk and
+// golden-question embedding into eval/fixtures/vectors.json, so the CI hybrid-floor
+// suite (test/eval-hybrid.test.js) can reproduce the tuned hybrid numbers with NO
+// model download and NO network. e5 only, same q8 config the sweep tuned on.
+const WRITE_FIXTURES = process.argv.includes('--write-fixtures');
+const FIXTURES_PATH = join(HERE, 'fixtures', 'vectors.json');
 
 // Candidate models (plan §9). MiniLM is the English-centric default; e5-small is
 // the multilingual alternative — and the user's notes are CHINESE, so the cjk
@@ -109,6 +120,85 @@ function vectorRank(queryVec, chunks, chunkVecs) {
 
 // (Reciprocal Rank Fusion now lives in src/lib/fusion.js and is imported above, so
 // the eval and the shipped runtime fuse with the identical weighted-RRF math.)
+
+// [Task V5] Stable content hash over the corpus chunks — the DRIFT GUARD stamped
+// into vectors.json. Sort every (chunkId, text) pair and sha256 the join with
+// control-char separators (NUL between id/text, SOH between pairs — neither can
+// appear in a chunk id or cleaned text). test/eval-hybrid.test.js recomputes this
+// from the LIVE corpus + chunker and FAILS LOUDLY on any mismatch, so a corpus or
+// chunker edit can never let stale embeddings pass silently — it forces a
+// regenerate. Duplicated verbatim in that test (this task must not touch the shared
+// harness.mjs); if the two copies ever drift the hash simply mismatches and the test
+// fails — the safe direction.
+export function corpusHash(chunks) {
+  const SEP = String.fromCharCode(0); // NUL between id and text
+  const JOIN = String.fromCharCode(1); // SOH between pairs — neither can appear in ids/text
+  const pairs = chunks.map((c) => `${c.id}${SEP}${c.text}`).sort();
+  return createHash('sha256').update(pairs.join(JOIN)).digest('hex');
+}
+
+// base64-encode a Float32Array's raw little-endian bytes. WHY base64 over a JSON
+// number array: 4× smaller on disk (4 base64 chars per float vs ~10+ decimal chars)
+// AND it round-trips the EXACT IEEE-754 bits, so the committed vectors reproduce the
+// model's output to the last mantissa bit — the CI floors are measured on identical
+// numbers, never re-rounded decimals. Float32Array.from(...) copies into an
+// exact-length buffer first, so the encoded bytes are precisely dim×4 (no tensor
+// backing-store tail leaks in).
+function encodeVec(vec) {
+  const f32 = Float32Array.from(vec);
+  return Buffer.from(f32.buffer).toString('base64');
+}
+
+// ---------------------------------------------------------------------------
+// [Task V5] --write-fixtures: embed the whole corpus + all golden questions ONCE
+// with the exact tuned e5 config (q8, mean-pooled, L2-normalized, 'passage: ' /
+// 'query: ' prefixes) and freeze them into eval/fixtures/vectors.json. Runs the
+// model in node (HF cache warm from E15/V3); the CI test that consumes the file
+// never touches a model or the network.
+// ---------------------------------------------------------------------------
+async function writeFixtures({ index, chunks, golden }) {
+  const model = MODELS.find((m) => m.label === E5_LABEL);
+  process.stderr.write(
+    `\n[write-fixtures] loading ${model.label} (q8) + embedding ${chunks.length} chunks + ${golden.questions.length} questions...\n`,
+  );
+  const extractor = await pipeline('feature-extraction', model.id, { dtype: 'q8' });
+  const embed = async (text) => (await extractor(text, { pooling: 'mean', normalize: true })).data;
+
+  // Corpus chunks — embed the SAME cleaned `text` field the lexical index tokenizes
+  // (never the raw markdown), with e5's mandatory 'passage: ' prefix.
+  const chunkVecs = {};
+  let dim = 0;
+  for (const c of chunks) {
+    const v = await embed(model.docPrefix + c.text);
+    dim = v.length;
+    chunkVecs[c.id] = encodeVec(v);
+  }
+
+  // Every golden question (all 47 — answerable + unanswerable), 'query: ' prefix.
+  const questionVecs = {};
+  for (const q of golden.questions) {
+    questionVecs[q.id] = encodeVec(await embed(model.queryPrefix + q.question));
+  }
+
+  const fixture = {
+    model: model.id, // Xenova/multilingual-e5-small, dtype q8 (int8) — see eval/RESULTS.md
+    dim, // 384
+    corpusHash: corpusHash(chunks),
+    chunks: chunkVecs, // { [chunkId]: base64 Float32 }
+    questions: questionVecs, // { [qid]: base64 Float32 }
+  };
+
+  mkdirSync(dirname(FIXTURES_PATH), { recursive: true });
+  writeFileSync(FIXTURES_PATH, JSON.stringify(fixture));
+  const bytes = statSync(FIXTURES_PATH).size;
+  process.stdout.write(
+    `[write-fixtures] wrote ${FIXTURES_PATH}\n`
+    + `  model: ${fixture.model} (q8)   dim: ${dim}\n`
+    + `  chunks: ${Object.keys(chunkVecs).length}   questions: ${Object.keys(questionVecs).length}\n`
+    + `  corpusHash: ${fixture.corpusHash}\n`
+    + `  size: ${(bytes / 1024).toFixed(1)} KB\n`,
+  );
+}
 
 // Approximate on-disk download size of a cached model (sum of every file under
 // cacheDir/<owner>/<name>). Reported as "approximate download size".
@@ -343,6 +433,13 @@ async function main() {
   const index = buildIndex(corpus);
   const chunks = index.allChunks(); // { id, noteId, noteTitle, heading, text, raw }
   const answerable = golden.questions.filter((q) => q.answerable);
+
+  // [Task V5] --write-fixtures: freeze the e5 embeddings into eval/fixtures/vectors.json
+  // for the model-free CI hybrid-floor suite, then stop.
+  if (WRITE_FIXTURES) {
+    await writeFixtures({ index, chunks, golden });
+    return;
+  }
 
   // [Task V3] --sweep: tune the vector weight for weighted RRF, then stop.
   if (SWEEP) {

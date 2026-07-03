@@ -346,3 +346,95 @@ equal-weights drag while the lexical list (`w_lex` = 1) still contributes and re
 the never-fail fallback. Recall@5 saturates at 1.000 on this 60-chunk corpus (see the
 Limitations above), so **MRR is the discriminating column** and is what separates the
 weights here; on a larger, messier note set the weights would separate further.
+
+## Retrieval v2 — hybrid (shipped config)
+
+The **shipped** M9 retriever. Lexical (MiniSearch) and vector
+(`multilingual-e5-small`, q8) rank lists are fused with **weighted Reciprocal Rank
+Fusion** — the exact `rrfFuse` + `FUSION_WEIGHTS` + `RRF_K` in `src/lib/fusion.js`,
+with the `w_vec = 3` chosen by the sweep above. This is the configuration the
+extension actually runs, and it is now **floor-gated in CI with no model download**:
+`node eval/run-vector.mjs --write-fixtures` froze every corpus-chunk and golden-question
+embedding into `eval/fixtures/vectors.json` (base64 Float32, ~217 KB), and
+`test/eval-hybrid.test.js` fuses those committed vectors with the real fusion module
+to reproduce the table below and assert loose floors under it. A `corpusHash` stamped
+into the fixture (and recomputed live by the test from the corpus + chunker) fails the
+build **loudly** if either drifts away from the frozen vectors — never a silent stale
+pass. The fixture is deterministic: regenerating it produces byte-identical output.
+
+Regenerate with `node eval/run-vector.mjs --write-fixtures` (runs e5 once in node, HF
+cache warm).
+
+| Field | Value |
+| --- | --- |
+| Model | `Xenova/multilingual-e5-small`, `dtype: 'q8'` (int8), 384-dim |
+| Fusion | weighted RRF, `FUSION_WEIGHTS = { lexical: 1, vector: 3 }`, `RRF_K = 60`, lists top-8, final cut top-5 |
+| Scored | 39 answerable golden questions (same corpus/golden as v1) |
+| CI gate | `test/eval-hybrid.test.js` — model-free, over committed `eval/fixtures/vectors.json` |
+
+Hybrid table (reproduces the sweep's `w_vec = 3` row exactly — this is what the CI
+floors are measured under; `lex` is the same live lexical baseline as Retrieval v1):
+
+```
+  tag           n  | lex R@5  lex MRR | hyb R@5  hyb MRR
+  ----------  ---  |  ------   ------  |  ------   ------
+  overall      39  |  0.821    0.821  |  1.000    0.926
+  direct       15  |  1.000    1.000  |  1.000    1.000
+  paraphrase   11  |  0.455    0.364  |  1.000    0.738
+  cjk           6  |  1.000    1.000  |  1.000    1.000
+  injection     3  |  1.000    1.000  |  1.000    1.000
+  multi-note    4  |  0.750    1.000  |  1.000    1.000
+```
+
+### v1 → v2 summary
+
+| Metric | v1 (lexical-only) | v2 (hybrid, shipped) |
+| --- | --- | --- |
+| overall recall@5 | 0.821 | **1.000** |
+| overall MRR | 0.821 | **0.926** |
+| paraphrase recall@5 | 0.455 | **1.000** |
+| paraphrase MRR | 0.364 | **0.738** |
+| direct recall@5 | 1.000 | 1.000 |
+| cjk recall@5 | 1.000 | 1.000 |
+| injection recall@5 | 1.000 | 1.000 |
+| multi-note recall@5 | 0.750 | **1.000** |
+
+The M9 headline is **paraphrase recall@5 0.455 → 1.000**: the entire lexical miss list
+(q16, q17, q18, q20, q24, q26) is now retrieved, with **zero regressions** on any tag
+(direct / cjk / injection hold at 1.000, and hybrid overall 1.000 ≥ lexical overall
+0.821 — fusion never lowers retrieval below the lexical baseline). Model:
+`multilingual-e5-small` (q8); weights `{ lexical: 1, vector: 3 }`; `k = 60`. Because
+the eval and the runtime import the **same** `rrfFuse`/`FUSION_WEIGHTS`/`RRF_K`, and the
+floors run over committed fixtures, a fusion / weight / tokenizer regression turns the
+build red without anyone re-running a model.
+
+### CI floors (`test/eval-hybrid.test.js`)
+
+Loose bounds below the measured values (everything here is deterministic — the slack
+catches code regressions, not variance):
+
+| Floor | Bound | Measured |
+| --- | --- | --- |
+| overall recall@5 | ≥ 0.95 | 1.000 |
+| paraphrase recall@5 | ≥ 0.90 | 1.000 |
+| cjk recall@5 | ≥ 0.90 | 1.000 |
+| direct recall@5 | = 1.000 (exact) | 1.000 |
+| injection recall@5 | ≥ 0.90 | 1.000 |
+| hybrid overall R@5 ≥ live lexical overall R@5 | invariant | 1.000 ≥ 0.821 |
+| every fixture vector: dim = 384, \|norm − 1\| | < 1e-3 | max dev 3.6e-7 |
+
+### Limitations (v2, added to v1's)
+
+- **Frozen model version.** `eval/fixtures/vectors.json` freezes ONE model build
+  (`multilingual-e5-small`, q8, transformers.js 4.2.0). The floors verify the shipped
+  *fusion* against those exact vectors — they never re-embed, so a model or quantization
+  upgrade needs a fixture regenerate (`--write-fixtures`). The `corpusHash` guard catches
+  *corpus / chunker* drift, **not** a silent model swap.
+- **Recall saturates → MRR is the sensitive metric.** On this 60-chunk corpus hybrid
+  recall@5 reaches 1.000 on every tag, so recall cannot discriminate configs here — **MRR**
+  (overall 0.926, paraphrase 0.738) is what separates weights and what the sweep optimized.
+  On a larger, messier note set the configs would spread further; these numbers show the
+  *direction*, not a ceiling.
+- **Synthetic corpus.** Same caveat as v1 — 48 invented notes with clean ground truth; a
+  real user's abbreviation-heavy notes will behave differently, so read v2 as "hybrid
+  closes the paraphrase gap on a clean benchmark," not as a real-world recall figure.
