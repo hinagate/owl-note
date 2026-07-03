@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "notes": [
+    {
+      "id": "monthly-budget",
+      "title": "Monthly budget",
+      "body": "# Monthly budget\n\nA quick breakdown of where the money goes each month.\n\n- Rent: $1,400\n- Groceries: $520\n- Utilities: $180\n- Transit pass: $96\n- Phone + internet: $110\n- Savings transfer: $600\n\nAnything left over rolls into the travel fund. Review this at the start of every\nmonth and adjust the savings transfer up if there is slack.",
+      "attachments": [],
+      "version": 1,
+      "hash": "687a7886ed9ae"
+    },
+    {
+      "id": "focaccia-recipe",
+      "title": "Rosemary focaccia",
+      "body": "# Rosemary focaccia\n\nA reliable weekend loaf. High hydration, long cold proof.\n\n## Dough\n- 500 g bread flour\n- 400 g water (80% hydration)\n- 10 g salt\n- 7 g instant yeast\n- 40 g olive oil\n\nMix, fold four times over the first two hours, then cold-proof overnight.\n\n## Bake\nDimple the dough, top with rosemary and flaky salt, and bake at 220°C (425°F)\nfor 22 minutes until deep gold. Cool on a rack before slicing.",
+      "attachments": [],
+      "version": 1,
+      "hash": "9f7da5239a16a"
+    },
+    {
+      "id": "deploy-runbook",
+      "title": "Deploy runbook",
+      "body": "# Deploy runbook\n\nSteps to push the API to production. Run from the repo root.\n\n```bash\nnpm run build\nnpm run migrate:prod\nexport DATABASE_URL=\"$PROD_DATABASE_URL\"\npg_dump --schema-only owl_prod > backup/schema.sql\nnpm run deploy -- --env production\n```\n\nHealth check: hit `/healthz` and confirm it returns `{\"status\":\"ok\"}`. If the\nmigration step fails, roll back with `npm run migrate:undo` before retrying.",
+      "attachments": [],
+      "version": 1,
+      "hash": "1a24006ff87983"
+    },
+    {
+      "id": "standup-2026-03-04",
+      "title": "Standup 2026-03-04",
+      "body": "# Standup 2026-03-04\n\nPresent: Ana, Bilal, Cheng.\n\n- Ana: finished the CSV export parser, needs review.\n- Bilal: chasing a flaky timezone test.\n- Cheng: drafting the onboarding docs.\n\nDecision: ship the export feature on Friday. Cut the extra date-format options\nfrom this release and track them as a follow-up.",
+      "attachments": [],
+      "version": 1,
+      "hash": "3b5b26c152897"
+    },
+    {
+      "id": "git-cheatsheet",
+      "title": "Git cheatsheet",
+      "body": "# Git cheatsheet\n\nCommands I always forget.\n\n```bash\ngit switch -c feature/name        # new branch\ngit restore --staged file.js      # unstage\ngit commit --amend --no-edit      # fix the last commit\ngit rebase -i HEAD~3              # squash the last three\ngit reflog                        # find a lost commit\ngit clean -fd                     # remove untracked files\n```\n\nTo undo a bad merge that is not yet pushed: `git reset --hard ORIG_HEAD`.",
+      "attachments": [],
+      "version": 1,
+      "hash": "833e635ee4312"
+    },
+    {
+      "id": "marathon-training-week-16",
+      "title": "Marathon training week 16",
+      "body": "# Marathon training week 16\n\nPeak week before the taper begins.\n\n- Monday: rest\n- Tuesday: 8 km easy\n- Wednesday: 12 km with 6 km at threshold\n- Thursday: 8 km easy\n- Saturday: long run, 32 km\n\nThe Saturday long run was the longest of the whole block. Legs held up well;\nfueling every 40 minutes worked. Next week the wind-down phase starts.",
+      "attachments": [],
+      "version": 1,
+      "hash": "1a0c6b526533e5"
+    },
+    {
+      "id": "home-server-setup",
+      "title": "Home server setup",
+      "body": "# Home server setup\n\nNotes for the little box in the closet.\n\n- Static IP: 192.168.1.50\n- SSH on port 2222 (not the default)\n- Reverse proxy: Caddy, config at /etc/caddy/Caddyfile\n- Media service on port 8096\n- Nightly backup cron at 03:00 to the external drive\n\nIf a service will not start, check `journalctl -u caddy` first, then disk space\nwith `df -h`.",
+      "attachments": [],
+      "version": 1,
+      "hash": "118dd8cd0c40a3"
+    },
+    {
+      "id": "overnight-oats",
+      "title": "Overnight oats, base recipe",
+      "body": "# Overnight oats, base recipe\n\nThe no-cook breakfast. Assemble the night before.\n\n- 1/2 cup rolled oats\n- 1/2 cup milk\n- 1/4 cup yogurt\n- 1 tbsp chia seeds\n- a drizzle of honey\n\nStir, cover, and let it rest in the refrigerator for at least 6 hours (overnight\nis best) so the oats and chia soften. Top with fruit in the morning.",
+      "attachments": [],
+      "version": 1,
+      "hash": "19188ecc564a29"
+    },
+    {
+      "id": "team-retro-q1",
+      "title": "Team retro Q1",
+      "body": "# Team retro Q1\n\n## What went well\n- The new review checklist cut back-and-forth on pull requests.\n- Fewer late-Friday deploys.\n\n## What to improve\n- Standups run long; timebox to 10 minutes.\n- Flaky tests erode trust in CI.\n\n## Action items\n- Owner: Ana — add a lint rule for missing test ids.\n- Owner: Cheng — write a triage guide for flaky tests.",
+      "attachments": [],
+      "version": 1,
+      "hash": "ac0508495cb5f"
+    },
+    {
+      "id": "reading-list",
+      "title": "Reading list",
+      "body": "# Reading list\n\nBooks to get to, loosely grouped.\n\n## Systems\n- Something on database internals\n- A distributed-systems primer\n\n## Writing\n- A short book on plain-language technical writing\n\n## Fun\n- A comfort re-read of a favorite mystery series\n\nRule for myself: finish one before adding three more.",
+      "attachments": [],
+      "version": 1,
+      "hash": "1ffd304226a946"
+    },
+    {
+      "id": "ja-standup-2026-03-10",
+      "title": "定例会議 2026-03-10",
+      "body": "# 定例会議 2026-03-10\n\n出席: あな、ビラル、チェン。\n\n- あな: CSVエクスポートの解析を完了、レビュー待ち。\n- ビラル: タイムゾーンのテストが不安定なので調査中。\n- チェン: オンボーディング資料を作成中。\n\n決定: エクスポート機能を金曜日にリリースする。追加の日付フォーマットは今回は\n見送り、次のリリースで対応する。",
+      "attachments": [],
+      "version": 1,
+      "hash": "1860077fbec8e"
+    },
+    {
+      "id": "ja-green-tea",
+      "title": "緑茶の淹れ方",
+      "body": "# 緑茶の淹れ方\n\nおいしい緑茶をいれるための覚え書き。\n\n- 湯の温度: 80度まで冷ます\n- 茶葉: 一人あたり3グラム\n- 抽出時間: 2分\n\n熱すぎるお湯は苦みが出るので、必ず一度沸かしてから少し冷ますこと。二煎目は\n30秒で十分。",
+      "attachments": [],
+      "version": 1,
+      "hash": "26e413f90f6a9"
+    }
+  ]
+}

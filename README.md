@@ -15,6 +15,7 @@ No server. No account. No subscription. No lock-in. A lightweight, no-bloat alte
 
 #### [➜ Add to Chrome / Edge — free](https://chromewebstore.google.com/detail/hjkbpgkmiaeojfhkpnhmokgjipenhcfl)
 
+<!-- TODO(owner): record assets/ask-owl.gif — see docs/interview-demo-script.md -->
 <img src="assets/screenshot.png" alt="OWL-Note editor: Markdown source with KaTeX math and a Python code block, beside its live rendered preview" width="820">
 
 </div>
@@ -94,6 +95,18 @@ OWL-Note doesn’t invent its own storage or sync system. It uses what your brow
 **Optional — Google Drive sync.** Turn on one toggle and OWL-Note *additionally* stores image/file attachments and any note too large to fit in a bookmark in an `OWL-Note Sync` folder in **your own** Google Drive — so those sync across your devices too. It’s keyed to your Google account, off by default, and we never see it. Everything else works exactly as above.
 
 That’s why it’s so lightweight and private — we’re not building another cloud service. We’re just making excellent use of infrastructure you already have and that Google/Microsoft continue to harden.
+
+---
+
+## 🔬 Engineering highlights
+
+Ask Owl is unusual: almost every "AI feature" is a wrapper around a cloud API, but here the **whole AI stack is local** — generation on the browser's built-in model, semantic search on a bundled WASM embedding runtime, no API keys, no server, no per-query cost. Once the models are on the device it works **fully offline — try it in airplane mode.** For the full decision log, see [ARCHITECTURE.md](ARCHITECTURE.md); for the measured numbers, [eval/RESULTS.md](eval/RESULTS.md).
+
+- **Measured retrieval, not vibes.** A committed golden set of 47 questions over a synthetic corpus gates retrieval in CI. Hybrid search lifted paraphrase recall@5 from **0.455 → 1.000** (recall *saturates* on this small corpus, so MRR is the sensitive metric — caveats travel with every number).
+- **Multilingual (CJK) by design.** A superset tokenizer emits character bigrams for Han/Kana/Hangul runs so unspaced Chinese/Japanese/Korean notes are searchable, with Latin behavior byte-identical. The embedding model was chosen by **multilingual MRR**, not recall — the English-centric candidate ranked non-Latin scripts poorly.
+- **Prompt-injection defense in depth.** Note content is untrusted input: sentinel-wrapped chunks with marker neutralization on title/heading/body, chunk-id sanitization at minting so a forged citation can't round-trip, and an injection subset in the eval that keeps resistance a *measured* metric.
+- **On-device + offline architecture.** Manifest V3 with the ONNX Runtime WASM **bundled** (remote code is forbidden; weights are data), a consent-gated one-time model download, IndexedDB vector persistence with embed-once-sync-forever hash diffing, and a degradation ladder (model → snippets → lexical) for machines with no local model.
+- **Eval-gated feature decisions.** Feasibility was measured *before* the semantic layer was built, and features were **dropped on evidence** — a generative reformatter and an LLM-as-classifier both failed pre-declared criteria and were cut.
 
 ---
 
