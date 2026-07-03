@@ -174,13 +174,13 @@ printed table + version block above.
 
 ## Semantic retrieval spike (M9 gate)
 
-Eval-first feasibility spike for the M9 embedding/fusion upgrade (Task E15): run
+Eval-first feasibility spike for the embedding/fusion upgrade: run
 real on-device-class embedding models in **node** against the same synthetic
 corpus + golden set and measure whether hybrid retrieval beats the committed
 lexical baseline **before** any extension code is written. No `src/` changes — a
 DEV-only `@huggingface/transformers` dependency + `eval/run-vector.mjs`. This
 section records the measured numbers as **verdict inputs**; the proceed/drop call
-is the controller's, not this document's.
+is made from these numbers, not inside this document.
 
 Regenerate with `node eval/run-vector.mjs` (deterministic — see below).
 
@@ -248,9 +248,9 @@ single strongest config here**, not hybrid.
 Perf: 60 chunks embedded in 0.91 s → **15.1 ms/chunk**; model load 8.49 s;
 approx download ≈ **129.1 MB** (`model_quantized.onnx` 112.8 MB + tokenizer 16.3 MB).
 
-### Gate criteria (verdict inputs — controller decides)
+### Gate criteria (verdict inputs)
 
-Thresholds (per Task E15 brief), evaluated on the **hybrid** column:
+Thresholds (declared before the spike ran), evaluated on the **hybrid** column:
 
 | Criterion | Threshold | MiniLM (hybrid) | e5-small (hybrid) |
 | --- | --- | --- | --- |
@@ -260,7 +260,7 @@ Thresholds (per Task E15 brief), evaluated on the **hybrid** column:
 | catastrophic per-question regressions | zero unexplained | 0 — **PASS** | 0 — **PASS** |
 
 Both candidate models pass all four gate criteria on the hybrid config. The
-proceed/drop decision (including MiniLM-vs-e5 selection) is left to the controller.
+proceed/drop decision (including MiniLM-vs-e5 selection) is made from these numbers.
 
 ### Limitations (read the numbers with these)
 
@@ -296,9 +296,9 @@ index is deterministic, so a single run is authoritative (the two retrieval-metr
 tables were verified byte-identical across two runs). No §6 variance loop is needed
 for this spike.
 
-## Weighted-RRF weight sweep (M9 fusion tuning, Task V3)
+## Weighted-RRF weight sweep (fusion tuning)
 
-E15 found that with **equal** weights RRF *dragged* e5's paraphrase retrieval:
+The feasibility spike found that with **equal** weights RRF *dragged* e5's paraphrase retrieval:
 hybrid paraphrase R@5 = 0.818 sat **below** vector-only's 1.000, because fusing a
 lexical list that is wrong for paraphrase injects wrong-note chunks. So the fusion
 weights are **tuned against this corpus, not guessed**. This sweep runs weighted RRF
@@ -341,7 +341,7 @@ Regenerate with `node eval/run-vector.mjs --sweep` (e5 only; uses the cached mod
   still fully closing the paraphrase gap.
 
 At `w_vec = 3` the fused table equals vector-only on R@5 everywhere (overall 1.000)
-and lifts paraphrase MRR to 0.738 vs equal-weight's 0.576 — i.e. it reverses the E15
+and lifts paraphrase MRR to 0.738 vs equal-weight's 0.576 — i.e. it reverses the spike's
 equal-weights drag while the lexical list (`w_lex` = 1) still contributes and remains
 the never-fail fallback. Recall@5 saturates at 1.000 on this 60-chunk corpus (see the
 Limitations above), so **MRR is the discriminating column** and is what separates the
