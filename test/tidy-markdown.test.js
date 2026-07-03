@@ -312,4 +312,46 @@ describe('tidyMarkdown — rule 8: auto-fence box-drawing (ASCII-tree) blocks', 
       '# Title\n\nSome prose paragraph.\n\n```\n├─ node a\n└─ node b\n```\n\n- item one\n- item two\n',
     );
   });
+
+  // [E13-review fix] Real markdown syntax adjacent to a tree (no blank line between)
+  // must act as a BLOCK BOUNDARY: swallowing a heading/list/table row into the fence
+  // renders it as inert <pre> text — previously-correct structure destroyed, and the
+  // damage is idempotent so it never self-heals. Plain-text labels (可同箱組合) carry
+  // no markdown syntax and stay swallowed — that behavior is sanctioned above.
+  it('keeps an adjacent heading OUTSIDE the fence (markdown syntax bounds the block)', () => {
+    const out = tidyMarkdown('## Packing\n├─ a\n└─ b');
+    // Heading survives as a heading (rule 4b spaces it); fence wraps ONLY the tree.
+    expect(out).toBe('## Packing\n\n```\n├─ a\n└─ b\n```\n');
+    expect(tidyMarkdown(out)).toBe(out); // idempotent
+  });
+
+  it('keeps an adjacent list item after the tree OUTSIDE the fence', () => {
+    const out = tidyMarkdown('├─ a\n└─ b\n- item');
+    // The list line stays a list (rule 5 gives it its blank after the fence).
+    expect(out).toBe('```\n├─ a\n└─ b\n```\n\n- item\n');
+    expect(tidyMarkdown(out)).toBe(out); // idempotent
+  });
+
+  it('keeps an adjacent table row after the tree OUTSIDE the fence', () => {
+    const out = tidyMarkdown('├─ a\n└─ b\n| a | b |');
+    expect(out).toBe('```\n├─ a\n└─ b\n```\n| a | b |\n');
+    expect(tidyMarkdown(out)).toBe(out); // idempotent
+  });
+
+  // [E13-review fix] A PURE DIVIDER line (only ─/═ plus whitespace) is decoration, not
+  // tree evidence: trees are characterized by CONNECTORS (│ ├ └ …). Dividers framing
+  // prose must never drag the prose into a code fence.
+  it('does NOT fence divider-prose-divider (pure ─/═ lines are not tree evidence)', () => {
+    const out = tidyMarkdown('──────\nSome prose.\n──────');
+    expect(out).toBe('──────\nSome prose.\n──────\n');
+    expect(tidyMarkdown(out)).toBe(out); // idempotent
+    // Double-line ═ dividers behave the same.
+    expect(tidyMarkdown('══════\nprose\n══════')).toBe('══════\nprose\n══════\n');
+  });
+
+  it('still fences a connector tree with an interior ────── divider (one fence, divider included)', () => {
+    const out = tidyMarkdown('├─ a\n──────\n└─ b');
+    expect(out).toBe('```\n├─ a\n──────\n└─ b\n```\n');
+    expect(tidyMarkdown(out)).toBe(out); // idempotent
+  });
 });

@@ -38,6 +38,20 @@ const UNICODE_BULLET_RE = /^(\s*)[•●▪‣◦・][ \t　]?/;
 // into a code fence. CJK text never starts with one of these, so it never matches.
 const BOX_LINE_RE = /^\s*[│├└┌┐┘┤┬┴┼─═║╔╗╚╝╠╣╦╩╬]/;
 
+// Rule 8 boundary — a markdown TABLE ROW: after trimming, the line both starts and
+// ends with an ASCII `|`. Together with HEADING_RE and LIST_ITEM_RE this stops rule 8
+// from swallowing real markdown syntax that sits flush against a tree (no blank line
+// between): fencing a heading/list/table row renders it as inert <pre> text — a
+// previously-correct structure destroyed, and (fences being protected) never healed.
+const TABLE_ROW_RE = /^\s*\|.*\|\s*$/;
+
+// Rule 8 — a PURE DIVIDER line: only `─` and/or `═` characters plus whitespace.
+// [E13-review, product decision] Dividers do NOT count as tree evidence: trees are
+// characterized by CONNECTORS (│ ├ └ ┌ …); horizontal dividers framing prose are a
+// decoration pattern, and fencing prose is against the tidy philosophy. A divider may
+// still ride along INSIDE a block that qualifies via its connector lines.
+const PURE_DIVIDER_RE = /^\s*[─═]+\s*$/;
+
 /**
  * Tidy a note body's markdown structure. Deterministic and idempotent:
  * tidyMarkdown(tidyMarkdown(x)) === tidyMarkdown(x).
@@ -54,9 +68,11 @@ const BOX_LINE_RE = /^\s*[│├└┌┐┘┤┬┴┼─═║╔╗╚╝╠
  *  6. Unicode bullets at line start (•●▪‣◦・, leading whitespace preserved) → `- `.
  *  7. Exactly one trailing newline on a non-empty result.
  *  8. Auto-fence a Unicode box-drawing (ASCII-tree) block — a paragraph unit with ≥2
- *     box lines that are ≥50% of the block — in a ``` code fence so the preview keeps
- *     its line breaks instead of collapsing them into one paragraph. Runs as a
- *     structural PRE-PASS (before rules 2/6) so the tree's interior comes out byte-exact.
+ *     connector box lines that are ≥50% of the block — in a ``` code fence so the
+ *     preview keeps its line breaks instead of collapsing them into one paragraph.
+ *     Headings/list items/table rows bound the block (never swallowed); pure ─/═
+ *     divider lines are not counted as tree evidence. Runs as a structural PRE-PASS
+ *     (before rules 2/6) so the tree's interior comes out byte-exact.
  *
  * Deliberately does NOT: reflow paragraphs, change emphasis markers, renumber lists,
  * touch tables, convert `*`/`+` bullets to `-`, or alter link/image syntax.
@@ -142,13 +158,18 @@ export function tidyMarkdown(body) {
 // wrapped run in the preview — its alignment destroyed. The only faithful Markdown
 // treatment for line-art is a fenced code block, so we wrap qualifying blocks in ```.
 //
-// A "block" is a maximal run of non-blank, non-protected lines — exactly the paragraph
-// unit rules 3/5 reason about (blank OR fence lines are its boundaries). A block
-// QUALIFIES when it has ≥2 box lines AND those are ≥50% of the block: the ≥2 floor
-// stops a lone decorative ───── divider in prose from triggering; the ≥50% rule stops
-// a mostly-prose paragraph that merely contains a couple of box lines. The WHOLE block
-// is wrapped (a leading header line and indented continuation lines ride along — the
-// tree reads as one unit, matching the fenced form the user copied it from).
+// A "block" is a maximal run of non-blank, non-protected lines that also stops at any
+// line of REAL markdown syntax — a heading, a list item, or a table row (both edges).
+// [E13-review fix] Without that stop, `## Packing` flush above a tree was swallowed
+// into the fence and rendered as inert <pre> text. A plain-text label line (like the
+// user's 可同箱組合 header) has no markdown syntax and deliberately stays swallowed —
+// the tree reads as one unit, matching the fenced form the user copied it from.
+//
+// A block QUALIFIES when it has ≥2 CONNECTOR box lines AND those are ≥50% of the
+// block. A pure ─/═ divider line never counts as evidence (see PURE_DIVIDER_RE): the
+// ≥2 floor stops a lone decorative ───── in prose, the connector rule stops a
+// divider-prose-divider sandwich, and the ≥50% rule stops a mostly-prose paragraph
+// that merely contains a couple of box lines.
 //
 // Only two ``` lines are inserted; block bytes are copied verbatim (interior byte-exact).
 // The inserted markers are `` ``` `` — never a box line — so they don't perturb detection
@@ -157,18 +178,21 @@ function fenceBoxDrawingBlocks(lines, protectedFlags) {
   const out = [];
   let i = 0;
   while (i < lines.length) {
-    // A blank or already-protected (fenced) line is a boundary — copy it and move on.
-    if (protectedFlags[i] || lines[i].trim() === '') {
+    // A protected (fenced) line or a boundary line is copied verbatim — never gathered.
+    if (protectedFlags[i] || isBlockBoundary(lines[i])) {
       out.push(lines[i]);
       i += 1;
       continue;
     }
     // Gather the block [i, j).
     let j = i;
-    while (j < lines.length && !protectedFlags[j] && lines[j].trim() !== '') j += 1;
+    while (j < lines.length && !protectedFlags[j] && !isBlockBoundary(lines[j])) j += 1;
     const block = lines.slice(i, j);
     let boxCount = 0;
-    for (const line of block) if (BOX_LINE_RE.test(line)) boxCount += 1;
+    for (const line of block) {
+      // Connector box lines only — a pure divider is decoration, not tree evidence.
+      if (BOX_LINE_RE.test(line) && !PURE_DIVIDER_RE.test(line)) boxCount += 1;
+    }
     if (boxCount >= 2 && boxCount * 2 >= block.length) {
       out.push('```');                       // open fence (no language tag)
       for (const line of block) out.push(line); // interior copied byte-for-byte
@@ -179,6 +203,18 @@ function fenceBoxDrawingBlocks(lines, protectedFlags) {
     i = j;
   }
   return out;
+}
+
+// Rule 8 block boundary: a blank line (the rule-3/5 paragraph edge) or a line of real
+// markdown syntax — heading, list item, table row. Such lines are never gathered into
+// a tree block: fencing them would destroy their rendering (heading → <pre> text).
+function isBlockBoundary(line) {
+  return (
+    line.trim() === '' ||
+    HEADING_RE.test(line) ||
+    LIST_ITEM_RE.test(line) ||
+    TABLE_ROW_RE.test(line)
+  );
 }
 
 // Walk the lines once, flipping an in-fence flag on each `^```` marker. Marker lines
