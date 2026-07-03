@@ -124,7 +124,9 @@ export function renderAskPanel(container, {
   newChatBtn.className = 'ask-newchat';
   newChatBtn.setAttribute('aria-label', 'New chat');
   newChatBtn.title = 'New chat';
-  newChatBtn.textContent = '↺';
+  // Visible label, not a bare glyph — users couldn't find a lone ↺ (Gemini labels
+  // its new-chat control for the same reason).
+  newChatBtn.textContent = '↺ New chat';
   newChatBtn.addEventListener('click', () => newChat());
   const actions = document.createElement('div');
   actions.className = 'ask-actions';

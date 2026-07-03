@@ -415,10 +415,11 @@ body.resizing { user-select: none; cursor: col-resize; }
 #ask-panel .ask-actions { display: flex; align-items: center; gap: 2px; }
 #ask-panel .ask-newchat {
   order: -1;
-  border: none; background: transparent; cursor: pointer; color: var(--muted);
-  font-size: 15px; line-height: 1; padding: 4px 7px; border-radius: 6px;
+  border: 1px solid var(--border); background: #fff; cursor: pointer; color: var(--muted);
+  font-size: 12px; line-height: 1; padding: 5px 10px; border-radius: 999px;
+  white-space: nowrap;
 }
-#ask-panel .ask-newchat:hover { background: #f1f3f5; color: var(--text); }
+#ask-panel .ask-newchat:hover { background: #f1f3f5; color: var(--text); border-color: var(--muted); }
 
 /* One ask = one exchange (question bubble + a body that fills in with the answer).
    Finalized exchanges stay in the thread, so earlier Q&A remains visible below. */
