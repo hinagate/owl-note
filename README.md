@@ -2,9 +2,10 @@
 
 # 🦉 OWL-Note
 
-### Your notes are browser bookmarks.
+### Your notes are browser bookmarks. Your AI runs on your device.
 
 **Free, private Markdown notes — with code & math — synced by your own browser account.**
+Now with a built-in AI that answers questions **from your own notes**, entirely on-device.
 No server. No account. No subscription. No lock-in. A lightweight, no-bloat alternative to Evernote.
 
 [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/hjkbpgkmiaeojfhkpnhmokgjipenhcfl?label=Chrome%20Web%20Store&logo=googlechrome&logoColor=white&color=2dbe60)](https://chromewebstore.google.com/detail/hjkbpgkmiaeojfhkpnhmokgjipenhcfl)
@@ -34,6 +35,20 @@ Note apps keep getting heavier and pricier — more features you never asked for
 
 ---
 
+## 🧠 New: Ask your notes — private AI, zero cloud
+
+Ask a question in plain language and get an answer built **only from your own notes**, with citations that jump straight to the source. Powered by your browser's built-in AI (Gemini Nano on Chrome, Phi on Edge) and a retrieval engine that understands **meaning, not just keywords**.
+
+- **Chat with your knowledge** — a real conversation thread: ask, follow up, start a new chat. Works in your language, CJK included.
+- **Answers with receipts** — every answer cites the notes it came from, and related notes are one click away, even across notebooks.
+- **Finds what you *mean*** — optional semantic search matches "what do I pay for housing?" to a note that only ever says "rent: $1,400". One click builds it: a one-time ~130 MB on-device model download, then it's yours forever. On our benchmark corpus, this lifted recall on paraphrased questions from 45% to 100% ([measured, not vibes](eval/RESULTS.md)).
+- **One-click note tools** — **Summarize** the open note, **Tidy** its Markdown formatting (deterministic — it never rewrites your words), or let the AI **suggest a title**.
+- **The privacy absolute** — the AI runs **on your device**. Your questions and notes are never sent to any server: not ours (we don't run one), not Google's, not anyone's. Once the models are downloaded, everything — search, answers, summaries — works **fully offline**.
+
+*AI answers need a browser with built-in AI (recent Chrome/Edge on supported hardware). Everywhere else, Ask still gives you fast excerpt search over every note.*
+
+---
+
 ## ✨ What makes it special
 
 - **Notes are bookmarks** — they sync across your devices for free through your existing Google (Chrome) or Microsoft (Edge) account. No server, no account, no subscription, no lock-in.
@@ -43,7 +58,8 @@ Note apps keep getting heavier and pricier — more features you never asked for
 - **Import & export, no lock-in** — bring in Word (`.docx`), Evernote (`.enex`), and Markdown; export everything to a zip of plain `.md` files anytime.
 - **Bulk actions, with a safety net** — multi-select like files (Ctrl/Cmd-click, Shift+↑/↓) and a **Trash** you can restore from.
 - **Nested notebooks** — organize notes into notebooks and sub-notebooks in a collapsible tree, drag to re-nest, and a breadcrumb always shows which notebook the open note lives in.
-- **Private by design** — no backend, no telemetry; we run no server and never see your notes. Minimal permissions, built on Manifest V3.
+- **Ask your notes** — on-device AI Q&A with citations, plus one-click Summarize / Tidy / title suggestions (see above). Even the AI never phones home.
+- **Private by design** — no backend, no telemetry; we run no server and never see your notes. Minimal permissions, built on Manifest V3. ([Full privacy policy](PRIVACY.md))
 - **Attach images & files** — paste or drop in images, or attach any file (PDF, Word, zip…) right inside a note.
 - **Optional Google Drive sync** — flip one toggle to also sync your attachments *and* any note too large to fit in a bookmark through **your own** Google Drive, so nothing stays stuck on a single device. Off by default — we still run no server and never see your notes.
 - **Your work is safe** — auto-saves as you type, with a compressed local backup on every device, so nothing is lost even if a bookmark goes missing.
@@ -84,6 +100,8 @@ That’s why it’s so lightweight and private — we’re not building another 
 ## Good to know
 
 - By default, notes sync as bookmarks; a note too large for that (e.g. with big images or lots of text) stays on the current device. Turn on **Google Drive sync** (optional) and those sync too, via your own Drive.
+- **AI features are strictly opt-in and on-device.** Answers use your browser's built-in model (a one-time browser-managed download, offered only when you click Enable). Semantic search is a separate one-time ~130 MB on-device model, downloaded only when you click Build. Neither ever sends your notes anywhere; both keep working offline afterwards.
+- On devices without built-in browser AI, Ask runs in retrieval-only mode — still a great meaning-aware search.
 - Works on Chrome, Edge, and other Chromium browsers.
 
 ---
