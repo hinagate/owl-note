@@ -30,6 +30,7 @@ import { createRegistry } from '../lib/providers/registry.js';
 import { suggestTitle } from '../lib/providers/title.js';
 import { tidyMarkdown } from '../lib/tidy-markdown.js';
 import { renderAskPanel } from './ask-panel.js';
+import { builtinAskActions } from './ask-actions.js';
 
 export { saveNote, MAX_URL_BYTES, WARN_URL_BYTES }; // moved to ../lib/save-note.js
 
@@ -200,6 +201,29 @@ async function ensureAskUI() {
     // dismiss (best-effort; a read failure just leaves the card eligible to show).
     let aiDeclined = false;
     try { aiDeclined = !!(await chrome.storage.local.get(AI_DECLINED_KEY))[AI_DECLINED_KEY]; } catch { /* best-effort */ }
+    // [Task E12] The chip's quick actions, as data. builtinAskActions composes the
+    // Summarize + Tidy descriptors; the panel renders one button per descriptor and
+    // stays agnostic to what each does. Adding a skill later = append one descriptor
+    // (here or by concatenating extras onto this list). Each action's non-panel deps
+    // are injected here at composition time; the panel supplies ctx.ask at click time.
+    const askActions = builtinAskActions({
+      // [Task E11] Tidy quick action: run the deterministic, rule-based markdown tidy
+      // (src/lib/tidy-markdown.js) on the CHIP'S note and apply it directly. Fully
+      // SYNCHRONOUS — no model, no proposal, no pending state — so there is no
+      // stale-edit window: read → tidy → replaceBody in one go. tidyMarkdown is
+      // content-preserving by construction (it only fixes structural whitespace and
+      // markers), so it applies without review. replaceBody keeps the editor's native
+      // undo stack, so a single Ctrl+Z reverts it; when nothing changes we skip the
+      // write entirely and just say so.
+      tidyNote: (noteId) => {
+        if (!ui.current || ui.current.id !== noteId || !ui.editor) { toast('Open the note first', true); return; }
+        const body = ui.current.body || '';
+        const tidied = tidyMarkdown(body);
+        if (tidied === body) { toast('Already tidy'); return; }
+        ui.editor.replaceBody(tidied); // undo-preserving apply (single Ctrl+Z reverts)
+        toast('Tidied — Ctrl+Z to undo');
+      },
+    });
     askPanel = renderAskPanel(el, {
       // [Task E7] Forward the panel's ask opts (e.g. { pinnedNoteId }) to the controller.
       onAsk: (q, opts) => askController.ask(q, opts),
@@ -229,22 +253,8 @@ async function ensureAskUI() {
       },
       // Persist the opt-out so the card is gone for good (this session AND future ones).
       onDeclineAi: () => { chrome.storage.local.set({ [AI_DECLINED_KEY]: true }).catch(() => {}); },
-      // [Task E11] Tidy quick action: run the deterministic, rule-based markdown tidy
-      // (src/lib/tidy-markdown.js) on the CHIP'S note and apply it directly. Fully
-      // SYNCHRONOUS — no model, no proposal, no pending state — so there is no
-      // stale-edit window: read → tidy → replaceBody in one go. tidyMarkdown is
-      // content-preserving by construction (it only fixes structural whitespace and
-      // markers), so it applies without review. replaceBody keeps the editor's native
-      // undo stack, so a single Ctrl+Z reverts it; when nothing changes we skip the
-      // write entirely and just say so.
-      onTidyNote: (noteId) => {
-        if (!ui.current || ui.current.id !== noteId || !ui.editor) { toast('Open the note first', true); return; }
-        const body = ui.current.body || '';
-        const tidied = tidyMarkdown(body);
-        if (tidied === body) { toast('Already tidy'); return; }
-        ui.editor.replaceBody(tidied); // undo-preserving apply (single Ctrl+Z reverts)
-        toast('Tidied — Ctrl+Z to undo');
-      },
+      // [Task E12] Chip quick actions as data (Summarize + Tidy, composed above).
+      actions: askActions,
     });
   }
 }

@@ -11,6 +11,7 @@ import { installFakeChrome } from './helpers/fake-chrome.js';
 import { installFakeLanguageModel } from './helpers/fake-language-model.js';
 import { contentHash } from '../src/lib/note.js';
 import { renderAskPanel } from '../src/app/ask-panel.js';
+import { builtinAskActions } from '../src/app/ask-actions.js';
 
 // --- Layer 1: pure panel -----------------------------------------------------
 
@@ -763,9 +764,16 @@ describe('ask-panel — current-note chip (E7)', () => {
 // the chip row (so it shares the chip's visibility lifecycle) fires a normal ask
 // exchange for the WHOLE note: onAsk('Summarize this note.', { pinnedNoteId, pinAll:true }).
 // The opts are remembered (lastAskOpts) so an enable→re-ask re-runs it AS a summarize.
+// [Task E12] Rewired: the button is now the `summarize` descriptor from the actions
+// registry (builtinAskActions), rendered by the panel via its `actions` prop. The
+// assertions below (visibility lifecycle, click outcome, enable→re-ask opts) are
+// UNCHANGED — they still prove the same behavior, now through the registry.
 describe('ask-panel — summarize quick action (E9)', () => {
   it('renders a Summarize button with the chip and fires onAsk(SUMMARIZE, {pinnedNoteId, pinAll:true}) as a normal exchange', () => {
-    const { el, panel, onAsk } = makePanel({ getCurrentNote: () => ({ id: 'n9', title: 'My Note' }) });
+    const { el, panel, onAsk } = makePanel({
+      getCurrentNote: () => ({ id: 'n9', title: 'My Note' }),
+      actions: builtinAskActions({ tidyNote: vi.fn() }),
+    });
     panel.open();
     const btn = el.querySelector('.ask-summarize');
     expect(btn).not.toBeNull();
@@ -781,13 +789,19 @@ describe('ask-panel — summarize quick action (E9)', () => {
   });
 
   it('shows no Summarize button when there is no current note', () => {
-    const { el, panel } = makePanel({ getCurrentNote: () => null });
+    const { el, panel } = makePanel({
+      getCurrentNote: () => null,
+      actions: builtinAskActions({ tidyNote: vi.fn() }),
+    });
     panel.open();
     expect(el.querySelector('.ask-summarize')).toBeNull();
   });
 
   it('removes the Summarize button when the chip is dismissed (shares the chip lifecycle)', () => {
-    const { el, panel } = makePanel({ getCurrentNote: () => ({ id: 'n1', title: 'Cur' }) });
+    const { el, panel } = makePanel({
+      getCurrentNote: () => ({ id: 'n1', title: 'Cur' }),
+      actions: builtinAskActions({ tidyNote: vi.fn() }),
+    });
     panel.open();
     expect(el.querySelector('.ask-summarize')).not.toBeNull();
     el.querySelector('.ask-chip-dismiss').click();
@@ -796,7 +810,10 @@ describe('ask-panel — summarize quick action (E9)', () => {
   });
 
   it('enable→re-ask preserves summarize opts: [Enable] after a summarize calls onEnableModel(SUMMARIZE, {pinnedNoteId, pinAll:true})', () => {
-    const { el, panel, onEnableModel } = makePanel({ getCurrentNote: () => ({ id: 'n5', title: 'Note Five' }) });
+    const { el, panel, onEnableModel } = makePanel({
+      getCurrentNote: () => ({ id: 'n5', title: 'Note Five' }),
+      actions: builtinAskActions({ tidyNote: vi.fn() }),
+    });
     panel.open();
     el.querySelector('.ask-summarize').click(); // remembers lastQuestion + lastAskOpts
     // pinAll on a downloadable model → snippets{chunks:[], model-downloadable} → opt-in card.
@@ -808,7 +825,10 @@ describe('ask-panel — summarize quick action (E9)', () => {
   });
 
   it('New chat resets the remembered summarize opts (a later enable→re-ask cannot resurrect them)', () => {
-    const { el, panel, onEnableModel } = makePanel({ getCurrentNote: () => ({ id: 'n5', title: 'Note Five' }) });
+    const { el, panel, onEnableModel } = makePanel({
+      getCurrentNote: () => ({ id: 'n5', title: 'Note Five' }),
+      actions: builtinAskActions({ tidyNote: vi.fn() }),
+    });
     panel.open();
     el.querySelector('.ask-summarize').click();
     el.querySelector('.ask-newchat').click(); // clears lastQuestion AND lastAskOpts
@@ -822,14 +842,19 @@ describe('ask-panel — summarize quick action (E9)', () => {
 
 // [Task E11] One-click "Tidy" quick action (replaces the retired E10 Format flow).
 // A "Tidy" button in the chip row (beside Summarize, sharing the chip's visibility
-// lifecycle) runs the deterministic markdown tidy on the chip's note via a simple
-// onTidyNote(noteId) prop. The host does a synchronous read→tidy→replaceBody apply,
-// so there is NO exchange, NO thread bubble, NO proposal — the host toast is the
-// whole feedback. This is deliberately far simpler than the async Format flow it
-// replaces (no propose/review/apply, no ask-controller involvement).
+// lifecycle) runs the deterministic markdown tidy on the chip's note. The host does a
+// synchronous read→tidy→replaceBody apply, so there is NO exchange, NO thread bubble,
+// NO proposal — the host toast is the whole feedback. Deliberately far simpler than
+// the async Format flow it replaces (no propose/review/apply, no ask-controller).
+// [Task E12] Rewired: Tidy is now the `tidy` descriptor from the actions registry —
+// its run() calls the injected tidyNote(noteId) instead of a dedicated onTidyNote
+// prop. Assertions are UNCHANGED; the injected tidyNote plays the old prop's role.
 describe('ask-panel — tidy quick action (E11)', () => {
   it('renders a Tidy button beside Summarize, sharing the chip lifecycle', () => {
-    const { el, panel } = makePanel({ getCurrentNote: () => ({ id: 'n1', title: 'Cur' }), onTidyNote: vi.fn() });
+    const { el, panel } = makePanel({
+      getCurrentNote: () => ({ id: 'n1', title: 'Cur' }),
+      actions: builtinAskActions({ tidyNote: vi.fn() }),
+    });
     panel.open();
     const btn = el.querySelector('.ask-tidy');
     expect(btn).not.toBeNull();
@@ -843,18 +868,24 @@ describe('ask-panel — tidy quick action (E11)', () => {
   });
 
   it('shows no Tidy button without a current note', () => {
-    const { el, panel } = makePanel({ getCurrentNote: () => null, onTidyNote: vi.fn() });
+    const { el, panel } = makePanel({
+      getCurrentNote: () => null,
+      actions: builtinAskActions({ tidyNote: vi.fn() }),
+    });
     panel.open();
     expect(el.querySelector('.ask-tidy')).toBeNull();
   });
 
-  it('click fires onTidyNote with the chip\'s tagged note and opens NO exchange (no onAsk)', () => {
-    const onTidyNote = vi.fn();
-    const { el, panel, onAsk } = makePanel({ getCurrentNote: () => ({ id: 'n7', title: 'Cur' }), onTidyNote });
+  it('click fires tidyNote with the chip\'s tagged note and opens NO exchange (no onAsk)', () => {
+    const tidyNote = vi.fn();
+    const { el, panel, onAsk } = makePanel({
+      getCurrentNote: () => ({ id: 'n7', title: 'Cur' }),
+      actions: builtinAskActions({ tidyNote }),
+    });
     panel.open();
     el.querySelector('.ask-tidy').click();
 
-    expect(onTidyNote).toHaveBeenCalledWith('n7');        // operates on the chip's tagged note
+    expect(tidyNote).toHaveBeenCalledWith('n7');          // operates on the chip's tagged note
     expect(onAsk).not.toHaveBeenCalled();                 // synchronous apply — not the ask-controller
     expect(el.querySelector('.ask-exchange')).toBeNull();  // no thread bubble at all
     expect(el.querySelector('.ask-q')).toBeNull();
@@ -862,14 +893,79 @@ describe('ask-panel — tidy quick action (E11)', () => {
 
   it('reads the chip note id at click time (follows a live note change)', () => {
     let note = { id: 'A', title: 'Note A' };
-    const onTidyNote = vi.fn();
-    const { el, panel } = makePanel({ getCurrentNote: () => note, onTidyNote });
+    const tidyNote = vi.fn();
+    const { el, panel } = makePanel({
+      getCurrentNote: () => note,
+      actions: builtinAskActions({ tidyNote }),
+    });
     panel.open();
 
     note = { id: 'B', title: 'Note B' }; // user switched notes
     panel.refreshChip();
     el.querySelector('.ask-tidy').click();
-    expect(onTidyNote).toHaveBeenCalledWith('B');
+    expect(tidyNote).toHaveBeenCalledWith('B');
+  });
+});
+
+// [Task E12] Pluggability: the chip row renders one button per AskAction descriptor
+// handed to the panel via its `actions` prop — the panel knows nothing about what an
+// action does. A third fake action must render as a third button and, on click,
+// receive ctx = { noteId (resolved at click time), ask (the panel's record-then-onAsk
+// path) }. This is the whole point of E12: adding a skill = one descriptor, no new prop.
+describe('ask-panel — pluggable action registry (E12)', () => {
+  it('renders one chip-row button per action (in order) and hands run() { noteId, ask } on click', () => {
+    const fakeRun = vi.fn();
+    const fake = { id: 'fake', label: 'Fake', ariaLabel: 'Fake action', run: fakeRun };
+    const { el, panel, onAsk } = makePanel({
+      getCurrentNote: () => ({ id: 'n42', title: 'Cur' }),
+      actions: [...builtinAskActions({ tidyNote: vi.fn() }), fake],
+    });
+    panel.open();
+
+    // One button per action, rendered in descriptor order.
+    const btns = el.querySelectorAll('.ask-chip-row .ask-action');
+    expect(btns).toHaveLength(3);
+    expect([...btns].map((b) => b.textContent)).toEqual(['Summarize', 'Tidy', 'Fake']);
+
+    const fakeBtn = el.querySelector('.ask-fake');
+    expect(fakeBtn).not.toBeNull();
+    expect(fakeBtn.getAttribute('aria-label')).toBe('Fake action');
+
+    fakeBtn.click();
+    expect(fakeRun).toHaveBeenCalledTimes(1);
+    const ctx = fakeRun.mock.calls[0][0];
+    expect(ctx.noteId).toBe('n42');            // the chip's note id
+    expect(typeof ctx.ask).toBe('function');   // panel-provided record-then-onAsk path
+
+    // ctx.ask IS the panel's internal ask path (records + forwards to onAsk).
+    ctx.ask('probe question', { pinnedNoteId: 'n42' });
+    expect(onAsk).toHaveBeenCalledWith('probe question', { pinnedNoteId: 'n42' });
+  });
+
+  it('hands run() the chip note id resolved at CLICK time (follows a live note change)', () => {
+    let note = { id: 'A', title: 'Note A' };
+    const fakeRun = vi.fn();
+    const fake = { id: 'probe', label: 'Probe', ariaLabel: 'Probe', run: fakeRun };
+    const { el, panel } = makePanel({ getCurrentNote: () => note, actions: [fake] });
+    panel.open();
+
+    note = { id: 'B', title: 'Note B' };
+    panel.refreshChip();
+    el.querySelector('.ask-probe').click();
+    expect(fakeRun.mock.calls[0][0].noteId).toBe('B'); // click-time note, not composition-time
+  });
+
+  it('shares the chip lifecycle: no action buttons without a current note, gone when dismissed', () => {
+    const fake = { id: 'probe', label: 'Probe', ariaLabel: 'Probe', run: vi.fn() };
+    const noNote = makePanel({ getCurrentNote: () => null, actions: [fake] });
+    noNote.panel.open();
+    expect(noNote.el.querySelector('.ask-probe')).toBeNull(); // no chip → no action buttons
+
+    const withNote = makePanel({ getCurrentNote: () => ({ id: 'n1', title: 'Cur' }), actions: [fake] });
+    withNote.panel.open();
+    expect(withNote.el.querySelector('.ask-probe')).not.toBeNull();
+    withNote.el.querySelector('.ask-chip-dismiss').click();
+    expect(withNote.el.querySelector('.ask-probe')).toBeNull(); // gone with the chip
   });
 });
 

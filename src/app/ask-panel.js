@@ -20,10 +20,6 @@ const SNIPPET_MAX = 220;
 // [Task E7] Chip title clip length — keeps the pill compact; the CSS also ellipsizes,
 // but clipping the text node bounds it even when the note title is one long word.
 const CHIP_TITLE_MAX = 40;
-// [Task E9] The fixed question the one-click "Summarize" quick action asks. It becomes
-// the exchange's question bubble AND the model's QUESTION line — the Ask grounding
-// prompt handles summarization fine, so no dedicated summarize prompt is needed (YAGNI).
-const SUMMARIZE_QUESTION = 'Summarize this note.';
 
 // Centralized code -> user-facing copy for the 'error' state (ASK_ERROR_CODES,
 // see src/lib/providers/provider.js). Deliberately NEVER surfaces state.message
@@ -89,16 +85,19 @@ function relatedChunks(chunks, citations) {
  *        when true the opt-in card is never shown.
  * @param {() => ({ id: string, title: string }|null)} [cb.getCurrentNote]  the currently-open
  *        note (or null) — drives the E7 context chip that pins it into the model context.
- * @param {(noteId: string) => void} [cb.onTidyNote]  [Task E11] Tidy the chip's note. The host
- *        does a synchronous read→tidyMarkdown→replaceBody apply (no model, no proposal, no
- *        exchange) and toasts the result — the panel just forwards the chip's note id.
+ * @param {import('./ask-actions.js').AskAction[]} [cb.actions]  [Task E12] The chip-row
+ *        quick actions (Summarize, Tidy, future skills), as data. refreshChip renders one
+ *        button per descriptor, in order, sharing the chip's visibility lifecycle; a click
+ *        invokes action.run({ noteId: <chip note id at click time>, ask: runAsk }). The
+ *        panel knows nothing about what an action does — app.js composes them
+ *        (builtinAskActions) and injects each action's non-panel deps.
  * @returns {{ update: (state: object) => void, open: () => void, close: () => void, destroy: () => void }}
  */
 export function renderAskPanel(container, {
   onAsk, onCitation, onClose = () => {}, getStats = () => ({ notes: 0 }),
   onEnableModel = () => {}, onDeclineAi = () => {}, aiDeclined = false,
   getCurrentNote = () => null,
-  onTidyNote = () => {},
+  actions = [],
 }) {
   container.innerHTML = ''; // build the shell ONCE; update() only mutates status/results
 
@@ -132,10 +131,10 @@ export function renderAskPanel(container, {
   // its new-chat control for the same reason).
   newChatBtn.textContent = '↺ New chat';
   newChatBtn.addEventListener('click', () => newChat());
-  const actions = document.createElement('div');
-  actions.className = 'ask-actions';
-  actions.append(closeBtn, newChatBtn);
-  header.append(heading, actions);
+  const headerActions = document.createElement('div');
+  headerActions.className = 'ask-actions';
+  headerActions.append(closeBtn, newChatBtn);
+  header.append(heading, headerActions);
 
   const form = document.createElement('div');
   form.className = 'ask-form';
@@ -243,53 +242,50 @@ export function renderAskPanel(container, {
 
     chipRow.appendChild(pill);
 
-    // [Task E9] One-click "Summarize this note" quick action, rendered WITH the chip
-    // (same chip row → same visibility lifecycle: chipRow.textContent above clears it
-    // when the chip is hidden, so it never lingers as an orphan focusable). Fires a
-    // NORMAL exchange for the WHOLE note (pinAll) — no typing, and a follow-up
-    // question then composes naturally in the thread. Records lastQuestion/lastAskOpts
-    // so an enable→re-ask re-runs it AS a summarize.
-    const summarize = document.createElement('button');
-    summarize.type = 'button';
-    summarize.className = 'ask-summarize';
-    summarize.setAttribute('aria-label', 'Summarize this note');
-    summarize.textContent = 'Summarize';
-    summarize.addEventListener('click', () => {
-      lastQuestion = SUMMARIZE_QUESTION;
-      lastAskOpts = { pinnedNoteId: chipNoteId, pinAll: true };
-      onAsk(SUMMARIZE_QUESTION, lastAskOpts);
-    });
-    chipRow.appendChild(summarize);
-
-    // [Task E11] One-click "Tidy" quick action, rendered WITH the chip beside
-    // Summarize (same chip row → same visibility lifecycle: chipRow.textContent
-    // above clears it when the chip is hidden, so it never lingers as an orphan
-    // focusable). It runs the deterministic markdown tidy on the CHIP'S tagged note
-    // via onTidyNote — the host does a synchronous read→tidy→replaceBody apply and
-    // toasts the result. No exchange, no proposal, no ask-controller (this replaced
-    // E10's async Format proposal flow, which the model made unreadable).
-    const tidy = document.createElement('button');
-    tidy.type = 'button';
-    tidy.className = 'ask-tidy';
-    tidy.setAttribute('aria-label', 'Tidy the note formatting');
-    tidy.textContent = 'Tidy';
-    // Read chipNoteId at click time (the chip's currently-tagged note), matching
-    // Summarize above.
-    tidy.addEventListener('click', () => onTidyNote(chipNoteId));
-    chipRow.appendChild(tidy);
+    // [Task E12] Quick-action buttons, rendered WITH the chip (same chip row → same
+    // visibility lifecycle: chipRow.textContent above clears them when the chip is
+    // hidden, so none ever lingers as an orphan focusable). One button per AskAction
+    // descriptor, in order; the panel is agnostic to what each does. A click hands
+    // the action ctx = { noteId (read at CLICK time, so it follows a live note
+    // change), ask } — where `ask` is the panel's runAsk, the SAME record-then-onAsk
+    // path fire() uses, so an action that asks (Summarize) records lastQuestion/
+    // lastAskOpts and enable→re-ask keeps working with no per-skill plumbing. The
+    // per-action class `ask-<id>` (e.g. .ask-summarize/.ask-tidy) preserves the E9/E11
+    // styling and selectors; `ask-action` marks it as a chip quick action.
+    for (const action of actions) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `ask-action ask-${action.id}`;
+      btn.setAttribute('aria-label', action.ariaLabel);
+      btn.textContent = action.label;
+      btn.addEventListener('click', () => action.run({ noteId: chipNoteId, ask: runAsk }));
+      chipRow.appendChild(btn);
+    }
   }
 
   // ---- actions -------------------------------------------------------------
+  // [Task E12] The single record-then-onAsk path. Records lastQuestion/lastAskOpts
+  // (so the enable→re-ask flow can faithfully re-run the ask AS it was — plain,
+  // pinned, or a pinAll summarize) then forwards to the host's onAsk. Kept single-arg
+  // when there are no opts so the plain ask's call shape (onAsk(q)) is unchanged for
+  // callers/tests that don't pin. Used by fire() AND handed to quick actions as
+  // ctx.ask — so a Summarize action flows through the SAME bookkeeping the input does,
+  // with zero per-skill plumbing.
+  function runAsk(question, opts) {
+    lastQuestion = question;
+    lastAskOpts = opts;
+    if (opts) onAsk(question, opts);
+    else onAsk(question);
+  }
+
   function fire() {
     const q = input.value.trim();
     if (!q) return;
-    lastQuestion = q; // remembered for the enable→re-ask flow (survives the clear below)
     // [Task E7] Pin the open note ONLY while its chip is active (shown & not
-    // dismissed). Passed as a second arg only in that case, so the plain ask keeps
-    // its single-arg shape (onAsk(q)) for callers/tests that don't pin. [Task E9]
-    // lastAskOpts mirrors what was passed so the enable→re-ask preserves the pin.
-    if (chipShown && chipNoteId) { lastAskOpts = { pinnedNoteId: chipNoteId }; onAsk(q, lastAskOpts); }
-    else { lastAskOpts = undefined; onAsk(q); }
+    // dismissed) — otherwise a plain, unpinned ask. runAsk records the opts so the
+    // enable→re-ask preserves the pin.
+    if (chipShown && chipNoteId) runAsk(q, { pinnedNoteId: chipNoteId });
+    else runAsk(q, undefined);
     // [Task E6] Chat-style input: clear the box and keep focus so the user can type
     // the next question immediately (the asked text now lives in the thread bubble).
     input.value = '';
