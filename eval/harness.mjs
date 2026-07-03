@@ -21,7 +21,11 @@ export const PRIMARY_TAGS = ['direct', 'paraphrase', 'cjk', 'injection', 'multi-
 // test/eval-fixtures.test.js (title must be quoted; block must open the file)
 // so the loader and the integrity gate agree on "exactly this format".
 function parseNote(raw) {
-  const m = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(raw);
+  // Normalize CRLF: on Windows, a branch checkout with core.autocrlf rewrites the
+  // corpus files with \r\n and the strict `---\n` anchor stops matching (real
+  // incident: a main<->feat/ask switch broke all three eval suites at collection).
+  const text = String(raw).replace(/\r\n/g, '\n');
+  const m = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(text);
   if (!m) return null;
   const [, front, body] = m;
   const title = /^title:\s*"(.+)"\s*$/m.exec(front);

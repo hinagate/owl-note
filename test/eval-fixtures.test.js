@@ -25,7 +25,10 @@ const INJECTION_RE = /ignore (all )?previous instructions/i;
 // Parse the fixed frontmatter block (title/lang/tags) + body. Deliberately
 // strict: the block must open the file with `---`, and title must be quoted.
 function parseNote(raw) {
-  const m = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(raw);
+  // CRLF-normalized like eval/harness.mjs's twin parser: a Windows checkout with
+  // core.autocrlf materializes the corpus with \r\n, which must not fail the gate.
+  const text = String(raw).replace(/\r\n/g, '\n');
+  const m = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(text);
   if (!m) return null;
   const [, front, body] = m;
   const title = /^title:\s*"(.+)"\s*$/m.exec(front);
