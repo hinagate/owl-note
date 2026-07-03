@@ -820,6 +820,164 @@ describe('ask-panel — summarize quick action (E9)', () => {
   });
 });
 
+// [Task E10] One-click "Format" quick action. A "Format" button in the chip row
+// (beside Summarize, sharing the chip's visibility lifecycle) reformats the chip's
+// note as clean markdown via a propose → review → apply flow. The click appends a
+// panel-local exchange (bubble "Format this note.", pending "Formatting…") that
+// BYPASSES the ask-controller; onFormatNote does the model call + gates. The
+// proposal renders SANITIZED (renderMarkdown) with a content-loss warning and
+// Apply/Discard. Apply calls onApplyFormat(noteId, RAW-markdown-string) — the raw
+// string is closure-held, never read back from the sanitized DOM.
+describe('ask-panel — format quick action (E10)', () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it('renders a Format button beside Summarize, sharing the chip lifecycle', () => {
+    const { el, panel } = makePanel({
+      getCurrentNote: () => ({ id: 'n1', title: 'Cur' }), onFormatNote: vi.fn(), onApplyFormat: vi.fn(),
+    });
+    panel.open();
+    const btn = el.querySelector('.ask-format');
+    expect(btn).not.toBeNull();
+    expect(btn.getAttribute('aria-label')).toBe('Format this note as Markdown');
+    expect(el.querySelector('.ask-summarize')).not.toBeNull(); // sits beside Summarize
+
+    el.querySelector('.ask-chip-dismiss').click();
+    expect(el.querySelector('.ask-chip')).toBeNull();
+    expect(el.querySelector('.ask-format')).toBeNull(); // gone with the chip (no orphan focusable)
+  });
+
+  it('shows no Format button without a current note', () => {
+    const { el, panel } = makePanel({ getCurrentNote: () => null, onFormatNote: vi.fn() });
+    panel.open();
+    expect(el.querySelector('.ask-format')).toBeNull();
+  });
+
+  it('shows no Format button when onFormatNote is not wired', () => {
+    const { el, panel } = makePanel({ getCurrentNote: () => ({ id: 'n1', title: 'Cur' }) });
+    panel.open();
+    expect(el.querySelector('.ask-format')).toBeNull();
+  });
+
+  it('click appends an exchange bubble + a Formatting… pending indicator, bypassing onAsk', () => {
+    const onFormatNote = vi.fn(() => new Promise(() => {})); // never resolves — inspect the in-flight state
+    const { el, panel, onAsk } = makePanel({
+      getCurrentNote: () => ({ id: 'n1', title: 'Cur' }), onFormatNote, onApplyFormat: vi.fn(),
+    });
+    panel.open();
+    el.querySelector('.ask-format').click();
+
+    expect(el.querySelector('.ask-q').textContent).toBe('Format this note.');
+    expect(el.querySelector('.ask-thinking').textContent).toContain('Formatting');
+    expect(onFormatNote).toHaveBeenCalledWith('n1'); // operates on the chip's tagged note
+    expect(onAsk).not.toHaveBeenCalled();            // NOT routed through the ask-controller
+  });
+
+  it('resolves with a SANITIZED proposal (script stripped, **bold** applied) + Apply/Discard', async () => {
+    const md = 'See **this**.\n\n<script>window.__fmtPwned = 1</script>\n\n- one\n- two';
+    const onFormatNote = vi.fn().mockResolvedValue({ markdown: md, original: 'See this one two' });
+    const { el, panel } = makePanel({
+      getCurrentNote: () => ({ id: 'n1', title: 'Cur' }), onFormatNote, onApplyFormat: vi.fn(),
+    });
+    panel.open();
+    el.querySelector('.ask-format').click();
+    await flush();
+
+    const proposal = el.querySelector('.ask-format-proposal');
+    expect(proposal).not.toBeNull();
+    expect(proposal.querySelector('strong').textContent).toBe('this'); // markdown applied
+    expect(el.querySelector('script')).toBeNull();                     // DOMPurify stripped it
+    expect(window.__fmtPwned).toBeUndefined();
+    expect(el.querySelector('.ask-format-apply')).not.toBeNull();
+    expect(el.querySelector('.ask-format-discard')).not.toBeNull();
+  });
+
+  it('Apply passes the RAW closure-held markdown (not the DOM text) and flips to Applied when the host returns true', async () => {
+    const md = '# Heading\n\n- alpha\n- beta';
+    const onFormatNote = vi.fn().mockResolvedValue({ markdown: md, original: 'Heading alpha beta' });
+    const onApplyFormat = vi.fn().mockReturnValue(true);
+    const { el, panel } = makePanel({
+      getCurrentNote: () => ({ id: 'n7', title: 'Cur' }), onFormatNote, onApplyFormat,
+    });
+    panel.open();
+    el.querySelector('.ask-format').click();
+    await flush();
+
+    el.querySelector('.ask-format-apply').click();
+    // The RAW markdown (with #/- marks) is applied — proof it came from the closure,
+    // not the sanitized proposal DOM (whose textContent would be "Heading alpha beta").
+    expect(onApplyFormat).toHaveBeenCalledWith('n7', md);
+    expect(el.querySelector('.ask-format-applied')).not.toBeNull();
+    expect(el.querySelector('.ask-format-applied').textContent).toContain('Ctrl+Z');
+    expect(el.querySelector('.ask-format-apply').disabled).toBe(true);
+  });
+
+  it('Apply leaves the buttons live and shows no Applied row when the host refuses (returns false)', async () => {
+    const onFormatNote = vi.fn().mockResolvedValue({ markdown: '# X', original: 'X' });
+    const onApplyFormat = vi.fn().mockReturnValue(false); // host: note no longer open
+    const { el, panel } = makePanel({
+      getCurrentNote: () => ({ id: 'n1', title: 'Cur' }), onFormatNote, onApplyFormat,
+    });
+    panel.open();
+    el.querySelector('.ask-format').click();
+    await flush();
+
+    const apply = el.querySelector('.ask-format-apply');
+    apply.click();
+    expect(onApplyFormat).toHaveBeenCalledWith('n1', '# X');
+    expect(el.querySelector('.ask-format-applied')).toBeNull(); // no confirmation
+    expect(apply.disabled).toBe(false);                         // still actionable
+  });
+
+  it('Discard removes the action buttons but keeps the proposal as thread history', async () => {
+    const onFormatNote = vi.fn().mockResolvedValue({ markdown: '# Kept', original: 'Kept' });
+    const { el, panel } = makePanel({
+      getCurrentNote: () => ({ id: 'n1', title: 'Cur' }), onFormatNote, onApplyFormat: vi.fn(),
+    });
+    panel.open();
+    el.querySelector('.ask-format').click();
+    await flush();
+
+    el.querySelector('.ask-format-discard').click();
+    expect(el.querySelector('.ask-format-actions')).toBeNull();  // buttons gone
+    expect(el.querySelector('.ask-format-proposal')).not.toBeNull(); // proposal stays
+  });
+
+  it('shows a content-loss warning when the proposal is much shorter, and none when comparable', async () => {
+    // Much shorter → warn.
+    const shrink = vi.fn().mockResolvedValue({ markdown: '# Hi', original: 'a long original body '.repeat(60) });
+    let m = makePanel({ getCurrentNote: () => ({ id: 'n1', title: 'Cur' }), onFormatNote: shrink, onApplyFormat: vi.fn() });
+    m.panel.open();
+    m.el.querySelector('.ask-format').click();
+    await flush();
+    expect(m.el.querySelector('.ask-format-warning')).not.toBeNull();
+    expect(m.el.querySelector('.ask-format-warning').textContent.toLowerCase()).toContain('dropped');
+
+    // Comparable content (same words, just reformatted) → no warn.
+    const same = vi.fn().mockResolvedValue({ markdown: '# Title\n\nsame content here', original: 'Title same content here' });
+    m = makePanel({ getCurrentNote: () => ({ id: 'n2', title: 'Cur' }), onFormatNote: same, onApplyFormat: vi.fn() });
+    m.panel.open();
+    m.el.querySelector('.ask-format').click();
+    await flush();
+    expect(m.el.querySelector('.ask-format-proposal')).not.toBeNull();
+    expect(m.el.querySelector('.ask-format-warning')).toBeNull();
+  });
+
+  it('a null result (host already toasted/unavailable) resolves to the friendly enable note', async () => {
+    const onFormatNote = vi.fn().mockResolvedValue(null);
+    const { el, panel } = makePanel({
+      getCurrentNote: () => ({ id: 'n1', title: 'Cur' }), onFormatNote, onApplyFormat: vi.fn(),
+    });
+    panel.open();
+    el.querySelector('.ask-format').click();
+    await flush();
+
+    const note = el.querySelector('.ask-note');
+    expect(note).not.toBeNull();
+    expect(note.textContent.toLowerCase()).toContain('enable it in the ask panel');
+    expect(el.querySelector('.ask-format-apply')).toBeNull(); // no proposal, no Apply
+  });
+});
+
 // --- Layer 2: app integration over fake-chrome -------------------------------
 
 let app, bm, encode;

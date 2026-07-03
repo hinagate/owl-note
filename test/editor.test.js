@@ -193,4 +193,28 @@ describe('editor', () => {
     await vi.waitFor(() => expect(btn.disabled).toBe(false));
     expect(el.querySelector('.note-title').value).toBe('Keep me');
   });
+
+  // [Task E10] replaceBody swaps the WHOLE body (the Format quick action's Apply
+  // path). It must run through the SAME change path a keystroke does — onChange +
+  // autosave + preview re-render — so the reformat is observed and persisted. In a
+  // real browser it uses execCommand('insertText') to preserve native undo; under
+  // jsdom (no execCommand) it falls back to a value assignment + the input event.
+  it('replaceBody replaces the body through the change path (onChange + preview see the new body)', () => {
+    const onChange = vi.fn();
+    const onSave = vi.fn();
+    const el = document.getElementById('editor');
+    const api = renderEditor(el, { body: 'old messy body', onChange, onSave });
+    const ta = el.querySelector('textarea.note-body');
+    const status = el.querySelector('.save-status');
+
+    api.replaceBody('# Clean\n\n- one\n- two');
+
+    expect(ta.value).toBe('# Clean\n\n- one\n- two');
+    // The change path ran: onChange saw the new body and the preview re-rendered.
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ body: '# Clean\n\n- one\n- two' }));
+    expect(el.querySelector('.preview').innerHTML).toContain('Clean');
+    expect(api.getBody()).toBe('# Clean\n\n- one\n- two');
+    // Autosave was scheduled by the change path (subtle inline status flips to Unsaved…).
+    expect(status.textContent).toBe('Unsaved…');
+  });
 });

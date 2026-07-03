@@ -219,6 +219,27 @@ export function renderEditor(
     }
   }
 
+  // [Task E10] Replace the ENTIRE body with `text`, preserving the textarea's native
+  // undo stack so a single Ctrl+Z reverts the whole reformat. This is the repo's
+  // Arc-1 lesson: assigning `ta.value` wipes the browser's undo history, so we
+  // instead select all and let execCommand('insertText') perform the replacement as
+  // a real edit the browser can undo (it also fires a native `input` event, so
+  // fireChange → onChange + autosave run). jsdom has no execCommand, so we fall back
+  // to a value assignment plus the SAME input event a keystroke fires — the change
+  // path must run either way so the new body is observed and persisted.
+  function replaceBody(text) {
+    const value = String(text ?? '');
+    ta.focus();
+    ta.setSelectionRange(0, ta.value.length);
+    let ok = false;
+    try { ok = !!(document.execCommand && document.execCommand('insertText', false, value)); } catch { ok = false; }
+    if (!ok) {
+      ta.value = value;
+      ta.selectionStart = ta.selectionEnd = value.length;
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  }
+
   // Open an attachment's bytes in a new tab. window.open() runs synchronously to keep
   // the click's user gesture (popup blocker), and we navigate via a blob: URL because
   // Chrome blocks top-level navigation to data: URIs.
@@ -441,6 +462,7 @@ export function renderEditor(
     getBody: () => ta.value,
     getTitle: () => titleInput.value,
     getAttachments: () => atts,
+    replaceBody, // [Task E10] undo-preserving whole-body replace (Format's Apply path)
     flush: () => doSave({ auto: true }),
     destroy: () => clearTimeout(saveTimer), // cancel a pending auto-save when this editor is torn down
   };
