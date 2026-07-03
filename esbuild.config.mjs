@@ -11,8 +11,29 @@ const PROD = process.argv.includes('--prod') || process.env.NODE_ENV === 'produc
 let creds = { clientId: '', clientSecret: '' };
 try { creds = JSON.parse(readFileSync('.drive-credentials.json', 'utf8')); } catch { /* contributors without creds: Drive sync simply stays unconfigured */ }
 
+// @huggingface/transformers' web build statically imports `onnxruntime-node` (it
+// picks node vs web at runtime via apis.IS_NODE_ENV, which is false in our
+// worker). Left alone, esbuild would try to bundle that native Node addon and
+// fail. It's dead code in the browser, so we resolve it to an empty module. Only
+// the embed-worker entry ever reaches this import; app.js never imports
+// transformers, so this plugin is a no-op for the app bundle.
+const stubOnnxNode = {
+  name: 'stub-onnxruntime-node',
+  setup(b) {
+    b.onResolve({ filter: /^onnxruntime-node$/ }, () => ({ path: 'onnxruntime-node', namespace: 'stub-onnx-node' }));
+    b.onLoad({ filter: /.*/, namespace: 'stub-onnx-node' }, () => ({ contents: 'export default {};', loader: 'js' }));
+  },
+};
+
 await build({
-  entryPoints: { app: 'src/app/app.js', 'service-worker': 'src/background/service-worker.js' },
+  // embed-worker.js is a SECOND, self-contained iife entry (M9): only it imports
+  // @huggingface/transformers, keeping the ~1MB lib out of app.js. iife format
+  // means no code-splitting, so each entry stays a single standalone file.
+  entryPoints: {
+    app: 'src/app/app.js',
+    'service-worker': 'src/background/service-worker.js',
+    'embed-worker': 'src/workers/embed-worker.js',
+  },
   bundle: true,
   format: 'iife',
   outdir: 'dist',
@@ -21,9 +42,20 @@ await build({
     __OWL_DRIVE_CLIENT_ID__: JSON.stringify(creds.clientId || ''),
     __OWL_DRIVE_CLIENT_SECRET__: JSON.stringify(creds.clientSecret || ''),
   },
+  plugins: [stubOnnxNode],
   minify: PROD,
   logLevel: 'info',
 });
+
+// Ship the ONE ONNX Runtime WASM binary the embed worker requests at runtime.
+// onnxruntime-web@1.26 (via @huggingface/transformers' `onnxruntime-web/webgpu`
+// import -> ort.webgpu.bundle.min.mjs) hardcodes locateFile('ort-wasm-simd-
+// threaded.asyncify.wasm', ...), so that exact single-threaded SIMD (Asyncify)
+// artifact must live at the extension root where env...wasm.wasmPaths points.
+// The threaded/jsep/jspi variants need COOP/COEP or WebGPU we don't ship.
+const ortWasm = 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.wasm';
+if (existsSync(ortWasm)) cpSync(ortWasm, 'dist/ort-wasm-simd-threaded.asyncify.wasm');
+else throw new Error(`Missing ORT WASM artifact: ${ortWasm}`);
 
 cpSync('src/app/app.html', 'dist/app.html');
 cpSync('src/app/app.css', 'dist/app.css');

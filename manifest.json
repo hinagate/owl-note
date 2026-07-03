@@ -4,6 +4,7 @@
   "version": "1.9.7",
   "description": "Free Markdown notes with code & math in browser bookmarks. Syncs via Google/Microsoft. Private, no subscriptions or lock-in.",
   "permissions": ["bookmarks", "storage", "unlimitedStorage", "contextMenus", "identity"],
+  "content_security_policy": { "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'" },
   "optional_host_permissions": ["https://www.googleapis.com/*", "https://oauth2.googleapis.com/*"],
   "action": { "default_title": "Open OWL-Note" },
   "background": { "service_worker": "service-worker.js" },
