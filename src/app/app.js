@@ -215,13 +215,17 @@ async function ensureAskUI() {
       // markers), so it applies without review. replaceBody keeps the editor's native
       // undo stack, so a single Ctrl+Z reverts it; when nothing changes we skip the
       // write entirely and just say so.
+      // Returns a status string so the action can also post an IN-PANEL notice —
+      // the editor sits BEHIND the drawer, so a body change alone is invisible from
+      // the Ask panel (user-reported: "clicked Tidy, nothing happened").
       tidyNote: (noteId) => {
-        if (!ui.current || ui.current.id !== noteId || !ui.editor) { toast('Open the note first', true); return; }
+        if (!ui.current || ui.current.id !== noteId || !ui.editor) { toast('Open the note first', true); return 'no-note'; }
         const body = ui.current.body || '';
         const tidied = tidyMarkdown(body);
-        if (tidied === body) { toast('Already tidy'); return; }
+        if (tidied === body) { toast('Already tidy'); return 'unchanged'; }
         ui.editor.replaceBody(tidied); // undo-preserving apply (single Ctrl+Z reverts)
         toast('Tidied — Ctrl+Z to undo');
+        return 'tidied';
       },
     });
     askPanel = renderAskPanel(el, {
@@ -622,6 +626,11 @@ function renderCurrentEditor(opts = {}) {
     measure: measureNoteSize,
     onChange: ({ title, body, attachments }) => {
       if (ui.current) { ui.current.title = title; ui.current.body = body; ui.current.attachments = attachments; }
+      // Keep the Ask drawer's context chip label in sync with TITLE edits too —
+      // manual typing or the ✨ suggest-title fill (user-reported: chip kept the old
+      // title). Cheap: rebuilds one small pill row; per-note dismissal survives
+      // same-note refreshes by design.
+      askPanel?.refreshChip?.();
     },
     onSave: async ({ title, body, attachments }, { auto = false } = {}) => {
       const existing = ui.current && (ui.activeBookmarkId || ui.activeLocalId);

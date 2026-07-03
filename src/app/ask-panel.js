@@ -258,9 +258,20 @@ export function renderAskPanel(container, {
       btn.className = `ask-action ask-${action.id}`;
       btn.setAttribute('aria-label', action.ariaLabel);
       btn.textContent = action.label;
-      btn.addEventListener('click', () => action.run({ noteId: chipNoteId, ask: runAsk }));
+      btn.addEventListener('click', () => action.run({ noteId: chipNoteId, ask: runAsk, notice }));
       chipRow.appendChild(btn);
     }
+  }
+
+  // Lightweight in-thread feedback row for actions whose EFFECT happens outside the
+  // panel (e.g. Tidy edits the note BEHIND the drawer — without this, "nothing
+  // happens" from where the user is looking). textContent only; not an exchange.
+  function notice(text) {
+    const row = document.createElement('div');
+    row.className = 'ask-notice';
+    row.textContent = text;
+    results.appendChild(row);
+    scrollToNewest();
   }
 
   // ---- actions -------------------------------------------------------------

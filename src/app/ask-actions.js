@@ -16,11 +16,15 @@
  * @prop {string} id         unique, e.g. 'summarize'
  * @prop {string} label      button text, e.g. 'Summarize'
  * @prop {string} ariaLabel  accessible name
- * @prop {(ctx: { noteId: string, ask: (question: string, opts?: object) => void }) => void} run
+ * @prop {(ctx: { noteId: string, ask: (question: string, opts?: object) => void,
+ *                notice: (text: string) => void }) => void} run
  *   Invoked on click with the CHIP's note id resolved AT CLICK TIME. `ask` is
  *   PANEL-PROVIDED — it is the same internal record-then-onAsk path that the input's
  *   fire() uses, so an action that asks (Summarize) records lastQuestion/lastAskOpts
  *   and the panel's enable→re-ask flow keeps working with zero per-skill plumbing.
+ *   `notice` (also panel-provided) appends a lightweight feedback row to the thread —
+ *   for actions whose effect happens OUTSIDE the panel (the editor sits behind the
+ *   drawer, so without a notice the action looks like a no-op from the drawer).
  *   Everything else an action needs (e.g. tidyNote) is closed over at composition
  *   time in builtinAskActions() below — the panel never sees those deps.
  */
@@ -57,8 +61,15 @@ export function builtinAskActions({ tidyNote }) {
       ariaLabel: 'Tidy the note formatting',
       // [Task E11] Deterministic markdown tidy on the chip's note — no model, no
       // proposal, no exchange (this replaced E10's async Format flow, which the model
-      // made unreadable). Uses the injected host routine; ignores ctx.ask.
-      run: ({ noteId }) => tidyNote(noteId),
+      // made unreadable). Uses the injected host routine; ignores ctx.ask. The edit
+      // lands in the editor BEHIND the drawer, so the panel notice is the feedback
+      // the user actually sees (a toast alone hid under the drawer).
+      run: ({ noteId, notice }) => {
+        const status = tidyNote(noteId);
+        if (status === 'tidied') notice('Note tidied — Ctrl+Z in the editor undoes it.');
+        else if (status === 'unchanged') notice('Already tidy — nothing to change.');
+        // 'no-note' (or legacy undefined): the host already toasted the guard failure.
+      },
     },
   ];
 }

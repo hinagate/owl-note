@@ -936,10 +936,30 @@ describe('ask-panel — pluggable action registry (E12)', () => {
     const ctx = fakeRun.mock.calls[0][0];
     expect(ctx.noteId).toBe('n42');            // the chip's note id
     expect(typeof ctx.ask).toBe('function');   // panel-provided record-then-onAsk path
+    expect(typeof ctx.notice).toBe('function'); // panel-provided in-thread feedback
 
     // ctx.ask IS the panel's internal ask path (records + forwards to onAsk).
     ctx.ask('probe question', { pinnedNoteId: 'n42' });
     expect(onAsk).toHaveBeenCalledWith('probe question', { pinnedNoteId: 'n42' });
+
+    // ctx.notice appends a lightweight feedback row to the thread (textContent —
+    // actions whose effect lands in the editor behind the drawer need visible proof).
+    ctx.notice('Note tidied — Ctrl+Z in the editor undoes it. <b>literal</b>');
+    const noticeRow = el.querySelector('.ask-notice');
+    expect(noticeRow).not.toBeNull();
+    expect(noticeRow.textContent).toContain('Note tidied');
+    expect(noticeRow.querySelector('b')).toBeNull(); // literal text, not HTML
+  });
+
+  it('the chip label follows a TITLE edit on the same note (✨ suggest-title / typing)', () => {
+    let note = { id: 'A', title: 'Old title' };
+    const { el, panel } = makePanel({ getCurrentNote: () => note, actions: [] });
+    panel.open();
+    expect(el.querySelector('.ask-chip-title').textContent).toBe('Old title');
+
+    note = { id: 'A', title: 'Fresh generated title' }; // same note, new title
+    panel.refreshChip(); // app.js calls this from the editor's onChange
+    expect(el.querySelector('.ask-chip-title').textContent).toBe('Fresh generated title');
   });
 
   it('hands run() the chip note id resolved at CLICK time (follows a live note change)', () => {

@@ -298,6 +298,8 @@ body.resizing { user-select: none; cursor: col-resize; }
 /* [Task E7] Current-note context chip — the open note pinned into the ask. */
 #ask-panel .ask-chip-row { padding: 0 16px 8px; }
 #ask-panel .ask-chip-row[hidden] { display: none; }
+/* In-thread feedback row for actions whose effect happens outside the panel (Tidy). */
+#ask-panel .ask-notice { font-size: 12px; color: var(--muted); padding: 6px 2px; }
 #ask-panel .ask-chip {
   display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
   box-sizing: border-box; vertical-align: middle;
@@ -444,6 +446,9 @@ body.resizing { user-select: none; cursor: col-resize; }
 #toast {
   position: fixed; bottom: 18px; right: 18px; background: #1d2125; color: #fff;
   padding: 10px 14px; border-radius: 8px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); font-size: 13px;
+  /* Above the Ask drawer (z-index 40): the toast lives in the drawer's corner, and
+     without this every toast fired while the drawer is open was invisible. */
+  z-index: 100;
 }
 #toast.warn { background: #b35900; }
 

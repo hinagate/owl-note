@@ -29,9 +29,26 @@ describe('ask-actions — builtin quick-action registry (E12)', () => {
     const tidyNote = vi.fn();
     const tidy = builtinAskActions({ tidyNote }).find((a) => a.id === 'tidy');
     const ask = vi.fn();
-    tidy.run({ noteId: 'n7', ask });
+    tidy.run({ noteId: 'n7', ask, notice: vi.fn() });
     expect(tidyNote).toHaveBeenCalledWith('n7');
     expect(ask).not.toHaveBeenCalled();
+  });
+
+  // The tidy EDIT happens in the editor behind the drawer — the in-panel notice is
+  // the feedback the user actually sees (a corner toast alone hid under the drawer).
+  it('tidy.run posts an in-panel notice matching the host status', () => {
+    const tidy = (status) => builtinAskActions({ tidyNote: vi.fn(() => status) }).find((a) => a.id === 'tidy');
+    let notice = vi.fn();
+    tidy('tidied').run({ noteId: 'n1', ask: vi.fn(), notice });
+    expect(notice).toHaveBeenCalledWith('Note tidied — Ctrl+Z in the editor undoes it.');
+
+    notice = vi.fn();
+    tidy('unchanged').run({ noteId: 'n1', ask: vi.fn(), notice });
+    expect(notice).toHaveBeenCalledWith('Already tidy — nothing to change.');
+
+    notice = vi.fn();
+    tidy('no-note').run({ noteId: 'n1', ask: vi.fn(), notice }); // host already toasted the guard
+    expect(notice).not.toHaveBeenCalled();
   });
 
   it('resolves noteId per call — the same descriptor asks about whatever note it is handed', () => {
