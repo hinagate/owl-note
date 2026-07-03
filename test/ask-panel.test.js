@@ -457,6 +457,48 @@ describe('ask-panel — related notes section', () => {
     expect(el.querySelector('.ask-related-label')).not.toBeNull();
   });
 
+  // User-reported: "draft an email…" → ungrounded generic answer, but the OR-retry
+  // matched stopword noise (SQL/RabbitMQ notes) shown as "Related notes". Weak
+  // (OR-rescued) hits must not dress up as relevance under an ungrounded answer.
+  it('hides weak (OR-fallback) hits under an UNGROUNDED answer', () => {
+    const { el, panel } = makePanel();
+    panel.update({
+      kind: 'answered', question: 'draft an email to my boss', answer: 'Dear Gary…',
+      citations: [],
+      chunks: [
+        chunk({ id: 'x::0', noteId: 'x', noteTitle: 'replacement car', weak: true }),
+        chunk({ id: 'y::0', noteId: 'y', noteTitle: 'RabbitMQ intro', weak: true }),
+      ],
+      grounded: false, usedModel: true,
+    });
+    expect(el.querySelectorAll('.ask-related-row')).toHaveLength(0);
+    expect(el.querySelector('.ask-related-label')).toBeNull(); // no empty header either
+  });
+
+  it('still shows REAL (AND-matched) hits under an ungrounded answer — the model may have failed to use them', () => {
+    const { el, panel } = makePanel();
+    panel.update({
+      kind: 'answered', question: 'q', answer: 'Could not find it.',
+      citations: [],
+      chunks: [chunk({ id: 'b::0', noteId: 'b', noteTitle: 'Real match' })], // no weak flag
+      grounded: false, usedModel: true,
+    });
+    const rows = el.querySelectorAll('.ask-related-row');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].querySelector('.ask-related-title').textContent).toBe('Real match');
+  });
+
+  it('keeps weak hits visible under a GROUNDED answer (they are honest "other matches")', () => {
+    const { el, panel } = makePanel();
+    panel.update({
+      kind: 'answered', question: 'q', answer: 'Answer.',
+      citations: [chunk({ id: 'a::0', noteId: 'a', noteTitle: 'Cited' })],
+      chunks: [chunk({ id: 'w::0', noteId: 'w', noteTitle: 'Weak other', weak: true })],
+      grounded: true, usedModel: true,
+    });
+    expect(el.querySelectorAll('.ask-related-row')).toHaveLength(1);
+  });
+
   it('clicking a related row calls onCitation with that chunk noteId', () => {
     const { el, panel, onCitation } = makePanel();
     panel.update({

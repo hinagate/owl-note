@@ -57,6 +57,17 @@ describe('createAskIndex — relevance and ranking', () => {
     const results = idx.query('alpha zzznomatchtermxyz');
     expect(results.length).toBeGreaterThan(0);
     expect(results.some((r) => r.noteId === 'a')).toBe(true);
+    // OR-retry results are tagged weak — the UI uses this to avoid presenting
+    // stopword-noise matches as meaningful "Related notes" under ungrounded answers.
+    expect(results.every((r) => r.weak === true)).toBe(true);
+  });
+
+  it('does NOT tag precise AND matches as weak', () => {
+    const idx = createAskIndex();
+    idx.build([note({ id: 'a', body: 'alpha appears here alone.' })]);
+    const results = idx.query('alpha');
+    expect(results.length).toBeGreaterThan(0);
+    expect(results.every((r) => r.weak === undefined)).toBe(true);
   });
 
   it('supports prefix search ("recip" finds "recipes")', () => {

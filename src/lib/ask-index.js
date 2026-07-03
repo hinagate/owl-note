@@ -153,7 +153,12 @@ export function createAskIndex() {
       if (!text) return [];
 
       let hits = mini.search(text);
-      if (hits.length === 0) hits = mini.search(text, { combineWith: 'OR' });
+      // The OR retry rescues partial matches — but for a conversational, non-note
+      // request ("draft an email to my boss…") it matches pure stopword noise
+      // ("to", "a"). Tag those hits `weak` so the UI can avoid presenting them as
+      // meaningful "Related notes" when the model also found nothing to cite.
+      let weak = false;
+      if (hits.length === 0) { hits = mini.search(text, { combineWith: 'OR' }); weak = true; }
 
       return hits.slice(0, k).map((hit) => ({
         id: hit.id,
@@ -163,6 +168,7 @@ export function createAskIndex() {
         text: hit.text,
         raw: hit.raw,
         score: hit.score,
+        ...(weak ? { weak: true } : {}),
       }));
     },
 

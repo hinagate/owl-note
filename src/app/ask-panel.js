@@ -56,12 +56,20 @@ function snippetOf(text) {
 // ranked `chunks`, so first-seen is best-ranked), excluding any note already
 // shown as a citation so a note is never listed twice. Pure so it's trivial to
 // unit-test independent of the DOM.
-function relatedChunks(chunks, citations) {
+//
+// `grounded === false` additionally drops WEAK hits (the index's OR-retry rescue,
+// which matches stopword noise on conversational requests like "draft an email…").
+// Rationale: Related-notes-under-an-ungrounded-answer exists so the user can check
+// sources the model FAILED to use — but when retrieval itself only grasped at
+// stopwords AND the model cited nothing, those rows are noise dressed up as
+// relevance (user-reported). Real (AND-matched) hits still show either way.
+function relatedChunks(chunks, citations, { grounded } = {}) {
   const cited = new Set((Array.isArray(citations) ? citations : []).map((c) => c.noteId));
   const seen = new Set();
   const out = [];
   for (const c of (Array.isArray(chunks) ? chunks : [])) {
     if (cited.has(c.noteId) || seen.has(c.noteId)) continue;
+    if (grounded === false && c.weak) continue;
     seen.add(c.noteId);
     out.push(c);
   }
@@ -650,7 +658,7 @@ export function renderAskPanel(container, {
       // [Task E5] Always offer a way to jump to the source notes, even when the
       // model (or the zero-hit canned path) cited nothing — renders nothing if
       // every retrieved note is already a citation, or nothing was retrieved.
-      renderRelated(target, relatedChunks(state.chunks, state.citations));
+      renderRelated(target, relatedChunks(state.chunks, state.citations, { grounded: state.grounded }));
     });
   }
 
