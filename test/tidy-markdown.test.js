@@ -183,6 +183,9 @@ describe('tidyMarkdown — idempotence on a gnarly all-rules fixture', () => {
     'kept as-is()',
     '```',
     'tail',
+    '',
+    '├─ box tree node one', // [E13] rule 8 auto-fences this box-drawing block...
+    '└─ box tree node two', // ...and the wrap must remain idempotent on re-tidy
   ].join('\n');
 
   it('tidy(tidy(x)) === tidy(x)', () => {
@@ -214,5 +217,99 @@ describe('tidyMarkdown — CJK safety (structure only, word content untouched)',
   it('does not insert spaces between CJK characters or reflow the text', () => {
     const body = '这是一个很长的中文段落没有任何空格需要保留原样。';
     expect(tidyMarkdown(body)).toBe(body + '\n');
+  });
+});
+
+describe('tidyMarkdown — rule 8: auto-fence box-drawing (ASCII-tree) blocks', () => {
+  // WHY this rule exists: Markdown collapses single newlines inside a paragraph, so a
+  // Unicode box-drawing tree (│ ├─ └─ …) that renders beautifully in the editor flows
+  // into ONE wrapped run in the preview — alignment destroyed. The only faithful
+  // Markdown treatment for line-art is a fenced code block. Rule 8 detects such blocks
+  // and wraps them in ``` so the preview keeps every line break + monospace alignment.
+
+  // The user's REAL note (CJK verbatim) — the primary fixture. Interior bytes must come
+  // out byte-exact; only two ``` fence lines are added around the whole tree.
+  const tree = [
+    '可同箱組合',
+    '│',
+    '├─ ★【寢具 + 衣物】 同臥室、都是 Day-1、又輕又軟',
+    '│   ├─ 床單被套枕套 + 睡衣 / 換洗衣物',
+    '│   └─ 棉被當緩衝包在外圈,內衣襪子塞空隙',
+    '│      → 大箱最適合這組,裝滿也不會超重',
+    '│',
+    '├─ ★【盥洗 + 毛巾】 同浴室、都是 Day-1',
+    '│   └─ ⚠ 洗髮沐浴等液體先密封進夾鏈袋,放角落直立',
+  ].join('\n');
+
+  it('wraps the whole CJK tree (header + interior) in one ``` pair, interior byte-exact', () => {
+    const out = tidyMarkdown(tree);
+    // The header line 可同箱組合 and the interior are swallowed into a single fence.
+    expect(out).toBe('```\n' + tree + '\n```\n');
+    // Interior appears verbatim — not one byte of line-art or CJK changed.
+    expect(out).toContain(tree);
+  });
+
+  it('leaves the CJK bytes inside the tree unchanged', () => {
+    const out = tidyMarkdown(tree);
+    for (const word of ['可同箱組合', '寢具', '盥洗', '洗髮沐浴等液體先密封進夾鏈袋', '大箱最適合這組']) {
+      expect(out).toContain(word);
+    }
+  });
+
+  it('is idempotent on the CJK tree (fenced block is protected on the next run)', () => {
+    const once = tidyMarkdown(tree);
+    expect(tidyMarkdown(once)).toBe(once);
+  });
+
+  it('fences a block drawn with double-line / corner box chars (full char class)', () => {
+    const boxbox = '╔═══╗\n║ x ║\n╚═══╝';
+    expect(tidyMarkdown(boxbox)).toBe('```\n╔═══╗\n║ x ║\n╚═══╝\n```\n');
+  });
+
+  it('does NOT fence a Markdown table — ASCII `|` and `---` are never box chars', () => {
+    const table = '| a | b |\n| --- | --- |\n| 1 | 2 |';
+    expect(tidyMarkdown(table)).toBe('| a | b |\n| --- | --- |\n| 1 | 2 |\n');
+  });
+
+  it('does NOT fence ASCII box-art or a `---` rule (only Unicode box chars match)', () => {
+    // `+`, `|`, `-` are ASCII (U+002B/007C/002D) — outside the box-drawing set.
+    expect(tidyMarkdown('+---+\n| a |\n+---+')).toBe('+---+\n| a |\n+---+\n');
+    expect(tidyMarkdown('text\n---\nmore')).toBe('text\n---\nmore\n');
+  });
+
+  it('does NOT fence a prose paragraph with a lone decorative ───── divider (<2 box lines)', () => {
+    const prose = 'Some intro prose.\n─────\nMore prose here.';
+    expect(tidyMarkdown(prose)).toBe('Some intro prose.\n─────\nMore prose here.\n');
+  });
+
+  it('does NOT fence a mostly-prose block that has a couple of box lines (<50%)', () => {
+    // 5-line block, 2 box lines → fails the ≥50% rule, so it stays unfenced.
+    const mixed = 'header one\nheader two\nheader three\n├─ a\n└─ b';
+    expect(tidyMarkdown(mixed)).toBe('header one\nheader two\nheader three\n├─ a\n└─ b\n');
+  });
+
+  it('fences only the qualifying block when prose and a tree are separate blocks', () => {
+    const doc = 'Prose line one\nProse line two\nProse line three\n\n├─ branch a\n└─ branch b';
+    expect(tidyMarkdown(doc)).toBe(
+      'Prose line one\nProse line two\nProse line three\n\n```\n├─ branch a\n└─ branch b\n```\n',
+    );
+  });
+
+  it('does not re-fence a tree that is already inside a fence', () => {
+    const already = '```\n├─ a\n└─ b\n```';
+    expect(tidyMarkdown(already)).toBe('```\n├─ a\n└─ b\n```\n');
+  });
+
+  it('does not treat a ├─ tree line as a list item (no rule-5 blank inserted)', () => {
+    // LIST_ITEM_RE requires -,*,+, or a digit marker; ├ is none of them. A lone
+    // 1-box-line block is not fenced, so we can observe it is NOT list-spaced.
+    expect(tidyMarkdown('Intro\n├─ x')).toBe('Intro\n├─ x\n');
+  });
+
+  it('handles a mixed doc: heading + prose + tree + list all behave correctly', () => {
+    const doc = '# Title\n\nSome prose paragraph.\n\n├─ node a\n└─ node b\n\n- item one\n- item two';
+    expect(tidyMarkdown(doc)).toBe(
+      '# Title\n\nSome prose paragraph.\n\n```\n├─ node a\n└─ node b\n```\n\n- item one\n- item two\n',
+    );
   });
 });

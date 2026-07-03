@@ -30,6 +30,14 @@ const LIST_ITEM_RE = /^\s*([-*+]|\d+[.)])\s/;
 // is preserved). Conservative set — ASCII `*`/`+`/`-` are intentionally left alone.
 const UNICODE_BULLET_RE = /^(\s*)[•●▪‣◦・][ \t　]?/;
 
+// Rule 8 — a BOX LINE is one whose first non-whitespace character is a UNICODE
+// box-drawing character (the U+2500–U+257F members listed here explicitly as a char
+// class). WHY only Unicode: ASCII `|` (U+007C) and `-` (U+002D) are DELIBERATELY
+// excluded so Markdown tables (`| a | b |`, `|---|`), `---` horizontal rules, setext
+// underlines, and ASCII box-art (`+---+`) are never mistaken for line-art and swallowed
+// into a code fence. CJK text never starts with one of these, so it never matches.
+const BOX_LINE_RE = /^\s*[│├└┌┐┘┤┬┴┼─═║╔╗╚╝╠╣╦╩╬]/;
+
 /**
  * Tidy a note body's markdown structure. Deterministic and idempotent:
  * tidyMarkdown(tidyMarkdown(x)) === tidyMarkdown(x).
@@ -45,6 +53,10 @@ const UNICODE_BULLET_RE = /^(\s*)[•●▪‣◦・][ \t　]?/;
  *     line is non-empty and not itself a list item.
  *  6. Unicode bullets at line start (•●▪‣◦・, leading whitespace preserved) → `- `.
  *  7. Exactly one trailing newline on a non-empty result.
+ *  8. Auto-fence a Unicode box-drawing (ASCII-tree) block — a paragraph unit with ≥2
+ *     box lines that are ≥50% of the block — in a ``` code fence so the preview keeps
+ *     its line breaks instead of collapsing them into one paragraph. Runs as a
+ *     structural PRE-PASS (before rules 2/6) so the tree's interior comes out byte-exact.
  *
  * Deliberately does NOT: reflow paragraphs, change emphasis markers, renumber lists,
  * touch tables, convert `*`/`+` bullets to `-`, or alter link/image syntax.
@@ -57,11 +69,20 @@ export function tidyMarkdown(body) {
   // normalize() does the same). This is the one normalization allowed to reach a
   // fence, since a line ending is not code content.
   const normalized = String(body ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  const lines = normalized.split('\n');
+
+  // Rule 8 runs as a structural PRE-PASS, before any per-line transform. It only ever
+  // INSERTS two ``` fence lines around a detected tree block; the block's own bytes are
+  // never touched here, and once wrapped they are protected on this pass (skipped by
+  // rules 2/6) and on every later run (already inside a fence → never re-detected).
+  // That is what makes tidy(tidy(x)) === tidy(x) hold for line-art. Detection uses the
+  // original fence map so a tree already inside a fence is left alone.
+  const rawLines = normalized.split('\n');
+  const lines = fenceBoxDrawingBlocks(rawLines, markFences(rawLines));
 
   // Fence map: mark which lines are protected (inside a fence, marker lines
-  // included). Detection runs on the raw lines — the transforms below never create
-  // or destroy a `^```` line, so pre- vs post-transform detection is equivalent.
+  // included) — now including any fence rule 8 just inserted. Detection runs on the
+  // raw lines — the transforms below never create or destroy a `^```` line, so pre- vs
+  // post-transform detection is equivalent.
   const protectedFlags = markFences(lines);
 
   // Per-line transforms (rules 2, 4a-space, 6). Protected lines are left verbatim.
@@ -114,6 +135,50 @@ export function tidyMarkdown(body) {
   // ends in one (an unclosed fence whose content ends in a newline stays verbatim).
   const result = out.join('\n');
   return result.endsWith('\n') ? result : result + '\n';
+}
+
+// Rule 8: auto-fence Unicode box-drawing (ASCII-tree) blocks. WHY: Markdown collapses
+// single newlines inside a paragraph, so a tree like  ├─ … / └─ …  renders as one
+// wrapped run in the preview — its alignment destroyed. The only faithful Markdown
+// treatment for line-art is a fenced code block, so we wrap qualifying blocks in ```.
+//
+// A "block" is a maximal run of non-blank, non-protected lines — exactly the paragraph
+// unit rules 3/5 reason about (blank OR fence lines are its boundaries). A block
+// QUALIFIES when it has ≥2 box lines AND those are ≥50% of the block: the ≥2 floor
+// stops a lone decorative ───── divider in prose from triggering; the ≥50% rule stops
+// a mostly-prose paragraph that merely contains a couple of box lines. The WHOLE block
+// is wrapped (a leading header line and indented continuation lines ride along — the
+// tree reads as one unit, matching the fenced form the user copied it from).
+//
+// Only two ``` lines are inserted; block bytes are copied verbatim (interior byte-exact).
+// The inserted markers are `` ``` `` — never a box line — so they don't perturb detection
+// and, being protected on the next run, the wrap is idempotent.
+function fenceBoxDrawingBlocks(lines, protectedFlags) {
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    // A blank or already-protected (fenced) line is a boundary — copy it and move on.
+    if (protectedFlags[i] || lines[i].trim() === '') {
+      out.push(lines[i]);
+      i += 1;
+      continue;
+    }
+    // Gather the block [i, j).
+    let j = i;
+    while (j < lines.length && !protectedFlags[j] && lines[j].trim() !== '') j += 1;
+    const block = lines.slice(i, j);
+    let boxCount = 0;
+    for (const line of block) if (BOX_LINE_RE.test(line)) boxCount += 1;
+    if (boxCount >= 2 && boxCount * 2 >= block.length) {
+      out.push('```');                       // open fence (no language tag)
+      for (const line of block) out.push(line); // interior copied byte-for-byte
+      out.push('```');                        // close fence
+    } else {
+      for (const line of block) out.push(line);
+    }
+    i = j;
+  }
+  return out;
 }
 
 // Walk the lines once, flipping an in-fence flag on each `^```` marker. Marker lines
