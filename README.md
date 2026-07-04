@@ -15,7 +15,8 @@ No server. No account. No subscription. No lock-in. A lightweight, no-bloat alte
 
 #### [➜ Add to Chrome / Edge — free](https://chromewebstore.google.com/detail/hjkbpgkmiaeojfhkpnhmokgjipenhcfl)
 
-<!-- TODO(owner): record assets/ask-owl.gif — see docs/interview-demo-script.md -->
+<img src="assets/ask-owl.gif" alt="Ask Owl demo: asking a question in the Ask Owl panel — the on-device semantic index searches every note and answers from the right recipe note, with a citation that jumps to it" width="820">
+
 <img src="assets/screenshot.png" alt="OWL-Note editor: Markdown source with KaTeX math and a Python code block, beside its live rendered preview" width="820">
 
 </div>
