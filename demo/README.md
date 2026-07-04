@@ -15,3 +15,9 @@ people, no personal data, nothing copyrighted.
    answer cites the recipe, and the citation jumps straight to it.
 3. **「エクスポート機能はいつリリースしますか?」** — a multilingual (CJK) beat:
    the answer comes from the Japanese standup note (金曜日 / Friday).
+4. **"How many cores does my Apple have?"** — the disambiguation demo. Two notes
+   deliberately share the words *apple, core, skin, crisp, juice* — but one is a
+   dessert recipe and one is a laptop checklist. Keyword search can't tell them
+   apart; Ask Owl answers "10" from the laptop note. Then ask **"What oven
+   temperature for the apple dessert?"** and it switches to the recipe (190°C) —
+   same vocabulary, opposite meaning, correct note both times.

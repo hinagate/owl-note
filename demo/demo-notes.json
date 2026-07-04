@@ -96,6 +96,22 @@
       "attachments": [],
       "version": 1,
       "hash": "26e413f90f6a9"
+    },
+    {
+      "id": "apple-crisp-recipe",
+      "title": "Apple crisp",
+      "body": "# Apple crisp\n\nThe fall dessert that never fails.\n\n- 6 apples — Honeycrisp or Granny Smith, skin on, core removed, cut into thick slices\n- Toss the slices with lemon juice so they keep their color\n- Topping: oats, brown sugar, cold butter, a pinch of salt\n- Bake at 190°C for 40 minutes, until the top is crisp and the juice bubbles at the edges\n\nServe warm — fresh out of the oven with vanilla ice cream is the whole point.",
+      "attachments": [],
+      "version": 1,
+      "hash": "18a383ffae800e"
+    },
+    {
+      "id": "apple-laptop-setup",
+      "title": "New Apple laptop setup",
+      "body": "# New Apple laptop setup\n\nChecklist from unboxing the new MacBook.\n\n- The M4 chip has 10 cores — plenty. The battery juice easily lasts a full day.\n- Fresh install: skip migration, sign in, pull dotfiles from the repo\n- Put a matte skin on the lid and a clear case underneath\n- The display is incredibly crisp — set scaling to More Space\n- Battery care: do not keep it plugged in at 100% all day; set the charge limit to 80%\n\nTransfer photos later over AirDrop.",
+      "attachments": [],
+      "version": 1,
+      "hash": "1e09909955c86"
     }
   ]
 }
