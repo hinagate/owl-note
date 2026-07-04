@@ -1,7 +1,7 @@
-{
+﻿{
   "manifest_version": 3,
   "name": "OWL-Note",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Free Markdown notes with code & math in browser bookmarks. Syncs via Google/Microsoft. Private, no subscriptions or lock-in.",
   "permissions": ["bookmarks", "storage", "unlimitedStorage", "contextMenus", "identity"],
   "content_security_policy": { "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'" },
