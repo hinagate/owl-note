@@ -4,8 +4,7 @@
 // a live demo of the Markdown/code/math renderer and a pointer to Ask Owl.
 //
 // This module is the SINGLE source for the note's id: app.js creates the note with it,
-// and the E17 sample-offer gate reuses it to keep offering samples while the corpus holds
-// only this note (see maybeOfferSamples). No string is duplicated across the two features.
+// (a fixed id so the first-run logic can recognize its own note).
 export const WELCOME_NOTE_ID = 'welcome-owl-note';
 export const WELCOME_NOTE_TITLE = 'Welcome to OWL-Note 🦉';
 
@@ -41,7 +40,7 @@ export const WELCOME_NOTE_BODY = [
   '',
   'Look for the **🦉 button** in the toolbar. Ask Owl answers questions in plain language using **only your own notes**, and it runs entirely on your device, so nothing you write ever leaves it.',
   '',
-  "Want something to try it on right away? While you're starting empty, OWL-Note offers to **load a handful of sample notes** — instant material to ask Owl about.",
+  'Try it right now: open **🦉 Ask Owl** and click **Summarize** — it will summarize this very note, entirely on your device.',
   '',
   '---',
   '',

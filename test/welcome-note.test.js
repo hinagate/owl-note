@@ -1,30 +1,24 @@
 // [Task E18] Integration tests for the first-run Welcome note. Boots the real app over
-// fake-chrome (same harness as sample-offer / review-ask) and drives the onboarding note
+// fake-chrome (same harness as review-ask) and drives the onboarding note
 // that only a brand-new, never-welcomed install creates:
 //   - fresh boot (empty + owl:welcomed unset): ONE ordinary Welcome note is created via
 //     the real save path, the editor LANDS on it, and the flag latches;
 //   - deleting it never resurrects it (the flag is checked BEFORE emptiness);
 //   - an existing user (any notes) silently latches the flag and gets NO surprise note;
 //   - the note is ordinary: indexed by Ask and deletable through the normal flow;
-//   - the E17 sample offer still appears while only the welcome note exists, and loading
-//     samples works alongside it;
 //   - a creation failure (save path throws) never breaks boot or leaks a rejection.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { installFakeChrome } from './helpers/fake-chrome.js';
 import { contentHash } from '../src/lib/note.js';
 import { WELCOME_NOTE_ID, WELCOME_NOTE_TITLE } from '../src/app/welcome-note.js';
 import { ensureTrash, trashNotes } from '../src/lib/trash.js';
 
-const demoOnDisk = JSON.parse(readFileSync(resolve(process.cwd(), 'demo/demo-notes.json'), 'utf8'));
-
 let app, bm, encode;
 
 beforeEach(async () => {
   installFakeChrome();
-  // Mount an #ask-panel: like the sample offer, the welcome note is a full-app onboarding
-  // experience (it points at Ask Owl + the sample offer), so it stays inert in bare
+  // Mount an #ask-panel: the welcome note is a full-app onboarding
+  // experience (it points at Ask Owl), so it stays inert in bare
   // harnesses without one — exactly as app.html always mounts it in production.
   document.body.innerHTML =
     '<div id="toolbar"></div><aside id="sidebar"></aside><section id="note-list"></section>'
@@ -121,32 +115,6 @@ describe('welcome note — existing users', () => {
     expect(await hasWelcome(root)).toBe(false);       // no surprise note
     expect(await flagSet()).toBe(true);               // silently latched
     // A later delete-everything therefore can't resurrect a welcome note.
-  });
-});
-
-describe('welcome note — coexistence with the E17 sample offer', () => {
-  it('the sample offer still appears while only the welcome note exists', async () => {
-    const root = await bm.ensureRoot();
-    await app.initUI(root);
-    await waitFor(() => document.getElementById('sample-banner'));
-
-    expect(document.getElementById('sample-banner')).not.toBeNull();
-    expect((await app.loadNotes(root)).filter((n) => !n.draft)).toHaveLength(1); // just the welcome note
-  });
-
-  it('loading samples works alongside the welcome note (both land, both indexed)', async () => {
-    const root = await bm.ensureRoot();
-    await app.initUI(root);
-    await waitFor(() => document.getElementById('sample-banner'));
-    document.getElementById('sample-banner').querySelector('.sample-load').click();
-    await waitFor(async () => {
-      const id = (await bm.listNotebooks(root)).find((nb) => nb.title === 'Samples')?.id;
-      return id && (await bm.listNotes(id)).length === demoOnDisk.notes.length;
-    });
-
-    await app.rebuildAskIndex();
-    expect(app.getAskIndex().stats().notes).toBe(demoOnDisk.notes.length + 1); // welcome + demo
-    expect(await hasWelcome(root)).toBe(true); // welcome note survived the sample load
   });
 });
 

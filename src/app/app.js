@@ -38,10 +38,6 @@ import { builtinAskActions } from './ask-actions.js';
 // module both creates the note (below) and gates the E17 sample offer's "only-welcome"
 // case on WELCOME_NOTE_ID, so no id string is duplicated across the two features.
 import { WELCOME_NOTE_ID, WELCOME_NOTE_TITLE, WELCOME_NOTE_BODY } from './welcome-note.js';
-// [Task E17] The bundled demo corpus (M6), the SINGLE source for the first-run
-// sample-notes offer. esbuild inlines this JSON natively at build time (and Vite does
-// the same under vitest), so there is no hand-copied duplicate to drift.
-import demoNotes from '../../demo/demo-notes.json';
 
 export { saveNote, MAX_URL_BYTES, WARN_URL_BYTES }; // moved to ../lib/save-note.js
 
@@ -201,9 +197,6 @@ export function resetUI() {
   // initUI) and clear any lingering banner so each test boot starts clean.
   reviewAsked = false;
   if (typeof document !== 'undefined') document.getElementById('review-banner')?.remove();
-  // [Task E17] Clear any lingering first-run sample offer so each test boot starts clean
-  // (the persisted owl:sampleOffered flag is re-read from storage on the next initUI).
-  if (typeof document !== 'undefined') document.getElementById('sample-banner')?.remove();
 }
 
 // Ask-Your-Notes lexical index — ONE module-level instance for the app's lifetime.
@@ -625,126 +618,6 @@ function maybeReviewOnAskState(state) {
   if (state && state.kind === 'answered' && state.usedModel === true) showReviewBanner();
 }
 
-// --- [Task E17] First-run sample-notes offer [activation] ------------------------
-// A brand-new install is empty, and an empty app can't demo Ask Owl. At the end of
-// initUI we offer — ONCE — to seed the bundled demo corpus so the first session
-// already has notes to ask about. Shown ONLY when the corpus is empty AND the user
-// has never chosen; existing users (any notes) never see it. Either choice latches
-// owl:sampleOffered permanently — merely showing the card does NOT (a closed tab is
-// re-offered while the app is still empty, which is the intent).
-const SAMPLE_OFFERED_KEY = 'owl:sampleOffered'; // once-a-choice-is-made latch (persisted)
-
-// Persist the once-a-choice latch. Fire-and-forget + .catch — a write failure must
-// never break the click handler or leak an unhandled rejection.
-function persistSampleOffered() {
-  try { chrome.storage.local.set({ [SAMPLE_OFFERED_KEY]: true }).catch(() => {}); } catch { /* best-effort */ }
-}
-
-function dismissSampleOffer() {
-  document.getElementById('sample-banner')?.remove();
-}
-
-// Seed the bundled demo corpus into a fresh "Samples" notebook using the SAME import
-// machinery every other import uses (buildIdMap → importOne → saveNote), so ids,
-// content hashes, and index/vector wiring stay identical to a hand-imported note —
-// nothing downstream special-cases these. Then reveal the notebook, rebuild the
-// lexical index deterministically, and toast the value moment.
-async function loadSampleNotes() {
-  const root = ui.rootId;
-  if (!root) return;
-  const samplesId = await bm.createNotebook(root, 'Samples'); // created on accept, so they're easy to bulk-delete later
-  const ctx = { root, idMap: await buildIdMap(root), nbCache: new Map(), tally: { created: 0, updated: 0, skipped: 0, tooLarge: 0 }, touched: new Set() };
-  for (const n of demoNotes.notes) {
-    if (!n || typeof n.id !== 'string') continue;
-    const prepared = await prepareImport(n.body || '', n.attachments || []);
-    await importOne({ id: n.id, title: n.title || extractTitle(prepared.body), body: prepared.body, attachments: prepared.attachments }, samplesId, ctx);
-  }
-  ui.activeFolder = samplesId; // land the user in the Samples notebook so the notes are right there
-  await refreshPanes();
-  await rebuildAskIndex(); // make the lexical index see the seeded notes deterministically (bookmark events also rebuild it)
-  toast(`${demoNotes.notes.length} sample notes loaded — try Ask 🦉`);
-}
-
-// Build the offer card: the E16 slim-banner pattern, ABOVE the transient #toast.
-// textContent only. Gated on the Ask drawer being mounted (#ask-panel): the offer
-// exists purely to make Ask Owl demoable, so a host without the Ask UI has nothing
-// to demo — and this also keeps the empty-corpus app-integration harness (which
-// mounts no #ask-panel) correctly inert without weakening the real feature (app.html
-// always mounts #ask-panel).
-function showSampleOffer() {
-  if (typeof document === 'undefined' || !document.body) return; // no DOM (non-UI import)
-  if (!document.getElementById('ask-panel')) return;             // no Ask drawer → nothing to demo
-  if (document.getElementById('sample-banner')) return;          // already up — don't stack
-
-  const card = document.createElement('div');
-  card.id = 'sample-banner';
-  card.setAttribute('role', 'complementary');
-  card.setAttribute('aria-label', 'Load sample notes');
-
-  const msg = document.createElement('span');
-  msg.className = 'sample-msg';
-  msg.textContent = 'New here? Load a dozen sample notes to try Ask Owl 🦉';
-
-  // [Load samples]: latch first (both choices latch permanently), dismiss, then seed
-  // the corpus. The seed is fire-and-forget + .catch so a failure can't leak an
-  // unhandled rejection; the flag is already set so we won't nag again regardless.
-  const load = document.createElement('button');
-  load.type = 'button';
-  load.className = 'sample-load';
-  load.textContent = 'Load samples';
-  load.addEventListener('click', () => {
-    persistSampleOffered();
-    dismissSampleOffer();
-    loadSampleNotes().catch((e) => { console.warn('sample load failed', e); toast('Could not load samples', true); });
-  });
-
-  // [Start empty]: latch + dismiss, create nothing.
-  const skip = document.createElement('button');
-  skip.type = 'button';
-  skip.className = 'sample-skip';
-  skip.textContent = 'Start empty';
-  skip.addEventListener('click', () => { persistSampleOffered(); dismissSampleOffer(); });
-
-  const actions = document.createElement('div');
-  actions.className = 'sample-actions';
-  actions.append(load, skip);
-
-  card.append(msg, actions);
-  document.body.append(card);
-}
-
-// The initUI trigger: read the flag FIRST (cheap) so any user who already chose pays
-// nothing beyond one storage read. Fully guarded — it must never throw into boot; when
-// in doubt it declines to nag.
-async function maybeOfferSamples() {
-  if (typeof document === 'undefined' || !document.getElementById('ask-panel')) return;
-  let offered = false;
-  try { offered = !!(await chrome.storage.local.get(SAMPLE_OFFERED_KEY))[SAMPLE_OFFERED_KEY]; }
-  catch { return; } // storage unreadable — err on the side of NOT nagging
-  if (offered) return; // already made a choice once — never re-offer
-  // Emptiness probe. At this point in initUI activeFolder is still rootId, so the note
-  // list refreshPanes just built (ui.notes) already IS the whole corpus — reuse it
-  // instead of decoding the bookmark tree a THIRD time (existing users never latch the
-  // flag, so a direct loadNotes here would re-decode on every boot forever). "Empty" =
-  // no notes AND no local-only backups, exactly what loadNotes(rootId) reports, since
-  // ui.notes for the root folder is loadNotes(rootId) ordered. Guarded fallback to a
-  // direct read in case that invariant ever changes.
-  // [Task E18] Widened gate: offer when the corpus is empty OR holds ONLY the first-run
-  // Welcome note. The Welcome note (created earlier in this same initUI) would otherwise
-  // suppress the offer forever, but a lone welcome note is still a "nothing of your own to
-  // ask about yet" state — so the demo offer should still show. WELCOME_NOTE_ID is the
-  // single source shared with welcome-note.js (no string duplication).
-  let showable;
-  try {
-    const notes = ui.activeFolder === ui.rootId
-      ? (ui.notes || []).filter((n) => !n.draft)
-      : await loadNotes(ui.rootId);
-    showable = notes.length === 0
-      || (notes.length === 1 && notes[0].id === WELCOME_NOTE_ID);
-  } catch { return; } // can't confirm the corpus state — don't offer
-  if (showable) showSampleOffer();
-}
-
 // --- [Task E18] First-run Welcome note [onboarding] ------------------------------
 // A brand-new install lands on a blank editor because the open-latest-note boot flow has
 // no note to open. Fix: on the FIRST run (empty corpus + owl:welcomed unset) create ONE
@@ -761,10 +634,10 @@ export function __setWelcomeSaveForTests(fn) { welcomeSaveImpl = typeof fn === '
 
 // Create the first-run Welcome note when (and only when) this install has never been
 // welcomed AND the corpus is empty. Runs inside initUI — AFTER refreshPanes (so the
-// emptiness probe can reuse ui.notes, the same source the sample offer uses) and BEFORE
+// emptiness probe can reuse ui.notes) and BEFORE
 // the open-latest-note flow (so the editor lands on the new note). Gated on the Ask drawer
-// being mounted (#ask-panel) for the same reason the sample offer is: the Welcome note is
-// a full-app onboarding experience (it points at Ask Owl and the sample offer), so it
+// being mounted (#ask-panel): the Welcome note is
+// a full-app onboarding experience (it points at Ask Owl), so it
 // stays inert in a bare harness/embedding without one — and app.html always mounts it.
 // Fully guarded: it must never throw into boot.
 async function maybeCreateWelcomeNote() {
@@ -773,7 +646,7 @@ async function maybeCreateWelcomeNote() {
   try { welcomed = !!(await chrome.storage.local.get(WELCOMED_KEY))[WELCOMED_KEY]; }
   catch { return; } // storage unreadable — don't risk a duplicate; retried next boot
   if (welcomed) return; // first run already handled — never recreate (survives a delete)
-  // Emptiness probe — the SAME source the sample offer uses. At this point activeFolder is
+  // Emptiness probe. At this point activeFolder is
   // still rootId, so ui.notes IS the whole corpus; guarded fallback to a direct read.
   let empty;
   try {
@@ -843,10 +716,6 @@ export async function initUI(rootId) {
   // maybeCatchUpSemantic on the persisted flag, so a never-opted-in user does nothing
   // semantic at boot. ui.semanticReady lets tests await it deterministically.
   ui.semanticReady = maybeCatchUpSemantic().catch((e) => { console.warn('semantic boot catch-up failed:', e); });
-  // [Task E17] First-run activation: offer the bundled demo corpus on a brand-new,
-  // empty, never-offered install so Ask Owl works in session one. Awaited (it is cheap
-  // and self-gating) and fully guarded so it can never break boot.
-  await maybeOfferSamples();
 }
 
 export async function loadNotes(folderId) {
