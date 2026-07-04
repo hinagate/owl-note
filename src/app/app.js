@@ -871,7 +871,12 @@ async function liveRefreshNoteList() {
   try {
     do {
       liveRefreshQueued = false;
-      await refreshNoteList();
+      // .catch: a mid-mutation refresh can fail (a folder deleted by sync between the
+      // event and the read — or, in tests, a stale pre-reset run). It must neither
+      // become an unhandled rejection NOR die while holding the liveRefreshing lock:
+      // a queued NEWER refresh still drains on the next pass, which is what actually
+      // recovers the list. Same discipline as the index rebuild below.
+      await refreshNoteList().catch((e) => console.warn('live refresh failed', e));
       // Rebuild the ask index on the SAME coalesced cycle as the note-list refresh:
       // a burst of external chrome.bookmarks events (Drive sync, another tab) collapses
       // into ONE rebuild per cycle via the do/while queue below — never one per event.
