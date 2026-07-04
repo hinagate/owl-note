@@ -1473,21 +1473,34 @@ export async function importFiles(files, onProgress) {
 }
 
 async function doImportFiles(files) {
+  // This runs fire-and-forget from the toolbar's file input. It must NEVER fail
+  // silently: a throw anywhere in the import used to escape uncaught — the progress
+  // bar vanished and the user saw no toast and no refresh, indistinguishable from
+  // "nothing happened" (user-reported). Whatever happens: the user gets feedback,
+  // and the panes re-render (a failed import may still have partially landed).
   let t;
   try { t = await importFiles(files, renderImportProgress); }
+  catch (e) {
+    console.warn('import failed', e);
+    toast('Import failed — nothing (or only part) was imported', true);
+  }
   finally { renderImportProgress(null); } // the summary toast (or the error) takes over from here
-  const parts = [`${t.created} new`, `${t.updated} updated`];
-  if (t.tooLarge) parts.push(`${t.tooLarge} local-only (not synced — use Export → Import to copy to other devices)`);
-  if (t.skipped) parts.push(`${t.skipped} skipped`);
-  toast(`Imported: ${parts.join(', ')}`, t.tooLarge > 0 || t.skipped > 0);
-  await refreshPanes(); // updates ui.notebooks with the newly created folders
-  // Reveal what was imported: expand the folders it landed in (and their ancestors) and show
-  // them, so the user doesn't have to hunt for or expand the tree. Select the single imported
-  // folder if there's exactly one, otherwise fall back to root ("All notes").
-  const touched = (t.touched || []).filter((f) => f && f !== ui.rootId);
-  for (const f of touched) expandToReveal(f);
-  ui.activeFolder = touched.length === 1 ? touched[0] : ui.rootId;
-  await refreshPanes();
+  if (t) {
+    const parts = [`${t.created} new`, `${t.updated} updated`];
+    if (t.tooLarge) parts.push(`${t.tooLarge} local-only (not synced — use Export → Import to copy to other devices)`);
+    if (t.skipped) parts.push(`${t.skipped} skipped`);
+    toast(`Imported: ${parts.join(', ')}`, t.tooLarge > 0 || t.skipped > 0);
+  }
+  try {
+    await refreshPanes(); // updates ui.notebooks with the newly created folders
+    // Reveal what was imported: expand the folders it landed in (and their ancestors) and show
+    // them, so the user doesn't have to hunt for or expand the tree. Select the single imported
+    // folder if there's exactly one, otherwise fall back to root ("All notes").
+    const touched = ((t && t.touched) || []).filter((f) => f && f !== ui.rootId);
+    for (const f of touched) expandToReveal(f);
+    ui.activeFolder = touched.length === 1 ? touched[0] : ui.rootId;
+    await refreshPanes();
+  } catch (e) { console.warn('post-import refresh failed', e); }
 }
 
 // Boot is implemented incrementally; guarded so tests importing saveNote don't run UI.
