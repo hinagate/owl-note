@@ -145,6 +145,7 @@ export function renderEditor(
   preview.className = 'preview';
 
   split.append(editPane, preview);
+  panes.initEditSplitter(split); // draggable edit/preview divider — restores the saved ratio
   split.classList.toggle('edit-collapsed', panes.isEditCollapsed());
 
   // Preview-only is a reading mode: the edit pane (incl. the title field) is hidden by CSS

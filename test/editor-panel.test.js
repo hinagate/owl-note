@@ -9,6 +9,7 @@ vi.mock('../src/app/panes.js', () => ({
   isEditCollapsed: vi.fn(() => mockPanesState.editCollapsed),
   toggleNoteList: vi.fn(() => { mockPanesState.noteListHidden = !mockPanesState.noteListHidden; }),
   toggleEditPane: vi.fn(() => { mockPanesState.editCollapsed = !mockPanesState.editCollapsed; }),
+  initEditSplitter: vi.fn(),
 }));
 
 import { renderEditor } from '../src/app/editor.js';

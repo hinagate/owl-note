@@ -209,7 +209,7 @@ body.resizing { user-select: none; cursor: col-resize; }
 .suggest-title:disabled { cursor: default; }
 .suggest-title.busy { opacity: 0.6; animation: suggest-pulse 1s ease-in-out infinite; }
 @keyframes suggest-pulse { 50% { opacity: 0.25; } }
-.editor-split { display: grid; grid-template-columns: 1fr 1fr; height: 100%; overflow: hidden; }
+.editor-split { display: grid; grid-template-columns: 0.5fr 6px 0.5fr; height: 100%; overflow: hidden; }
 /* Left column: the title field stacked above the body textarea; holds the divider to the preview. */
 .edit-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--border); position: relative; }
 /* Body editor: a highlight backdrop sits behind a transparent textarea so attachment
@@ -229,6 +229,7 @@ body.resizing { user-select: none; cursor: col-resize; }
    layout is immune to that. */
 .editor-split.edit-collapsed { display: block; }
 .editor-split.edit-collapsed .edit-pane { display: none; }
+.editor-split.edit-collapsed .splitter-edit { display: none; }
 .editor-split.edit-collapsed .preview { width: 100%; height: 100%; }
 .preview { padding: 20px 28px; overflow: auto; }
 /* Comfortable, constrained reading column for the rendered note (Evernote-like). */

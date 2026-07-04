@@ -1,6 +1,6 @@
 // src/app/panes.js — collapsible/resizable pane layout (device-local).
-export const DEFAULTS = { sidebarW: 220, noteListW: 300, noteListHidden: false, editCollapsed: false };
-export const LIMITS = { sidebarMin: 120, sidebarMax: 360, noteListMin: 180, noteListMax: 520, editorMin: 320 };
+export const DEFAULTS = { sidebarW: 220, noteListW: 300, noteListHidden: false, editCollapsed: false, editSplit: 0.5 };
+export const LIMITS = { sidebarMin: 120, sidebarMax: 360, noteListMin: 180, noteListMax: 520, editorMin: 320, editSplitMin: 0.15, editSplitMax: 0.85 };
 
 export function clampWidth(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -122,6 +122,49 @@ function makeSplitter(which, cls) {
   el.className = `splitter ${cls}`;
   el.addEventListener('pointerdown', (e) => startDrag(e, which, el));
   return el;
+}
+
+// grid-template-columns for the editor/preview split. The ratio is stored as the edit
+// pane's fraction; rounded so float noise never lands in the style attribute.
+export function editSplitColumns(f) {
+  const left = Math.round(f * 1000) / 1000;
+  const right = Math.round((1 - f) * 1000) / 1000;
+  return `${left}fr 6px ${right}fr`;
+}
+
+// Make the editor/preview divider draggable. Called by the editor on every render
+// (the editor DOM is rebuilt per note), so it re-applies the persisted ratio and is
+// idempotent per split element. The ratio lives in the same device-local layout blob
+// as the pane widths.
+export function initEditSplitter(splitEl) {
+  if (!splitEl || splitEl.querySelector('.splitter-edit')) return;
+  const editPane = splitEl.querySelector('.edit-pane');
+  if (!editPane) return;
+  const el = document.createElement('div');
+  el.className = 'splitter splitter-edit';
+  el.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startF = layout.editSplit;
+    el.setPointerCapture?.(e.pointerId);
+    document.body.classList.add('resizing');
+    const move = (ev) => {
+      const width = splitEl.clientWidth || 1200; // jsdom has no layout -> fallback
+      layout.editSplit = clampWidth(startF + (ev.clientX - startX) / width, LIMITS.editSplitMin, LIMITS.editSplitMax);
+      splitEl.style.gridTemplateColumns = editSplitColumns(layout.editSplit);
+    };
+    const up = (ev) => {
+      el.releasePointerCapture?.(ev.pointerId);
+      document.body.classList.remove('resizing');
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      saveLayout();
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+  });
+  editPane.after(el);
+  splitEl.style.gridTemplateColumns = editSplitColumns(layout.editSplit);
 }
 
 export async function initPanes() {
