@@ -14,13 +14,13 @@ import { unzip } from '../lib/unzip.js';
 import { parseMarkdownNote } from '../lib/markdown-import.js';
 import { parseEnexNotes } from '../lib/enex-import.js';
 import { downscaleImagesInBody } from '../lib/image-downscale.js';
-import { extractImages, inlineImages } from '../lib/note-images.js';
+import { extractImages, inlineImagesAsync } from '../lib/note-images.js';
 import { docxToMarkdown } from '../lib/docx-import.js';
 import { saveNote, urlByteLength, MAX_URL_BYTES, WARN_URL_BYTES } from '../lib/save-note.js';
 import { ensureTrash, trashNotes, restoreNotes, deleteForever } from '../lib/trash.js';
 import { rangeHandles } from '../lib/list-selection.js';
 import { isSelfOrDescendant } from '../lib/notebook-tree.js';
-import { offloadShape } from '../lib/attachment-store.js';
+import { offloadShape, getBytes } from '../lib/attachment-store.js';
 import * as noteDrive from '../lib/note-drive.js';
 import { isEnabled, enable, disable } from '../lib/drive-sync.js';
 import { createAskIndex } from '../lib/ask-index.js';
@@ -1292,7 +1292,7 @@ async function doExport() {
 
 // Gather every saved note from the bookmark tree, decode it, and build the
 // per-note markdown file list. Pure of DOM/download concerns so it is testable.
-export async function collectExportEntries(root) {
+export async function collectExportEntries(root, fetchDriveBody = noteDrive.loadNoteBody) {
   const trashId = await ensureTrash(root);
   const folders = (await bm.listNotebooks(root)).filter((f) => f.id !== trashId);
   const raw = (await bm.allNotes(root)).filter((r) => r.folderId !== trashId);
@@ -1301,11 +1301,23 @@ export async function collectExportEntries(root) {
   const seen = new Set();
   for (const r of raw) {
     try {
-      const n = await decode(r.payload);
-      notes.push({ id: n.id, title: n.title, body: inlineImages(n.body, n.attachments), folderId: r.folderId });
+      let n = await decode(r.payload);
+      // A Drive-offloaded note's bookmark is a body-less metadata stub. Hydrate it —
+      // local mirror first (origin device, no fetch), else the Drive body — or the
+      // export writes an empty .md that a later import silently skips, losing the
+      // note across an export → import round-trip. If neither source is reachable,
+      // the throw lands in the catch below: skipped, never exported empty.
+      if (n && n._driveBody) {
+        const backup = await mirror.getBackup(n.id);
+        if (backup && backup.current && backup.current.body !== undefined && backup.current.hash === n.hash) n = backup.current;
+        else n = await decode(await fetchDriveBody(n._driveBody));
+      }
+      // Async inlining: offloaded attachments (driveFileId, no dataUri) resolve via the
+      // local byte cache or Drive; unresolvable refs stay as-is instead of corrupting.
+      notes.push({ id: n.id, title: n.title, body: await inlineImagesAsync(n.body, n.attachments, getBytes), folderId: r.folderId });
       if (n.id) seen.add(n.id);
     } catch {
-      skipped += 1; // unreadable payload — leave it out rather than abort the export
+      skipped += 1; // unreadable payload or unreachable Drive body — leave it out rather than abort the export
     }
   }
   // Device-local notes (e.g. image notes too large to be bookmarks) have no
@@ -1313,7 +1325,7 @@ export async function collectExportEntries(root) {
   // .md stays self-contained.
   for (const ln of await mirror.allLocalOnly()) {
     if (ln && ln.id && !seen.has(ln.id) && ln.folderId !== trashId) {
-      notes.push({ id: ln.id, title: ln.title, body: inlineImages(ln.body, ln.attachments), folderId: ln.folderId });
+      notes.push({ id: ln.id, title: ln.title, body: await inlineImagesAsync(ln.body, ln.attachments, getBytes), folderId: ln.folderId });
       seen.add(ln.id);
     }
   }
