@@ -377,13 +377,12 @@ function removeSemantic(id) {
 
 // --- [Task E16] Gentle one-time review ask [growth flywheel] ---------------------
 // One respectful, policy-safe prompt shown at a VALUE moment, at most ONCE per install
-// EVER. Two triggers race — whichever comes first wins: the 20th successful save, or
-// the first Ask answer that actually ran the on-device model. Any dismissal (Rate it /
-// No thanks / ✕) — or the mere act of showing it — persists owl:reviewAsked, so it can
-// never reappear. It is a SEPARATE persistent card, never the transient #toast.
+// EVER: the 100th successful save. Any dismissal (Rate it / No thanks / ✕) — or the
+// mere act of showing it — persists owl:reviewAsked, so it can never reappear. It is a
+// SEPARATE persistent card, never the transient #toast.
 const REVIEW_ASKED_KEY = 'owl:reviewAsked';    // once-ever latch (persisted)
 const REVIEW_SAVE_COUNT_KEY = 'owl:saveCount';  // successful-save tally toward the threshold
-const REVIEW_SAVE_THRESHOLD = 20;               // trigger (a): the 20th save
+const REVIEW_SAVE_THRESHOLD = 100;              // the 100th save is the value moment
 // The Chrome Web Store review page for OWL-Note. (A future Edge Add-ons store would
 // need its own URL + a store-detect — deliberately out of scope here.)
 const REVIEW_STORE_URL = 'https://chromewebstore.google.com/detail/hjkbpgkmiaeojfhkpnhmokgjipenhcfl/reviews';
@@ -420,9 +419,7 @@ async function ensureAskUI() {
       index: getAskIndex(),
       fusion: createFusion(getAskIndex(), { vector: vectorProxy, embedQuery }),
       registry: askRegistry,
-      // Update the panel, then let the review ask observe the state — the FIRST answer
-      // that used the on-device model (usedModel:true) is trigger (b). [Task E16]
-      onState: (s) => { askPanel?.update(s); maybeReviewOnAskState(s); },
+      onState: (s) => { askPanel?.update(s); },
     });
   }
   if (!askPanel) {
@@ -597,10 +594,10 @@ function showReviewBanner() {
   document.body.append(card);
 }
 
-// Trigger (a): count a successful save. Cheap guard first — once the ask has been
-// shown/dismissed we stop counting, so there's no unbounded storage growth. The whole
-// body is try/caught so, called fire-and-forget, it can never break a save or leak an
-// unhandled rejection. Both manual and auto saves count — either is a real value moment.
+// Count a successful save toward the review ask. Cheap guard first — once the ask has
+// been shown/dismissed we stop counting, so there's no unbounded storage growth. The
+// whole body is try/caught so, called fire-and-forget, it can never break a save or leak
+// an unhandled rejection. Both manual and auto saves count — either is a real value moment.
 async function countSaveTowardReview() {
   if (reviewAsked) return; // already asked once, ever
   try {
@@ -608,14 +605,6 @@ async function countSaveTowardReview() {
     await chrome.storage.local.set({ [REVIEW_SAVE_COUNT_KEY]: n });
     if (n >= REVIEW_SAVE_THRESHOLD) showReviewBanner();
   } catch { /* best-effort — never block a save */ }
-}
-
-// Trigger (b): the FIRST Ask answer that actually ran the on-device model — the moment
-// the feature's value lands. Retrieval-only snippets and the canned no-match (both
-// usedModel:false) do NOT count. Called from the controller's onState.
-function maybeReviewOnAskState(state) {
-  if (reviewAsked) return;
-  if (state && state.kind === 'answered' && state.usedModel === true) showReviewBanner();
 }
 
 // --- [Task E18] First-run Welcome note [onboarding] ------------------------------

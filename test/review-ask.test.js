@@ -1,8 +1,9 @@
 // [Task E16] Integration tests for the gentle, one-time, policy-safe in-app review
 // ask. Boots the real app over fake-chrome (same harness as app-integration /
-// ask-index-lifecycle) and drives the two VALUE-moment triggers:
-//   (a) the 20th successful save (counter owl:saveCount), and
-//   (b) the first Ask answer that actually ran the on-device model (usedModel:true).
+// ask-index-lifecycle) and drives the single VALUE-moment trigger:
+//   the 100th successful save (counter owl:saveCount).
+// Also guards that an Ask answer no longer triggers the ask — the former second
+// trigger (first model-backed Ask) was deliberately removed.
 // Proves: exact-threshold appearance, the flag set on show, both dismissal buttons,
 // once-EVER persistence across a reboot, and zero interference by default.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -11,6 +12,7 @@ import { installFakeLanguageModel } from './helpers/fake-language-model.js';
 import { contentHash } from '../src/lib/note.js';
 
 const STORE_URL = 'https://chromewebstore.google.com/detail/hjkbpgkmiaeojfhkpnhmokgjipenhcfl/reviews';
+const THRESHOLD = 100; // owl:saveCount at which the ask appears (mirrors REVIEW_SAVE_THRESHOLD)
 
 let app, bm, encode;
 
@@ -57,39 +59,39 @@ describe('review ask — save-threshold trigger', () => {
     expect(document.getElementById('review-banner')).toBeNull();
   });
 
-  it('counts saves and shows the banner exactly at the 20th save, latching owl:reviewAsked', async () => {
+  it('counts saves and shows the banner exactly at the 100th save, latching owl:reviewAsked', async () => {
     const root = await bm.ensureRoot();
-    await chrome.storage.local.set({ 'owl:saveCount': 19 }); // one below the threshold
+    await chrome.storage.local.set({ 'owl:saveCount': THRESHOLD - 1 }); // one below the threshold (99)
     await app.initUI(root);
-    expect(document.getElementById('review-banner')).toBeNull(); // 19 so far — not yet
+    expect(document.getElementById('review-banner')).toBeNull(); // 99 so far — not yet
 
-    saveNewNote({ title: 'Twenty', body: 'the twentieth note' });
+    saveNewNote({ title: 'Hundred', body: 'the hundredth note' });
     await settle();
 
-    expect((await chrome.storage.local.get('owl:saveCount'))['owl:saveCount']).toBe(20); // counter incremented
+    expect((await chrome.storage.local.get('owl:saveCount'))['owl:saveCount']).toBe(THRESHOLD); // counter incremented
     const banner = document.getElementById('review-banner');
-    expect(banner).not.toBeNull(); // shown EXACTLY at the 20th save
+    expect(banner).not.toBeNull(); // shown EXACTLY at the 100th save
     expect(banner.textContent).toContain('rating helps');
     expect(banner.querySelector('.review-rate')).not.toBeNull();
     expect(banner.querySelector('.review-dismiss')).not.toBeNull();
     expect((await chrome.storage.local.get('owl:reviewAsked'))['owl:reviewAsked']).toBe(true); // flag set on show
   });
 
-  it('does not show below the threshold, but still increments the counter', async () => {
+  it('does not show one save below the threshold, but still increments the counter', async () => {
     const root = await bm.ensureRoot();
-    await chrome.storage.local.set({ 'owl:saveCount': 5 });
+    await chrome.storage.local.set({ 'owl:saveCount': THRESHOLD - 2 }); // 98 -> 99 after one save, still below 100
     await app.initUI(root);
-    saveNewNote({ title: 'Six', body: 'sixth' });
+    saveNewNote({ title: 'NinetyNine', body: 'ninety-ninth' });
     await settle();
-    expect((await chrome.storage.local.get('owl:saveCount'))['owl:saveCount']).toBe(6);
+    expect((await chrome.storage.local.get('owl:saveCount'))['owl:saveCount']).toBe(THRESHOLD - 1); // 99
     expect(document.getElementById('review-banner')).toBeNull();
   });
 
   it('once dismissed, never reappears after a reboot even when the threshold is re-crossed', async () => {
     const root = await bm.ensureRoot();
-    await chrome.storage.local.set({ 'owl:saveCount': 19 });
+    await chrome.storage.local.set({ 'owl:saveCount': THRESHOLD - 1 }); // 99
     await app.initUI(root);
-    saveNewNote({ title: 'Twenty', body: 'x' });
+    saveNewNote({ title: 'Hundred', body: 'x' });
     await settle();
     const banner = document.getElementById('review-banner');
     expect(banner).not.toBeNull();
@@ -105,15 +107,15 @@ describe('review ask — save-threshold trigger', () => {
     await settle();
     expect(document.getElementById('review-banner')).toBeNull(); // stays gone forever
     // Counting stopped once flagged — no unbounded storage churn.
-    expect((await chrome.storage.local.get('owl:saveCount'))['owl:saveCount']).toBe(20);
+    expect((await chrome.storage.local.get('owl:saveCount'))['owl:saveCount']).toBe(THRESHOLD);
   });
 });
 
 describe('review ask — dismissal buttons', () => {
   async function showBanner(root) {
-    await chrome.storage.local.set({ 'owl:saveCount': 19 });
+    await chrome.storage.local.set({ 'owl:saveCount': THRESHOLD - 1 }); // 99
     await app.initUI(root);
-    saveNewNote({ title: 'Twenty', body: 'x' });
+    saveNewNote({ title: 'Hundred', body: 'x' });
     await settle();
     return document.getElementById('review-banner');
   }
@@ -146,14 +148,15 @@ describe('review ask — dismissal buttons', () => {
   });
 });
 
-// Trigger (b): the first Ask answer that actually ran the on-device model. Installs
-// the fake Prompt API global so the REAL registry/builtin provider answers, then
-// UNINSTALLS it (a leaked global would corrupt other suites).
-describe('review ask — Ask-success trigger', () => {
+// The former trigger (b) — the first model-backed Ask answer — was removed. This locks
+// that in: a real, model-backed answer must NOT surface the review ask. Installs the
+// fake Prompt API global so the REAL registry/builtin provider answers, then UNINSTALLS
+// it (a leaked global would corrupt other suites).
+describe('review ask — Ask success no longer triggers it', () => {
   let lm = null;
   afterEach(() => { if (lm) { lm.uninstall(); lm = null; } });
 
-  it('shows the banner on the first Ask answer that used the on-device model', async () => {
+  it('a model-backed Ask answer does NOT show the review banner', async () => {
     lm = installFakeLanguageModel({ availability: 'available' });
     const root = await bm.ensureRoot();
     await seedNote(root, { id: 'c1', title: 'Coffee', body: 'Tamp the grounds evenly before pulling a shot of espresso.' });
@@ -167,23 +170,7 @@ describe('review ask — Ask-success trigger', () => {
     await settle();
 
     expect(document.querySelector('#ask-panel .ask-answer')).not.toBeNull(); // the model answered (usedModel:true)
-    expect(document.getElementById('review-banner')).not.toBeNull(); // the value moment -> review ask
-    expect((await chrome.storage.local.get('owl:reviewAsked'))['owl:reviewAsked']).toBe(true);
-  });
-
-  it('a retrieval-only ask (no model) does NOT trigger the review ask', async () => {
-    // No fake LM installed -> provider unavailable -> snippets, usedModel never true.
-    const root = await bm.ensureRoot();
-    await seedNote(root, { id: 'c1', title: 'Coffee', body: 'Tamp the grounds evenly before pulling a shot of espresso.' });
-    await app.initUI(root);
-    await app.rebuildAskIndex();
-
-    [...document.querySelectorAll('#toolbar button')].find((b) => b.textContent === '🦉 Ask Owl').click();
-    document.querySelector('#ask-panel .ask-input').value = 'espresso';
-    document.querySelector('#ask-panel .ask-submit').click();
-    await settle();
-
-    expect(document.querySelector('#ask-panel .ask-note')).not.toBeNull(); // retrieval-only snippet
-    expect(document.getElementById('review-banner')).toBeNull(); // no model -> no value moment -> no ask
+    expect(document.getElementById('review-banner')).toBeNull(); // …but Ask no longer triggers the review ask
+    expect((await chrome.storage.local.get('owl:reviewAsked'))['owl:reviewAsked']).toBeFalsy(); // and the flag stays unset
   });
 });
