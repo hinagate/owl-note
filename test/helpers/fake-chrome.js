@@ -125,7 +125,12 @@ export function installFakeChrome(opts = {}) {
   };
 
   const store = new Map();
+  const onStorageChanged = makeHub(); // chrome.storage.onChanged (area === 'local')
+  // Real chrome isolates onChanged listener exceptions from the writer (and fires async);
+  // swallow here so a throwing listener can't reject the set/remove/clear promise.
+  const emitStorage = (changes) => { try { onStorageChanged.dispatch(changes, 'local'); } catch { /* isolate listener throws */ } };
   const storage = {
+    onChanged: onStorageChanged,
     local: {
       async get(keys) {
         if (keys == null) return Object.fromEntries(store);
@@ -134,18 +139,44 @@ export function installFakeChrome(opts = {}) {
         for (const k of list) if (store.has(k)) out[k] = store.get(k);
         return out;
       },
-      async set(obj) { for (const [k, v] of Object.entries(obj)) store.set(k, v); },
-      async remove(keys) { (Array.isArray(keys) ? keys : [keys]).forEach((k) => store.delete(k)); },
-      async clear() { store.clear(); },
+      async set(obj) {
+        const changes = {};
+        for (const [k, v] of Object.entries(obj)) {
+          const oldValue = store.get(k);
+          changes[k] = oldValue === undefined ? { newValue: v } : { oldValue, newValue: v };
+          store.set(k, v);
+        }
+        emitStorage(changes);
+      },
+      async remove(keys) {
+        const changes = {};
+        (Array.isArray(keys) ? keys : [keys]).forEach((k) => { if (store.has(k)) { changes[k] = { oldValue: store.get(k) }; store.delete(k); } });
+        if (Object.keys(changes).length) emitStorage(changes);
+      },
+      async clear() {
+        const changes = {};
+        for (const [k, v] of store) changes[k] = { oldValue: v };
+        store.clear();
+        if (Object.keys(changes).length) emitStorage(changes);
+      },
     },
   };
 
+  const extId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
   const chrome = {
-    runtime: { id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', onInstalled: makeHub() },
+    runtime: {
+      id: extId,
+      onInstalled: makeHub(),
+      getURL: (p) => `chrome-extension://${extId}/${p}`,
+      // MV3 permission-free way to enumerate the extension's own tabs; tests override
+      // this to simulate an already-open app tab. Default: no extension tabs open.
+      getContexts: async () => [],
+    },
     bookmarks,
     storage,
     extension: { isAllowedFileSchemeAccess: (cb) => cb(false) },
-    tabs: { create: async () => ({}) },
+    tabs: { create: async () => ({}), update: async () => ({}) },
+    windows: { update: async () => ({}) },
     action: { onClicked: makeHub(), setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {} },
     contextMenus: { create: () => {}, removeAll: () => {}, onClicked: makeHub() },
   };

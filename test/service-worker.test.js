@@ -43,4 +43,91 @@ describe('service worker handlers', () => {
     await sw.handleSaveSelection({ menuItemId: 'owl-save-selection', selectionText: '   ', pageUrl: 'https://e/' }, {});
     expect((await bm.allNotes(root)).length).toBe(0);
   });
+
+  it('writes a quick-capture signal carrying the saved note id so an open app tab can reveal it', async () => {
+    const root = await bm.ensureRoot();
+    await sw.handleSaveSelection(
+      { menuItemId: 'owl-save-selection', selectionText: 'capture me', pageUrl: 'https://e/' },
+      { title: 'E', url: 'https://e/' },
+    );
+    const saved = await decode((await bm.allNotes(root))[0].payload);
+    const sig = (await chrome.storage.local.get('owl:quickCapture'))['owl:quickCapture'];
+    expect(sig).toBeTruthy();
+    expect(sig.id).toBe(saved.id);       // the exact note just created
+    expect(typeof sig.at).toBe('number'); // timestamp so repeated captures always change the value
+  });
+
+  // Mock getContexts the way REAL chrome behaves: when a documentUrls filter is passed it
+  // exact-matches the full document URL (fragment included). So if the SW ever regressed to
+  // documentUrls:[app.html], a note-showing tab (app.html#hash) would be filtered out here —
+  // failing the #fragment test below. This locks in BOTH halves of the fix (drop the filter
+  // AND prefix-match), not just the match logic.
+  const fakeContexts = (list) => async (filter) => (filter && filter.documentUrls)
+    ? list.filter((c) => filter.documentUrls.includes(c.documentUrl))
+    : list;
+
+  it('focuses an already-open OWL-Note tab (permission-free) instead of opening a new one', async () => {
+    await bm.ensureRoot();
+    let seenFilter = null;
+    const base = chrome.runtime.getURL('app.html');
+    chrome.runtime.getContexts = async (filter) => {
+      seenFilter = filter;
+      return fakeContexts([{ contextType: 'TAB', tabId: 7, windowId: 3, documentUrl: base }])(filter);
+    };
+    const updated = []; const focused = []; const created = [];
+    chrome.tabs.update = async (id, o) => { updated.push([id, o]); };
+    chrome.tabs.create = async (o) => { created.push(o); return {}; };
+    chrome.windows.update = async (id, o) => { focused.push([id, o]); };
+
+    await sw.handleSaveSelection({ menuItemId: 'owl-save-selection', selectionText: 'hi', pageUrl: 'https://e/' }, {});
+
+    expect(seenFilter.contextTypes).toEqual(['TAB']);
+    expect(seenFilter.documentUrls).toBeUndefined();    // must NOT exact-filter (fragments would be missed)
+    expect(updated).toEqual([[7, { active: true }]]);   // activate the existing tab
+    expect(focused).toEqual([[3, { focused: true }]]);  // and bring its window forward
+    expect(created).toEqual([]);                         // did NOT spawn a duplicate tab
+  });
+
+  it('focuses a tab that is showing a note (app.html#<hash>), not a duplicate', async () => {
+    // The common case: the open app tab deep-links a note, so its URL carries a #fragment.
+    // With the realistic getContexts mock, an exact documentUrls:[app.html] filter would
+    // exclude this tab -> a new tab would be created -> this test fails. So it guards both
+    // the "no exact filter" and the "prefix-match" halves of the fix.
+    await bm.ensureRoot();
+    chrome.runtime.getContexts = fakeContexts([
+      { contextType: 'TAB', tabId: 12, windowId: 4, documentUrl: `${chrome.runtime.getURL('app.html')}#eyJpZCI6ImFiYyJ9` },
+    ]);
+    const updated = []; const created = [];
+    chrome.tabs.update = async (id, o) => { updated.push([id, o]); };
+    chrome.tabs.create = async (o) => { created.push(o); return {}; };
+
+    await sw.handleSaveSelection({ menuItemId: 'owl-save-selection', selectionText: 'hi', pageUrl: 'https://e/' }, {});
+
+    expect(updated).toEqual([[12, { active: true }]]); // focused the note-showing tab
+    expect(created).toEqual([]);                        // and did NOT open a duplicate
+  });
+
+  it('opens a new app tab when none is open', async () => {
+    await bm.ensureRoot();
+    chrome.runtime.getContexts = async () => [];
+    const updated = []; const created = [];
+    chrome.tabs.update = async (id, o) => { updated.push([id, o]); };
+    chrome.tabs.create = async (o) => { created.push(o); return {}; };
+
+    await sw.handleSaveSelection({ menuItemId: 'owl-save-selection', selectionText: 'hi', pageUrl: 'https://e/' }, {});
+
+    expect(created).toEqual([{ url: 'app.html' }]);
+    expect(updated).toEqual([]);
+  });
+
+  it('falls back to opening a tab if getContexts is unavailable/throws', async () => {
+    await bm.ensureRoot();
+    chrome.runtime.getContexts = async () => { throw new Error('unsupported'); };
+    const created = [];
+    chrome.tabs.create = async (o) => { created.push(o); return {}; };
+
+    await sw.handleSaveSelection({ menuItemId: 'owl-save-selection', selectionText: 'hi', pageUrl: 'https://e/' }, {});
+
+    expect(created).toEqual([{ url: 'app.html' }]);
+  });
 });

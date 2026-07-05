@@ -694,6 +694,7 @@ export async function initUI(rootId) {
     ui.hashWired = true;
   }
   wireLiveRefresh();
+  wireQuickCapture(); // reveal "Save selection" captures at the top of All notes
   // Build the ask index in the background — a FLOATING promise so indexing never
   // delays first paint. .catch keeps a build failure from surfacing as an unhandled
   // rejection (best-effort, like healNoteUrls above); ui.indexReady lets tests await it.
@@ -900,6 +901,42 @@ function wireLiveRefresh() {
   // and the cycle is coalesced). Safe even for a trash-move: rebuildAskIndex ->
   // loadNotes already filters out Trash, so it can't resurrect a trashed note.
   c.bookmarks.onMoved?.addListener(liveRefreshNoteList);
+}
+
+// Reveal a note just captured via the "Save selection to OWL-Note" context menu: jump to
+// All notes (root) so the new note — newest-first — sits on top, and refresh the list.
+// Deliberately does NOT open the note in the editor: renderCurrentEditor tears down the
+// live editor and CANCELS its pending auto-save (SAVE_DELAY), which could drop an
+// in-progress edit. refreshPanes only re-renders the list/sidebar, leaving the editor
+// (and its debounced save) untouched. The closed-tab case is handled by boot's
+// openLatestNote, which opens the top note on a fresh window (nothing to clobber).
+async function revealQuickCapture() {
+  if (!ui.rootId) return; // not booted (or reset between tests)
+  // A brand-new, not-yet-saved draft derives its CREATION folder from ui.activeFolder at
+  // (debounced) save time, so switching to root here would silently file it in All notes
+  // instead of the notebook the user is composing in. Don't disrupt an in-progress new
+  // note: leave the folder as-is — the existing live-refresh still surfaces the capture,
+  // and the user can navigate to root themselves. (Existing notes save in place regardless
+  // of activeFolder, so they're unaffected.)
+  const draftOpen = ui.isNew && ui.current && !ui.activeBookmarkId && !ui.activeLocalId;
+  if (!draftOpen) {
+    ui.activeFolder = ui.rootId;
+    ui.selected = new Set(); ui.anchor = null; ui.focus = -1;
+  }
+  await refreshPanes().catch((e) => console.warn('quick-capture reveal failed', e));
+}
+
+// Watch for the service worker's quick-capture signal. Scoped to that one key so ordinary
+// storage writes (review counter, layout, collapse state) and background bookmark sync
+// never yank the user's view — only an explicit capture does. newValue-guarded so a
+// future removal of the key can't re-trigger.
+function wireQuickCapture() {
+  const c = typeof chrome !== 'undefined' ? chrome : undefined;
+  c?.storage?.onChanged?.addListener((changes, area) => {
+    if (area === 'local' && changes && changes['owl:quickCapture'] && changes['owl:quickCapture'].newValue) {
+      revealQuickCapture();
+    }
+  });
 }
 
 async function persistCollapsed() {
