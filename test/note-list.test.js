@@ -53,6 +53,22 @@ describe('note list', () => {
     expect(card('Small').querySelector('.badge-drive, .badge-drive-off, .badge-local')).toBeNull();
   });
 
+  it('keeps the sync badge OUTSIDE the truncating title text so a long title cannot clip it', () => {
+    const el = document.getElementById('note-list');
+    const longTitle = 'A very long note title that would ellipsis-clip inside a narrow card';
+    renderNoteList(el, {
+      notes: [{ id: 'l1', title: longTitle, localOnly: true }],
+      activeHandle: null, onOpen: vi.fn(),
+    });
+    const title = el.querySelector('.card-title');
+    const textSpan = title.querySelector('.card-title-text');
+    const badge = title.querySelector('.badge-local');
+    expect(textSpan.textContent).toBe(longTitle); // title text is isolated in its own span…
+    expect(badge).not.toBeNull();
+    expect(badge.parentElement).toBe(title);      // …and the badge is a sibling of that span,
+    expect(textSpan.contains(badge)).toBe(false); // NOT nested inside the ellipsised text.
+  });
+
   it('flips a Drive-backed note to a warning badge when sync is off', () => {
     const el = document.getElementById('note-list');
     renderNoteList(el, {

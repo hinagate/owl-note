@@ -593,10 +593,10 @@ export function renderAskPanel(container, {
   }
 
   // [Task E5] Compact, suggestion-row-style list of the retrieved notes NOT
-  // already shown as citations — modeled on toolbar.js's `.suggest-item` rows
-  // (title strong, snippet muted) rather than the bigger `.ask-card`, since this
-  // is a lighter-weight "you might also look at" affordance. SAFETY: chunk title
-  // and text are untrusted note content — textContent only, same as renderCards.
+  // already shown as citations — a light row style (title strong, snippet muted)
+  // rather than the bigger `.ask-card`, since this is a lighter-weight "you might
+  // also look at" affordance. SAFETY: chunk title and text are untrusted note
+  // content — textContent only, same as renderCards.
   function renderRelated(target, chunks) {
     if (!chunks.length) return; // no empty header — nothing to relate
     const label = document.createElement('div');
@@ -781,14 +781,17 @@ export function renderAskPanel(container, {
       // controller guarantees that superseded ask emits nothing further, so the
       // indicator would otherwise hang as an orphan.
       case 'searching':
-        setStatus('Searching…');
+        // The in-thread indicator below carries "Searching…"; clearing the status line
+        // avoids showing the SAME text twice (UI audit: duplicated indicator).
+        setStatus('');
         dropStaleIndicator();
         startExchange(state.question || '');
         setPending(thinkingIndicator('Searching…'));
         break;
 
-      // M3 live states route into the CURRENT exchange's pending slot.
-      case 'generating': setStatus('Owl is thinking…'); setPending(thinkingIndicator('Owl is thinking…')); break;
+      // M3 live states route into the CURRENT exchange's pending slot. Status line stays
+      // clear — the in-thread indicator is the single "in progress" signal.
+      case 'generating': setStatus(''); setPending(thinkingIndicator('Owl is thinking…')); break;
       case 'downloading': renderDownloading(state); break;
 
       // Terminal states resolve the current exchange's pending indicator.

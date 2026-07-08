@@ -107,7 +107,13 @@ export function renderNoteList(container, { notes, activeHandle, onOpen = () => 
 
     const title = document.createElement('div');
     title.className = 'card-title';
-    title.textContent = n.title || 'Untitled';
+    // The title text lives in its OWN span that truncates; the sync badge below is a
+    // sibling flex item (flex:none) so a long title can never clip the badge away
+    // (UI audit: users couldn't tell a long-titled note's sync state).
+    const titleText = document.createElement('span');
+    titleText.className = 'card-title-text';
+    titleText.textContent = n.title || 'Untitled';
+    title.appendChild(titleText);
     card.appendChild(title);
 
     if (n.localOnly) {

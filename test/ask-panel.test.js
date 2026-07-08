@@ -205,14 +205,16 @@ describe('ask-panel — state rendering', () => {
   // [Task E6] Thread contract (was single-shot wipe): a new `searching` no longer
   // wipes the previous exchange — it appends a NEW exchange with a pending
   // indicator and a searching status; the prior exchange's cards stay in the thread.
-  it('searching starts a new exchange (prior exchange preserved) and shows a searching status', () => {
+  it('searching starts a new exchange (prior preserved), shows the indicator, and does NOT duplicate it in the status line', () => {
     const { el, panel } = makePanel();
     panel.update(snippetsState([chunk()]));
     expect(el.querySelectorAll('.ask-card')).toHaveLength(1);
     panel.update({ kind: 'searching', question: 'q' });
     expect(el.querySelectorAll('.ask-card')).toHaveLength(1); // prior exchange preserved (thread)
-    expect(el.querySelector('.ask-thinking')).not.toBeNull();  // new exchange's pending indicator
-    expect(el.querySelector('.ask-status').textContent.toLowerCase()).toContain('searching');
+    const indicator = el.querySelector('.ask-thinking');
+    expect(indicator).not.toBeNull();                              // in-thread pending indicator…
+    expect(indicator.textContent.toLowerCase()).toContain('searching'); // …carries "Searching…"
+    expect(el.querySelector('.ask-status').textContent).toBe('');  // status line does NOT duplicate it
   });
 
   it('zero-hit answered shows the grounded:false message', () => {
@@ -332,8 +334,10 @@ describe('ask-panel — M3 answer rendering & sanitization', () => {
     expect(el.querySelector('.ask-answer')).not.toBeNull();
     panel.update({ kind: 'generating', question: 'q', chunks: [] });
     expect(el.querySelector('.ask-answer')).toBeNull(); // prior answer cleared
-    expect(el.querySelector('.ask-thinking')).not.toBeNull();
-    expect(el.querySelector('.ask-status').textContent.toLowerCase()).toMatch(/think|generat/);
+    const indicator = el.querySelector('.ask-thinking');
+    expect(indicator).not.toBeNull();
+    expect(indicator.textContent.toLowerCase()).toMatch(/think|generat/); // indicator carries it
+    expect(el.querySelector('.ask-status').textContent).toBe(''); // status line does NOT duplicate it
   });
 
   it('downloading renders a progress bar reflecting the fraction', () => {

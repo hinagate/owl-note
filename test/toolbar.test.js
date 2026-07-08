@@ -59,32 +59,18 @@ describe('toolbar', () => {
     expect(el.querySelector('.drive-toggle').textContent).toContain('compatible with Google Drive');
   });
 
-  it('shows auto-suggest matches and opens the picked note', () => {
-    const onSuggest = vi.fn(() => [
-      { handle: 'b1', title: 'Pasta recipe', snippet: 'boil water' },
-      { handle: 'b2', title: 'Pasta sauce', snippet: 'tomatoes' },
-    ]);
-    const onPickSuggestion = vi.fn();
+  it('renders no typeahead dropdown — the filtered note list is the sole result surface', () => {
+    // The search box live-filters the note list (via onSearch); it must NOT also float a
+    // duplicate suggestion layer over that list (user-reported "duplicate result layer").
+    const onSearch = vi.fn();
     const el = document.getElementById('toolbar');
-    renderToolbar(el, opts({ onSuggest, onPickSuggestion }));
+    renderToolbar(el, opts({ onSearch }));
     const input = el.querySelector('input.search');
     input.value = 'pasta';
     input.dispatchEvent(new Event('input'));
-    const rows = el.querySelectorAll('.search-suggest .suggest-item');
-    expect(rows).toHaveLength(2);
-    expect(rows[0].textContent).toContain('Pasta recipe');
-    rows[1].dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); // pick a suggestion
-    expect(onPickSuggestion).toHaveBeenCalledWith('b2');
-    expect(el.querySelector('.search-suggest').hidden).toBe(true); // closes after picking
-  });
-
-  it('hides auto-suggest when the query is empty', () => {
-    const el = document.getElementById('toolbar');
-    renderToolbar(el, opts({ onSuggest: vi.fn(() => [{ handle: 'b1', title: 'X', snippet: '' }]), onPickSuggestion: vi.fn() }));
-    const input = el.querySelector('input.search');
-    input.value = '';
-    input.dispatchEvent(new Event('input'));
-    expect(el.querySelector('.search-suggest').hidden).toBe(true);
+    input.dispatchEvent(new Event('focus'));
+    expect(onSearch).toHaveBeenCalledWith('pasta'); // list filtering still happens
+    expect(el.querySelector('.search-suggest')).toBeNull(); // …but no floating dropdown exists
   });
 
   it('fires onToggleDrive on change and reverts the box to the resolved state', async () => {

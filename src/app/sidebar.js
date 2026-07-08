@@ -79,6 +79,7 @@ export function renderSidebar(
     const label = document.createElement('span');
     label.className = 'nb-label';
     label.textContent = node.title;
+    label.title = node.title; // tooltip reveals the full name when the row truncates it (UI audit)
     row.appendChild(label);
 
     if (onRenameNotebook) {

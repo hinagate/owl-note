@@ -82,8 +82,13 @@ export function applyEditCollapse() {
 function applyLayout() {
   const panes = document.getElementById('panes');
   if (!panes) return;
-  panes.style.gridTemplateColumns = gridColumns(layout);
-  panes.style.setProperty('--col-sidebar', `${layout.sidebarW}px`); // boundary for the flush hidden-list handle
+  // Render a display-only clamp against the CURRENT container width, so a persisted width
+  // that no longer fits doesn't overflow — WITHOUT overwriting the stored intent, so the
+  // user's chosen widths return when the window grows again (UI audit). `layout` stays the
+  // source of truth that drags mutate and saveLayout persists.
+  const shown = clampLayoutToContainer(layout, panes.clientWidth || 0);
+  panes.style.gridTemplateColumns = gridColumns(shown);
+  panes.style.setProperty('--col-sidebar', `${shown.sidebarW}px`); // boundary for the flush hidden-list handle
   panes.classList.toggle('note-list-hidden', layout.noteListHidden);
   applyEditCollapse();
 }
@@ -171,8 +176,8 @@ export async function initPanes() {
   const panes = document.getElementById('panes');
   if (!panes) return; // e.g. unit-test DOM without #panes — no-op
   await loadLayout();
-  const cw = panes.clientWidth;
-  if (cw) layout = clampLayoutToContainer(layout, cw);
+  // No boot-time clamp mutation: applyLayout() clamps for DISPLAY against the live width,
+  // keeping `layout` as the un-shrunk stored intent.
   if (!panes.querySelector('.splitter')) {
     const sidebar = document.getElementById('sidebar');
     const noteList = document.getElementById('note-list');
@@ -180,4 +185,21 @@ export async function initPanes() {
     noteList.after(makeSplitter('notelist', 'splitter-2'));
   }
   applyLayout();
+  wireResizeReclamp();
+}
+
+// Re-render on WINDOW resize: a persisted width (e.g. a 360px sidebar) can exceed a
+// now-narrow window and push the editor below its min, overflowing the page horizontally
+// (UI audit). applyLayout() re-clamps for DISPLAY against the new width without touching
+// the stored `layout`, so the user's widths return when the window grows. Debounced;
+// wired once.
+let resizeWired = false;
+function wireResizeReclamp() {
+  if (resizeWired || typeof window === 'undefined') return;
+  resizeWired = true;
+  let t = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(t);
+    t = setTimeout(() => applyLayout(), 120);
+  });
 }

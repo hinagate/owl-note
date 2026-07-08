@@ -186,6 +186,14 @@ export function renderEditor(
 
   container.append(crumbs, bar, split);
   growTitle(); // size the title to its content now that it's in the DOM
+  // Recompute the auto-grown title height when the edit pane's width changes (pane drag /
+  // window resize): a title that now wraps to more lines would otherwise clip (UI audit).
+  // Guarded — jsdom has no ResizeObserver; self-limiting since growTitle is idempotent.
+  let titleRO = null;
+  if (typeof ResizeObserver !== 'undefined') {
+    titleRO = new ResizeObserver(() => growTitle());
+    titleRO.observe(titleInput);
+  }
 
   let sizeSeq = 0; // guards against an older keystroke's measurement landing last
   const updateSize = () => {
@@ -275,7 +283,10 @@ export function renderEditor(
       chip.className = 'attach-chip';
       const ico = document.createElement('span');
       ico.className = 'owl-file-ico';
-      chip.append(ico, document.createTextNode(name));
+      const nameEl = document.createElement('span');
+      nameEl.className = 'attach-chip-name'; // truncates a long filename instead of overflowing
+      nameEl.textContent = name;
+      chip.append(ico, nameEl);
       chip.addEventListener('click', () => openAttachment(att, () => chip.classList.add('unavailable')));
       attachBar.appendChild(chip);
     }
@@ -465,7 +476,7 @@ export function renderEditor(
     getAttachments: () => atts,
     replaceBody, // [Task E10] undo-preserving whole-body replace (Format's Apply path)
     flush: () => doSave({ auto: true }),
-    destroy: () => clearTimeout(saveTimer), // cancel a pending auto-save when this editor is torn down
+    destroy: () => { clearTimeout(saveTimer); titleRO?.disconnect(); }, // cancel pending auto-save + stop observing on teardown
   };
 }
 

@@ -64,13 +64,17 @@ export async function dropNote(handle, folderId) {
   else await bm.moveNote(handle, folderId);
 }
 
+let toastTimer = null;
 export function toast(message, isWarn = false) {
   const el = document.getElementById('toast');
   if (!el) return;
   el.textContent = message;
   el.className = isWarn ? 'warn' : '';
   el.hidden = false;
-  setTimeout(() => { el.hidden = true; }, 3000);
+  // Clear a prior hide timer so a rapid second toast gets its OWN full 3s, instead of
+  // being cut short when the first toast's timer fires (UI audit).
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; toastTimer = null; }, 3000);
 }
 
 // Import progress bar — lives where the toast does, but persists for the whole
@@ -742,7 +746,6 @@ async function refreshNoteList() {
   const inTrash = ui.activeFolder === ui.trashId;
   const driveEnabled = await isEnabled();
   let notes = await loadNotes(ui.activeFolder);
-  ui.allNotes = notes; // full unfiltered set for the active folder — search-bar suggestions use this
   if (ui.query) notes = searchNotes(notes, ui.query);
   const list = orderNotes(notes, recentIds);
   const isDraft = ui.isNew && ui.current && !ui.activeBookmarkId && !ui.query;
@@ -993,12 +996,6 @@ async function refreshPanes() {
   renderToolbar(document.getElementById('toolbar'), {
     query: ui.query,
     onSearch: async (q) => { ui.selected = new Set(); ui.anchor = null; ui.focus = -1; ui.query = q; await refreshNoteList(); },
-    onSuggest: (q) => searchNotes(ui.allNotes || [], q).slice(0, 6).map((n) => ({
-      handle: n.bookmarkId ?? n.id,
-      title: n.title || 'Untitled',
-      snippet: (n.body || '').replace(/\s+/g, ' ').trim().slice(0, 80),
-    })),
-    onPickSuggestion: (handle) => openHandle(handle),
     onExportMarkdown: () => doExportMarkdown(),
     onExportJson: doExport,
     onImport: (files) => doImportFiles(files),

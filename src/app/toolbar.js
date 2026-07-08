@@ -3,7 +3,7 @@
 // Track the active outside-click closer so re-renders don't leak stale listeners.
 let _activeCloser = null;
 
-export function renderToolbar(container, { query = '', onSearch, onSuggest = null, onPickSuggestion = null, onExportMarkdown, onExportJson, onImport, driveEnabled = false, onToggleDrive = null, onAsk = null }) {
+export function renderToolbar(container, { query = '', onSearch, onExportMarkdown, onExportJson, onImport, driveEnabled = false, onToggleDrive = null, onAsk = null }) {
   // Clean up any stale document listener from a previous render.
   if (_activeCloser) {
     document.removeEventListener('click', _activeCloser);
@@ -12,54 +12,19 @@ export function renderToolbar(container, { query = '', onSearch, onSuggest = nul
 
   container.innerHTML = '';
 
+  // The search box LIVE-FILTERS the note list (via onSearch → refreshNoteList). There is
+  // deliberately NO typeahead dropdown: an earlier one floated the same matches over the
+  // already-filtered list, so users saw every hit twice ("duplicate result layer"). The
+  // filtered list is the single result surface.
   const search = document.createElement('input');
   search.className = 'search';
   search.placeholder = 'Search notes…';
   search.value = query;
+  search.addEventListener('input', () => onSearch(search.value));
 
-  // Auto-suggest (typeahead): a dropdown of the top matching notes under the search box.
   const searchWrap = document.createElement('div');
   searchWrap.className = 'search-wrap';
-  const suggestBox = document.createElement('div');
-  suggestBox.className = 'search-suggest';
-  suggestBox.hidden = true;
-  searchWrap.append(search, suggestBox);
-
-  let sItems = [];
-  let sActive = -1;
-  function renderSuggest() {
-    suggestBox.innerHTML = '';
-    if (!sItems.length) { suggestBox.hidden = true; return; }
-    sItems.forEach((it, i) => {
-      const row = document.createElement('button');
-      row.type = 'button';
-      row.className = 'suggest-item' + (i === sActive ? ' active' : '');
-      const t = document.createElement('div'); t.className = 'suggest-title'; t.textContent = it.title;
-      row.appendChild(t);
-      if (it.snippet) { const s = document.createElement('div'); s.className = 'suggest-snippet'; s.textContent = it.snippet; row.appendChild(s); }
-      row.addEventListener('mousedown', (e) => { e.preventDefault(); pickSuggest(it); }); // mousedown fires before blur
-      suggestBox.appendChild(row);
-    });
-    suggestBox.hidden = false;
-  }
-  function updateSuggest() {
-    sItems = (onSuggest && search.value.trim()) ? onSuggest(search.value) : [];
-    sActive = -1;
-    renderSuggest();
-  }
-  function closeSuggest() { sItems = []; sActive = -1; renderSuggest(); }
-  function pickSuggest(it) { closeSuggest(); if (onPickSuggestion) onPickSuggestion(it.handle); }
-
-  search.addEventListener('input', () => { onSearch(search.value); updateSuggest(); });
-  search.addEventListener('keydown', (e) => {
-    if (!sItems.length) return;
-    if (e.key === 'ArrowDown') { e.preventDefault(); sActive = Math.min(sActive + 1, sItems.length - 1); renderSuggest(); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); sActive = Math.max(sActive - 1, 0); renderSuggest(); }
-    else if (e.key === 'Enter' && sActive >= 0) { e.preventDefault(); pickSuggest(sItems[sActive]); }
-    else if (e.key === 'Escape') { e.preventDefault(); closeSuggest(); }
-  });
-  search.addEventListener('blur', () => setTimeout(closeSuggest, 120)); // let a suggestion click land first
-  search.addEventListener('focus', () => { if (search.value.trim()) updateSuggest(); });
+  searchWrap.append(search);
 
   // Export ▾ dropdown
   const exportWrap = document.createElement('div');
