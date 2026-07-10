@@ -113,3 +113,36 @@ describe('format-bar inline HTML (underline / highlight)', () => {
     expect(html).not.toContain('<script');
   });
 });
+
+describe('scheme-less link normalization', () => {
+  it('gives a typed bare-domain link a scheme and opens it in a new tab', () => {
+    const html = renderMarkdown('[x](www.google.com)');
+    expect(html).toContain('href="https://www.google.com"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+  });
+
+  it('handles domain-with-path links too', () => {
+    const html = renderMarkdown('[x](example.com/a/b)');
+    expect(html).toContain('href="https://example.com/a/b"');
+    expect(html).toContain('target="_blank"');
+  });
+
+  it('leaves in-page anchors alone', () => {
+    const html = renderMarkdown('[x](#section)');
+    expect(html).toContain('href="#section"');
+    expect(html).not.toContain('target="_blank"');
+  });
+
+  it('leaves a non-domain placeholder like (url) alone', () => {
+    const html = renderMarkdown('[x](url)');
+    expect(html).toContain('href="url"');
+    expect(html).not.toContain('target="_blank"');
+  });
+
+  it('existing explicit https links are unchanged', () => {
+    const html = renderMarkdown('[x](https://a.b/c)');
+    expect(html).toContain('href="https://a.b/c"');
+    expect(html).toContain('target="_blank"');
+  });
+});

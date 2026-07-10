@@ -49,7 +49,19 @@ const SANITIZE_OPTS = {
 // addHook when a DOM is present, so this no-ops in the pure-node test env.)
 if (typeof DOMPurify.addHook === 'function') {
   DOMPurify.addHook('afterSanitizeAttributes', (node) => {
-    if (node.tagName === 'A' && /^https?:\/\//i.test(node.getAttribute('href') || '')) {
+    if (node.tagName !== 'A') return;
+    let href = node.getAttribute('href') || '';
+    // People type links without the scheme ('www.google.com'). A scheme-less
+    // href is a RELATIVE url here, so it would resolve against the extension
+    // page (chrome-extension://…/www.google.com) and go nowhere. If it looks
+    // like a web address (dot-separated words up front, no scheme, not an
+    // in-page #anchor), give it https://. owl-file: refs have a scheme and
+    // '#' anchors fail the domain shape, so both pass through untouched.
+    if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href) && /^[\w-]+(\.[\w-]+)+/.test(href)) {
+      href = `https://${href}`;
+      node.setAttribute('href', href);
+    }
+    if (/^https?:\/\//i.test(href)) {
       node.setAttribute('target', '_blank');
       node.setAttribute('rel', 'noopener noreferrer');
     }
