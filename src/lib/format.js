@@ -24,6 +24,43 @@ function trimEdges(body, s, e) {
   return [s, e];
 }
 
+// Find a marker span that encloses [s, e) on the caret's line, for the
+// Word-style toggle: caret INSIDE bold + Bold button should unbold, not
+// inject a fresh empty pair. Symmetric markers (**, *, ~~) are matched as
+// RUNS — a run counts only when its length equals the marker's — so an
+// italic scan never pairs with half of a bold's '**'. Asymmetric HTML
+// markers (<u>, <mark>) pair unambiguously left-to-right. Inline markdown
+// never spans lines, so the search is line-bounded. Returns
+// { openStart, closeEnd } or null.
+function enclosingSpan(body, s, e, left, right) {
+  const lineStart = s === 0 ? 0 : body.lastIndexOf('\n', s - 1) + 1;
+  let lineEnd = body.indexOf('\n', lineStart);
+  if (lineEnd === -1) lineEnd = body.length;
+  if (e > lineEnd) return null; // selection crosses lines
+  if (left === right) {
+    const esc = left[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const runs = [];
+    for (const m of body.slice(lineStart, lineEnd).matchAll(new RegExp(`${esc}+`, 'g'))) {
+      if (m[0].length === left.length) runs.push(lineStart + m.index);
+    }
+    for (let i = 0; i + 1 < runs.length; i += 2) {
+      if (runs[i] + left.length <= s && e <= runs[i + 1]) {
+        return { openStart: runs[i], closeEnd: runs[i + 1] + right.length };
+      }
+    }
+    return null;
+  }
+  let from = lineStart;
+  for (;;) {
+    const open = body.indexOf(left, from);
+    if (open === -1 || open >= lineEnd) return null;
+    const close = body.indexOf(right, open + left.length);
+    if (close === -1 || close >= lineEnd) return null;
+    if (open + left.length <= s && e <= close) return { openStart: open, closeEnd: close + right.length };
+    from = close + right.length;
+  }
+}
+
 export function toggleInline(body, start, end, { left, right }) {
   let [s, e] = clamp(body, start, end);
   [s, e] = trimEdges(body, s, e);
@@ -37,6 +74,20 @@ export function toggleInline(body, start, end, { left, right }) {
   if (sel.length >= left.length + right.length && sel.startsWith(left) && sel.endsWith(right)) {
     const inner = sel.slice(left.length, sel.length - right.length);
     return { replaceStart: s, replaceEnd: e, insert: inner, selStart: s, selEnd: s + inner.length };
+  }
+  // Caret or selection strictly INSIDE a marked span -> unwrap the whole
+  // span (Word-style toggle). Positions inside the content shift left by
+  // the removed opening marker.
+  const span = enclosingSpan(body, s, e, left, right);
+  if (span) {
+    const inner = body.slice(span.openStart + left.length, span.closeEnd - right.length);
+    return {
+      replaceStart: span.openStart,
+      replaceEnd: span.closeEnd,
+      insert: inner,
+      selStart: s - left.length,
+      selEnd: e - left.length,
+    };
   }
   // Collapsed caret -> insert the pair, caret between the markers.
   if (s === e) {

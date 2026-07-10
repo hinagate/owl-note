@@ -57,6 +57,44 @@ describe('toggleInline', () => {
     const e = toggleInline('ab', 99, -5, BOLD); // reversed + out of range -> full string
     expect(applyEdit('ab', e)).toBe('**ab**');
   });
+
+  it('caret INSIDE a marked span unwraps the whole span (Word-style toggle)', () => {
+    const e = toggleInline('**hello** world', 4, 4, BOLD);
+    expect(applyEdit('**hello** world', e)).toBe('hello world');
+    expect([e.selStart, e.selEnd]).toEqual([2, 2]); // caret stays between 'he|llo'
+  });
+
+  it('partial selection inside a marked span unwraps the whole span', () => {
+    const e = toggleInline('**hello** world', 3, 6, BOLD);
+    expect(applyEdit('**hello** world', e)).toBe('hello world');
+    expect([e.selStart, e.selEnd]).toEqual([1, 4]); // 'ell' stays selected
+  });
+
+  it('caret inside an HTML-marker span unwraps it', () => {
+    const e = toggleInline('<u>term</u> x', 5, 5, { left: '<u>', right: '</u>' });
+    expect(applyEdit('<u>term</u> x', e)).toBe('term x');
+    expect([e.selStart, e.selEnd]).toEqual([2, 2]);
+  });
+
+  it('an italic scan never pairs with half of a bold marker', () => {
+    const e = toggleInline('**hello** world', 4, 4, { left: '*', right: '*' });
+    expect(applyEdit('**hello** world', e)).toBe('**he**llo** world'); // falls through to collapsed insert, unchanged behavior
+  });
+
+  it('caret in unmarked text still inserts an empty pair (spec behavior unchanged)', () => {
+    const e = toggleInline('plain', 2, 2, BOLD);
+    expect(applyEdit('plain', e)).toBe('pl****ain');
+  });
+
+  it('a span on a different line does not capture the caret', () => {
+    const e = toggleInline('**a**\nb', 7, 7, BOLD);
+    expect(applyEdit('**a**\nb', e)).toBe('**a**\nb****');
+  });
+
+  it('picks the correct span when the line has several', () => {
+    const e = toggleInline('**a** b **c**', 10, 10, BOLD); // caret inside 'c'
+    expect(applyEdit('**a** b **c**', e)).toBe('**a** b c');
+  });
 });
 
 describe('cycleHeading', () => {
