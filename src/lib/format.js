@@ -44,3 +44,24 @@ export function toggleInline(body, start, end, { left, right }) {
   }
   return { replaceStart: s, replaceEnd: e, insert: left + sel + right, selStart: s + left.length, selEnd: s + left.length + sel.length };
 }
+
+const HEADING_PREFIXES = ['', '# ', '## ', '### '];
+
+// Cycle the caret line's heading: none -> # -> ## -> ### -> none. `#tag`
+// (no space after the hashes) is NOT a heading — same rule as tidy-markdown.
+export function cycleHeading(body, start) {
+  const [s] = clamp(body, start, start);
+  const lineStart = body.lastIndexOf('\n', s - 1) + 1;
+  let lineEnd = body.indexOf('\n', lineStart);
+  if (lineEnd === -1) lineEnd = body.length;
+  const line = body.slice(lineStart, lineEnd);
+  const m = /^(#{1,6})\s/.exec(line);
+  const depth = m ? Math.min(m[1].length, 3) : 0; // ####+ cycles back to none
+  const rest = m ? line.slice(m[0].length) : line;
+  const next = HEADING_PREFIXES[(depth + 1) % HEADING_PREFIXES.length];
+  const insert = next + rest;
+  // Keep the caret at the same offset within the text after the prefix.
+  const offsetInRest = Math.max(0, s - lineStart - (m ? m[0].length : 0));
+  const caret = Math.min(lineStart + next.length + offsetInRest, lineStart + insert.length);
+  return { replaceStart: lineStart, replaceEnd: lineEnd, insert, selStart: caret, selEnd: caret };
+}

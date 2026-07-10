@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toggleInline } from '../src/lib/format.js';
+import { toggleInline, cycleHeading } from '../src/lib/format.js';
 
 // Apply an edit object to a body string — the same splice editor.js performs.
 export function applyEdit(body, edit) {
@@ -56,5 +56,26 @@ describe('toggleInline', () => {
   it('clamps out-of-range and reversed selections', () => {
     const e = toggleInline('ab', 99, -5, BOLD); // reversed + out of range -> full string
     expect(applyEdit('ab', e)).toBe('**ab**');
+  });
+});
+
+describe('cycleHeading', () => {
+  it('cycles none -> # -> ## -> ### -> none', () => {
+    expect(applyEdit('title', cycleHeading('title', 0))).toBe('# title');
+    expect(applyEdit('# title', cycleHeading('# title', 0))).toBe('## title');
+    expect(applyEdit('## title', cycleHeading('## title', 0))).toBe('### title');
+    expect(applyEdit('### title', cycleHeading('### title', 0))).toBe('title');
+  });
+
+  it('#### and deeper cycle back to plain text', () => {
+    expect(applyEdit('#### deep', cycleHeading('#### deep', 0))).toBe('deep');
+  });
+
+  it('only touches the caret line', () => {
+    expect(applyEdit('a\nb', cycleHeading('a\nb', 2))).toBe('a\n# b');
+  });
+
+  it('does NOT treat unspaced #tag as a heading (tidy-markdown parity)', () => {
+    expect(applyEdit('#tag', cycleHeading('#tag', 0))).toBe('# #tag');
   });
 });
