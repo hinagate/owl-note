@@ -4,6 +4,7 @@ import { imageFileToDataUri } from '../lib/image-downscale.js';
 import { extractImages, inlineImages, inlineImagesAsync, pruneAttachments, attachFile, listFileRefs, linkifyFileRefs } from '../lib/note-images.js';
 import { getBytes } from '../lib/attachment-store.js';
 import * as panes from './panes.js';
+import { renderFormatBar, formatActions } from './format-bar.js';
 
 export function renderEditor(
   container,
@@ -137,7 +138,23 @@ export function renderEditor(
   const bodyWrap = document.createElement('div');
   bodyWrap.className = 'note-body-wrap';
   bodyWrap.append(backdrop, ta);
-  editPane.append(titleRow, bodyWrap);
+  // Formatting row between title and body. Actions are pure edits from
+  // src/lib/format.js routed through insertText, so each click is ONE native
+  // undo step and the input event it fires drives refresh + autosave with no
+  // extra plumbing. (insertText is a function declaration — hoisted, so this
+  // wiring can sit above it.)
+  const formatBar = document.createElement('div');
+  formatBar.className = 'format-bar';
+  const fmtActions = formatActions();
+  const applyFormat = (run) => {
+    const start = ta.selectionStart ?? ta.value.length;
+    const end = ta.selectionEnd ?? start;
+    const edit = run(ta.value, start, end);
+    insertText(edit.insert, edit.replaceStart, edit.replaceEnd);
+    ta.setSelectionRange(edit.selStart, edit.selEnd);
+  };
+  renderFormatBar(formatBar, { apply: applyFormat, actions: fmtActions });
+  editPane.append(titleRow, formatBar, bodyWrap);
   const attachBar = document.createElement('div');
   attachBar.className = 'attachments-bar';
   editPane.append(attachBar, status); // chips under the body; status sits below the chips
@@ -387,6 +404,16 @@ export function renderEditor(
 
   refresh();
   ta.addEventListener('input', fireChange);
+  // Ctrl/Cmd+B / I / U / K — the four universal shortcuts; everything else is
+  // button-only. Shift/Alt combos are left for the browser/OS.
+  const shortcutActions = new Map(fmtActions.filter((a) => a.shortcut).map((a) => [a.shortcut, a]));
+  ta.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+    const action = shortcutActions.get(e.key.toLowerCase());
+    if (!action) return;
+    e.preventDefault();
+    applyFormat(action.run);
+  });
   ta.addEventListener('scroll', () => { backdrop.scrollTop = ta.scrollTop; backdrop.scrollLeft = ta.scrollLeft; });
   titleInput.addEventListener('input', () => {
     if (titleInput.value.includes('\n')) {
