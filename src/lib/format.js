@@ -51,7 +51,7 @@ const HEADING_PREFIXES = ['', '# ', '## ', '### '];
 // (no space after the hashes) is NOT a heading — same rule as tidy-markdown.
 export function cycleHeading(body, start) {
   const [s] = clamp(body, start, start);
-  const lineStart = body.lastIndexOf('\n', s - 1) + 1;
+  const lineStart = s === 0 ? 0 : body.lastIndexOf('\n', s - 1) + 1;
   let lineEnd = body.indexOf('\n', lineStart);
   if (lineEnd === -1) lineEnd = body.length;
   const line = body.slice(lineStart, lineEnd);

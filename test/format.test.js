@@ -78,4 +78,8 @@ describe('cycleHeading', () => {
   it('does NOT treat unspaced #tag as a heading (tidy-markdown parity)', () => {
     expect(applyEdit('#tag', cycleHeading('#tag', 0))).toBe('# #tag');
   });
+
+  it('caret at position 0 on an empty first line edits THAT line, not the next', () => {
+    expect(applyEdit('\na', cycleHeading('\na', 0))).toBe('# \na');
+  });
 });
