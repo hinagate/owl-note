@@ -71,4 +71,14 @@ describe('format bar in the editor', () => {
     ta.dispatchEvent(ev);
     expect(ta.value).toBe('hello world'); // unchanged
   });
+
+  it('ignores Ctrl+B during IME composition (isComposing)', () => {
+    render();
+    const ta = document.querySelector('textarea.note-body');
+    ta.setSelectionRange(0, 5);
+    const ev = new KeyboardEvent('keydown', { key: 'b', ctrlKey: true, cancelable: true, bubbles: true });
+    Object.defineProperty(ev, 'isComposing', { value: true });
+    ta.dispatchEvent(ev);
+    expect(ta.value).toBe('hello world'); // unchanged — composition must never be clobbered
+  });
 });

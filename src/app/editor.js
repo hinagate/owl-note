@@ -408,6 +408,7 @@ export function renderEditor(
   // button-only. Shift/Alt combos are left for the browser/OS.
   const shortcutActions = new Map(fmtActions.filter((a) => a.shortcut).map((a) => [a.shortcut, a]));
   ta.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return; // IME composition — never format mid-composition (ask-panel.js convention)
     if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
     const action = shortcutActions.get(e.key.toLowerCase());
     if (!action) return;
