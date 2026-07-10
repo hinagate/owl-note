@@ -65,3 +65,64 @@ export function cycleHeading(body, start) {
   const caret = Math.min(lineStart + next.length + offsetInRest, lineStart + insert.length);
   return { replaceStart: lineStart, replaceEnd: lineEnd, insert, selStart: caret, selEnd: caret };
 }
+
+// The full lines touched by [s, e): from the start of s's line to the end of
+// e's line. A selection ending exactly at a line start (just past a \n) does
+// NOT pull the next line in.
+function lineBlock(body, s, e) {
+  // s === 0 guard: lastIndexOf('\n', -1) clamps fromIndex to 0 and can still
+  // match a newline AT index 0, which would skip an empty first line.
+  const blockStart = s === 0 ? 0 : body.lastIndexOf('\n', s - 1) + 1;
+  const effEnd = e > s && (e === body.length || body[e - 1] === '\n') ? e - 1 : e;
+  let blockEnd = body.indexOf('\n', Math.max(effEnd, blockStart));
+  if (blockEnd === -1) blockEnd = body.length;
+  return [blockStart, blockEnd];
+}
+
+const LINE_PREFIX = {
+  bullet: { has: /^(\s*)- /, add: '- ' },
+  quote: { has: /^(\s*)> /, add: '> ' },
+};
+
+// Toggle a per-line prefix over every selected line. If ALL non-blank lines
+// already carry it, remove it; otherwise add it to the lines missing it (after
+// any indent). Blank lines inside a block are skipped — no trailing-space
+// lines (Tidy would strip them anyway). The whole rewritten block is selected,
+// so pressing the button twice round-trips.
+export function toggleLinePrefix(body, start, end, kind) {
+  const { has, add } = LINE_PREFIX[kind];
+  const [s, e] = clamp(body, start, end);
+  const [blockStart, blockEnd] = lineBlock(body, s, e);
+  const lines = body.slice(blockStart, blockEnd).split('\n');
+  const nonBlank = lines.filter((l) => l.trim() !== '');
+  const allHave = nonBlank.length > 0 && nonBlank.every((l) => has.test(l));
+  const out = lines.map((l) => {
+    if (l.trim() === '' && nonBlank.length > 0) return l; // skip blanks in a block
+    if (allHave) return l.replace(has, '$1');
+    if (has.test(l)) return l;                            // mixed: already prefixed
+    return l.replace(/^(\s*)/, `$1${add}`);
+  });
+  const insert = out.join('\n');
+  return { replaceStart: blockStart, replaceEnd: blockEnd, insert, selStart: blockStart, selEnd: blockStart + insert.length };
+}
+
+const ORDERED_HAS = /^(\s*)\d+\. /;
+
+// Same toggle shape as toggleLinePrefix, but numbering is SEQUENTIAL: adding
+// renumbers every non-blank line 1..n (stripping any stale number first), so a
+// mixed or misnumbered block always comes out clean.
+export function toggleOrderedList(body, start, end) {
+  const [s, e] = clamp(body, start, end);
+  const [blockStart, blockEnd] = lineBlock(body, s, e);
+  const lines = body.slice(blockStart, blockEnd).split('\n');
+  const nonBlank = lines.filter((l) => l.trim() !== '');
+  const allHave = nonBlank.length > 0 && nonBlank.every((l) => ORDERED_HAS.test(l));
+  let n = 0;
+  const out = lines.map((l) => {
+    if (l.trim() === '' && nonBlank.length > 0) return l;
+    if (allHave) return l.replace(ORDERED_HAS, '$1');
+    return l.replace(ORDERED_HAS, '$1').replace(/^(\s*)/, `$1${++n}. `);
+  });
+  const insert = out.join('\n');
+  return { replaceStart: blockStart, replaceEnd: blockEnd, insert, selStart: blockStart, selEnd: blockStart + insert.length };
+}

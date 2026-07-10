@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toggleInline, cycleHeading } from '../src/lib/format.js';
+import { toggleInline, cycleHeading, toggleLinePrefix, toggleOrderedList } from '../src/lib/format.js';
 
 // Apply an edit object to a body string — the same splice editor.js performs.
 export function applyEdit(body, edit) {
@@ -81,5 +81,62 @@ describe('cycleHeading', () => {
 
   it('caret at position 0 on an empty first line edits THAT line, not the next', () => {
     expect(applyEdit('\na', cycleHeading('\na', 0))).toBe('# \na');
+  });
+});
+
+describe('toggleLinePrefix (bullet / quote)', () => {
+  it('bullets every selected line and selects the block', () => {
+    const e = toggleLinePrefix('a\nb', 0, 3, 'bullet');
+    expect(applyEdit('a\nb', e)).toBe('- a\n- b');
+    expect([e.selStart, e.selEnd]).toEqual([0, 7]);
+  });
+
+  it('toggles off when ALL selected lines are bulleted (round-trip)', () => {
+    const on = toggleLinePrefix('a\nb', 0, 3, 'bullet');
+    const body = applyEdit('a\nb', on);
+    const off = toggleLinePrefix(body, on.selStart, on.selEnd, 'bullet');
+    expect(applyEdit(body, off)).toBe('a\nb');
+  });
+
+  it('mixed lines: fills in the missing bullets, leaves existing ones alone', () => {
+    expect(applyEdit('- a\nb', toggleLinePrefix('- a\nb', 0, 5, 'bullet'))).toBe('- a\n- b');
+  });
+
+  it('skips blank lines inside the block', () => {
+    expect(applyEdit('a\n\nb', toggleLinePrefix('a\n\nb', 0, 4, 'bullet'))).toBe('- a\n\n- b');
+  });
+
+  it('bullets an empty caret line (so the button works on a fresh line)', () => {
+    expect(applyEdit('', toggleLinePrefix('', 0, 0, 'bullet'))).toBe('- ');
+  });
+
+  it('inserts after leading indent', () => {
+    expect(applyEdit('  x', toggleLinePrefix('  x', 0, 3, 'bullet'))).toBe('  - x');
+  });
+
+  it('a selection ending exactly at a line start does not pull in the next line', () => {
+    expect(applyEdit('a\nb', toggleLinePrefix('a\nb', 0, 2, 'bullet'))).toBe('- a\nb');
+  });
+
+  it('quote uses "> "', () => {
+    expect(applyEdit('a', toggleLinePrefix('a', 0, 1, 'quote'))).toBe('> a');
+  });
+
+  it('caret at position 0 on an empty first line bullets THAT line, not the next', () => {
+    expect(applyEdit('\na', toggleLinePrefix('\na', 0, 0, 'bullet'))).toBe('- \na');
+  });
+});
+
+describe('toggleOrderedList', () => {
+  it('numbers lines 1..n', () => {
+    expect(applyEdit('a\nb\nc', toggleOrderedList('a\nb\nc', 0, 5))).toBe('1. a\n2. b\n3. c');
+  });
+
+  it('toggles numbering off when all lines are numbered', () => {
+    expect(applyEdit('1. a\n2. b', toggleOrderedList('1. a\n2. b', 0, 9))).toBe('a\nb');
+  });
+
+  it('renumbers a mixed block cleanly', () => {
+    expect(applyEdit('5. a\nb', toggleOrderedList('5. a\nb', 0, 6))).toBe('1. a\n2. b');
   });
 });
