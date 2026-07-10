@@ -195,6 +195,38 @@ describe('insertLink', () => {
   });
 });
 
+describe('insertLink toggle-off', () => {
+  it('clicking Link again with the url placeholder still selected unwraps back', () => {
+    const on = insertLink('pick me', 0, 4);            // '[pick](url) me', 'url' selected
+    const body = applyEdit('pick me', on);
+    const off = insertLink(body, on.selStart, on.selEnd);
+    expect(applyEdit(body, off)).toBe('pick me');
+  });
+
+  it('caret anywhere inside an existing link unwraps it to its text', () => {
+    const body = 'a [b](https://c.d) e';
+    const e = insertLink(body, 3, 3); // caret on the link text 'b'
+    expect(applyEdit(body, e)).toBe('a b e');
+    expect([e.selStart, e.selEnd]).toEqual([2, 2]);
+  });
+
+  it('a selection spanning the whole link unwraps it', () => {
+    const body = '[pick](https://x.y) me';
+    const e = insertLink(body, 0, 19);
+    expect(applyEdit(body, e)).toBe('pick me');
+  });
+
+  it('never unwraps an image/attachment ref — no-op instead', () => {
+    expect(insertLink('![shot](owl-img:abc) x', 3, 3)).toBeNull();
+  });
+
+  it('a link on another line does not capture the caret', () => {
+    const body = '[a](https://b.c)\nplain';
+    const e = insertLink(body, 19, 19); // caret in 'plain', after 'pl'
+    expect(applyEdit(body, e)).toBe('[a](https://b.c)\npl[text](url)ain');
+  });
+});
+
 describe('list buttons vs headings (skip rule)', () => {
   it('numbering a whole note keeps the title a title', () => {
     const note = '## Title\n\na\nb';

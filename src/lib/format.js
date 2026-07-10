@@ -8,7 +8,9 @@
 // its undo-preserving insertText) — nothing here mutates anything. The list
 // toggles (toggleLinePrefix('bullet', ...), toggleOrderedList) may return
 // null when the selection has nothing a list can apply to (e.g. a
-// heading-only selection) — callers must treat null as a no-op.
+// heading-only selection) — callers must treat null as a no-op. insertLink
+// may also return null: pressing it inside an image/attachment ref
+// (![name](owl-img:…)) is a deliberate no-op, not an unwrap.
 
 // Clamp a selection into [0, body.length] and normalize start <= end.
 function clamp(body, start, end) {
@@ -230,11 +232,33 @@ export function toggleOrderedList(body, start, end) {
   return toggleListMarker(body, start, end, 'ordered');
 }
 
-// Wrap the selection as a markdown link. With a selection, it becomes the link
-// TEXT and the `url` placeholder is selected (type/paste the address next).
-// Collapsed, a full placeholder is inserted with `text` selected.
+// A markdown link (or image) on one line: [text](target) with optional
+// leading '!'. Bounded to one line — link syntax never spans lines here.
+const MD_LINK_RE = /(!?)\[([^\]\n]*)\]\(([^)\n]*)\)/g;
+
+// Wrap the selection as a markdown link — or, when the caret/selection
+// already sits inside a link on this line, UNWRAP it back to its text
+// (same toggle model as every other button). Image/attachment refs
+// (![name](owl-img:…)) are never unwrapped: breaking one would orphan the
+// attachment and pruneAttachments would drop its bytes on save — inside
+// one, the button is a deliberate no-op (returns null).
 export function insertLink(body, start, end) {
   let [s, e] = clamp(body, start, end);
+  const lineStart = s === 0 ? 0 : body.lastIndexOf('\n', s - 1) + 1;
+  let lineEnd = body.indexOf('\n', lineStart);
+  if (lineEnd === -1) lineEnd = body.length;
+  if (e <= lineEnd) {
+    for (const m of body.slice(lineStart, lineEnd).matchAll(MD_LINK_RE)) {
+      const mStart = lineStart + m.index;
+      const mEnd = mStart + m[0].length;
+      if (mStart > s || e > mEnd) continue; // selection not inside this match
+      if (m[1]) return null;                // image/attachment ref — hands off
+      const text = m[2];
+      // Content shifts left by the removed '['; clamp marker/url positions in.
+      const mapPos = (p) => Math.max(mStart, Math.min(p - 1, mStart + text.length));
+      return { replaceStart: mStart, replaceEnd: mEnd, insert: text, selStart: mapPos(s), selEnd: mapPos(e) };
+    }
+  }
   [s, e] = trimEdges(body, s, e);
   if (s === e) {
     return { replaceStart: s, replaceEnd: e, insert: '[text](url)', selStart: s + 1, selEnd: s + 5 };
