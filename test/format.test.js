@@ -194,3 +194,62 @@ describe('insertLink', () => {
     expect(body.slice(e.selStart, e.selEnd)).toBe('text');
   });
 });
+
+describe('list buttons vs headings (skip rule)', () => {
+  it('numbering a whole note keeps the title a title', () => {
+    const note = '## Title\n\na\nb';
+    const e = toggleOrderedList(note, 0, note.length);
+    expect(applyEdit(note, e)).toBe('## Title\n\n1. a\n2. b');
+  });
+
+  it('bullet skips heading lines too', () => {
+    const e = toggleLinePrefix('## T\na', 0, 6, 'bullet');
+    expect(applyEdit('## T\na', e)).toBe('## T\n- a');
+  });
+
+  it('list button on a heading-only selection is a no-op (null)', () => {
+    expect(toggleLinePrefix('## T', 0, 4, 'bullet')).toBeNull();
+    expect(toggleOrderedList('## T', 0, 4)).toBeNull();
+  });
+
+  it('round-trips: toggle off strips numbers but leaves the heading', () => {
+    const on = '## T\n1. a\n2. b';
+    const e = toggleOrderedList(on, 0, on.length);
+    expect(applyEdit(on, e)).toBe('## T\na\nb');
+  });
+
+  it('a #tag line is content, not a heading — it gets numbered', () => {
+    const e = toggleOrderedList('#tag\nx', 0, 6);
+    expect(applyEdit('#tag\nx', e)).toBe('1. #tag\n2. x');
+  });
+
+  it('quote still applies to headings (quoting a title is legitimate)', () => {
+    const e = toggleLinePrefix('## T', 0, 4, 'quote');
+    expect(applyEdit('## T', e)).toBe('> ## T');
+  });
+
+  it('list markers insert AFTER a quote run, and round-trip', () => {
+    const on = toggleLinePrefix('> x', 0, 3, 'bullet');
+    expect(applyEdit('> x', on)).toBe('> - x');
+    const off = toggleLinePrefix('> - x', 0, 5, 'bullet');
+    expect(applyEdit('> - x', off)).toBe('> x');
+  });
+});
+
+describe('heading button composes with structure prefixes', () => {
+  it('H on a list line puts the heading inside the item', () => {
+    expect(applyEdit('1. item', cycleHeading('1. item', 0))).toBe('1. # item');
+  });
+
+  it('cycles within the item and returns to plain', () => {
+    expect(applyEdit('1. ### item', cycleHeading('1. ### item', 0))).toBe('1. item');
+  });
+
+  it('H on a quoted line stays inside the quote', () => {
+    expect(applyEdit('> x', cycleHeading('> x', 0))).toBe('> # x');
+  });
+
+  it('indent is preserved outside the heading marker', () => {
+    expect(applyEdit('  x', cycleHeading('  x', 0))).toBe('  # x');
+  });
+});

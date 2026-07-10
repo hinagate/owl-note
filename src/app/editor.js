@@ -150,6 +150,7 @@ export function renderEditor(
     const start = ta.selectionStart ?? ta.value.length;
     const end = ta.selectionEnd ?? start;
     const edit = run(ta.value, start, end);
+    if (!edit) return; // no-op (e.g. list button on a heading-only selection)
     insertText(edit.insert, edit.replaceStart, edit.replaceEnd);
     ta.setSelectionRange(edit.selStart, edit.selEnd);
   };

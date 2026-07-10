@@ -5,7 +5,10 @@
 //   { replaceStart, replaceEnd, insert, selStart, selEnd }
 // meaning: replace body.slice(replaceStart, replaceEnd) with `insert`, then
 // select [selStart, selEnd). The caller applies it (editor.js routes it through
-// its undo-preserving insertText) — nothing here mutates anything.
+// its undo-preserving insertText) — nothing here mutates anything. The list
+// toggles (toggleLinePrefix('bullet', ...), toggleOrderedList) may return
+// null when the selection has nothing a list can apply to (e.g. a
+// heading-only selection) — callers must treat null as a no-op.
 
 // Clamp a selection into [0, body.length] and normalize start <= end.
 function clamp(body, start, end) {
@@ -98,22 +101,31 @@ export function toggleInline(body, start, end, { left, right }) {
 
 const HEADING_PREFIXES = ['', '# ', '## ', '### '];
 
-// Cycle the caret line's heading: none -> # -> ## -> ### -> none. `#tag`
-// (no space after the hashes) is NOT a heading — same rule as tidy-markdown.
+// A line's structure prefix: indent, quote run, optional list marker. The
+// heading cycles AFTER it, so H on '1. item' yields '1. # item' — heading
+// inside the item — never '# 1. item' (which destroys the list).
+const STRUCT_RE = /^(\s*(?:> )*(?:[-*+] |\d+[.)] )?)/;
+
+// Cycle the caret line's heading: none -> # -> ## -> ### -> none, applied
+// AFTER any indent/quote/list-marker prefix so the button composes with
+// structure instead of fighting it. `#tag` (no space after the hashes) is
+// NOT a heading — same rule as tidy-markdown.
 export function cycleHeading(body, start) {
   const [s] = clamp(body, start, start);
   const lineStart = s === 0 ? 0 : body.lastIndexOf('\n', s - 1) + 1;
   let lineEnd = body.indexOf('\n', lineStart);
   if (lineEnd === -1) lineEnd = body.length;
   const line = body.slice(lineStart, lineEnd);
-  const m = /^(#{1,6})\s/.exec(line);
+  const struct = STRUCT_RE.exec(line)[1];
+  const rest0 = line.slice(struct.length);
+  const m = /^(#{1,6})\s/.exec(rest0);
   const depth = m ? Math.min(m[1].length, 3) : 0; // ####+ cycles back to none
-  const rest = m ? line.slice(m[0].length) : line;
+  const rest = m ? rest0.slice(m[0].length) : rest0;
   const next = HEADING_PREFIXES[(depth + 1) % HEADING_PREFIXES.length];
-  const insert = next + rest;
-  // Keep the caret at the same offset within the text after the prefix.
-  const offsetInRest = Math.max(0, s - lineStart - (m ? m[0].length : 0));
-  const caret = Math.min(lineStart + next.length + offsetInRest, lineStart + insert.length);
+  const insert = struct + next + rest;
+  // Keep the caret at the same offset within the text after the markers.
+  const offsetInRest = Math.max(0, s - lineStart - struct.length - (m ? m[0].length : 0));
+  const caret = Math.min(lineStart + struct.length + next.length + offsetInRest, lineStart + insert.length);
   return { replaceStart: lineStart, replaceEnd: lineEnd, insert, selStart: caret, selEnd: caret };
 }
 
@@ -130,18 +142,64 @@ function lineBlock(body, s, e) {
   return [blockStart, blockEnd];
 }
 
-const LINE_PREFIX = {
-  bullet: { has: /^(\s*)- /, add: '- ' },
-  quote: { has: /^(\s*)> /, add: '> ' },
+// The quote run at the start of a line (after indent) — the slot where list
+// markers insert, so buttons compose in markdown's own order.
+const QUOTES_RE = /^(\s*(?:> )*)/;
+
+// Heading directly after the quote run (no list marker in front). '#tag'
+// (no space after the hashes) is content, not a heading — tidy parity.
+function isHeadingAfterQuotes(line) {
+  return /^#{1,6}\s/.test(line.slice(QUOTES_RE.exec(line)[0].length));
+}
+
+const LIST_KINDS = {
+  bullet: { has: /^(\s*(?:> )*)- /, add: () => '- ' },
+  ordered: { has: /^(\s*(?:> )*)\d+\. /, add: (n) => `${n}. ` },
 };
 
-// Toggle a per-line prefix over every selected line. If ALL non-blank lines
+// Shared engine for the two LIST buttons. Skips blank lines AND heading
+// lines (maintainer decision: headings are structure, not list content —
+// numbering a whole note keeps its title a title), inserts markers after
+// any quote run, and returns null when the selection has nothing a list
+// can apply to (the editor treats null as a no-op).
+function toggleListMarker(body, start, end, kind) {
+  const { has, add } = LIST_KINDS[kind];
+  const [s, e] = clamp(body, start, end);
+  const [blockStart, blockEnd] = lineBlock(body, s, e);
+  const lines = body.slice(blockStart, blockEnd).split('\n');
+  const blank = (l) => l.trim() === '';
+  const eligibleLine = (l) => !blank(l) && !isHeadingAfterQuotes(l);
+  let targets = lines.filter(eligibleLine);
+  let allBlankMode = false;
+  if (!targets.length) {
+    if (!lines.every(blank)) return null; // headings only — list buttons never touch headings
+    targets = lines; // caret on an empty line: start a list there
+    allBlankMode = true;
+  }
+  const isTarget = (l) => allBlankMode || eligibleLine(l);
+  const allHave = targets.every((l) => has.test(l));
+  let n = 0;
+  const out = lines.map((l) => {
+    if (!isTarget(l)) return l;
+    if (allHave) return l.replace(has, '$1');
+    if (kind === 'bullet' && has.test(l)) return l; // mixed: keep existing bullets
+    const stripped = kind === 'ordered' ? l.replace(has, '$1') : l;
+    return stripped.replace(QUOTES_RE, (q) => q + add(++n));
+  });
+  const insert = out.join('\n');
+  return { replaceStart: blockStart, replaceEnd: blockEnd, insert, selStart: blockStart, selEnd: blockStart + insert.length };
+}
+
+const QUOTE_PREFIX = { has: /^(\s*)> /, add: '> ' };
+
+// Toggle the quote prefix over every selected line. If ALL non-blank lines
 // already carry it, remove it; otherwise add it to the lines missing it (after
 // any indent). Blank lines inside a block are skipped — no trailing-space
 // lines (Tidy would strip them anyway). The whole rewritten block is selected,
-// so pressing the button twice round-trips.
-export function toggleLinePrefix(body, start, end, kind) {
-  const { has, add } = LINE_PREFIX[kind];
+// so pressing the button twice round-trips. Quoting a heading is legitimate
+// (unlike the list buttons) so headings are not skipped here.
+function toggleQuotePrefix(body, start, end) {
+  const { has, add } = QUOTE_PREFIX;
   const [s, e] = clamp(body, start, end);
   const [blockStart, blockEnd] = lineBlock(body, s, e);
   const lines = body.slice(blockStart, blockEnd).split('\n');
@@ -157,25 +215,19 @@ export function toggleLinePrefix(body, start, end, kind) {
   return { replaceStart: blockStart, replaceEnd: blockEnd, insert, selStart: blockStart, selEnd: blockStart + insert.length };
 }
 
-const ORDERED_HAS = /^(\s*)\d+\. /;
+// Toggle a per-line prefix ('bullet' or 'quote') over the selection. Bullet
+// routes through the shared list engine (heading-skip rule); quote keeps its
+// own, unrelated logic — quoting a heading is legitimate.
+export function toggleLinePrefix(body, start, end, kind) {
+  if (kind === 'bullet') return toggleListMarker(body, start, end, 'bullet');
+  return toggleQuotePrefix(body, start, end);
+}
 
 // Same toggle shape as toggleLinePrefix, but numbering is SEQUENTIAL: adding
-// renumbers every non-blank line 1..n (stripping any stale number first), so a
-// mixed or misnumbered block always comes out clean.
+// renumbers every non-blank, non-heading line 1..n (stripping any stale
+// number first), so a mixed or misnumbered block always comes out clean.
 export function toggleOrderedList(body, start, end) {
-  const [s, e] = clamp(body, start, end);
-  const [blockStart, blockEnd] = lineBlock(body, s, e);
-  const lines = body.slice(blockStart, blockEnd).split('\n');
-  const nonBlank = lines.filter((l) => l.trim() !== '');
-  const allHave = nonBlank.length > 0 && nonBlank.every((l) => ORDERED_HAS.test(l));
-  let n = 0;
-  const out = lines.map((l) => {
-    if (l.trim() === '' && nonBlank.length > 0) return l;
-    if (allHave) return l.replace(ORDERED_HAS, '$1');
-    return l.replace(ORDERED_HAS, '$1').replace(/^(\s*)/, `$1${++n}. `);
-  });
-  const insert = out.join('\n');
-  return { replaceStart: blockStart, replaceEnd: blockEnd, insert, selStart: blockStart, selEnd: blockStart + insert.length };
+  return toggleListMarker(body, start, end, 'ordered');
 }
 
 // Wrap the selection as a markdown link. With a selection, it becomes the link

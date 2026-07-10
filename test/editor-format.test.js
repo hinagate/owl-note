@@ -81,4 +81,20 @@ describe('format bar in the editor', () => {
     ta.dispatchEvent(ev);
     expect(ta.value).toBe('hello world'); // unchanged — composition must never be clobbered
   });
+
+  it('numbered-list button skips the heading line', () => {
+    render({ body: '## T\nx' });
+    const ta = document.querySelector('textarea.note-body');
+    ta.setSelectionRange(0, 6);
+    document.querySelector('.format-ordered-list').dispatchEvent(mousedown());
+    expect(ta.value).toBe('## T\n1. x');
+  });
+
+  it('list button on only a heading line does nothing and does not throw', () => {
+    render({ body: '## T' });
+    const ta = document.querySelector('textarea.note-body');
+    ta.setSelectionRange(0, 4);
+    document.querySelector('.format-bullet-list').dispatchEvent(mousedown());
+    expect(ta.value).toBe('## T');
+  });
 });
