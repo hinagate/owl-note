@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toggleInline, cycleHeading, toggleLinePrefix, toggleOrderedList } from '../src/lib/format.js';
+import { toggleInline, cycleHeading, toggleLinePrefix, toggleOrderedList, insertLink } from '../src/lib/format.js';
 
 // Apply an edit object to a body string — the same splice editor.js performs.
 export function applyEdit(body, edit) {
@@ -138,5 +138,21 @@ describe('toggleOrderedList', () => {
 
   it('renumbers a mixed block cleanly', () => {
     expect(applyEdit('5. a\nb', toggleOrderedList('5. a\nb', 0, 6))).toBe('1. a\n2. b');
+  });
+});
+
+describe('insertLink', () => {
+  it('turns a selection into the link text and selects the url slot', () => {
+    const e = insertLink('pick me', 0, 4);
+    const body = applyEdit('pick me', e);
+    expect(body).toBe('[pick](url) me');
+    expect(body.slice(e.selStart, e.selEnd)).toBe('url');
+  });
+
+  it('collapsed caret inserts a placeholder with the text slot selected', () => {
+    const e = insertLink('x', 1, 1);
+    const body = applyEdit('x', e);
+    expect(body).toBe('x[text](url)');
+    expect(body.slice(e.selStart, e.selEnd)).toBe('text');
   });
 });

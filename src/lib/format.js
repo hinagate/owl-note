@@ -126,3 +126,16 @@ export function toggleOrderedList(body, start, end) {
   const insert = out.join('\n');
   return { replaceStart: blockStart, replaceEnd: blockEnd, insert, selStart: blockStart, selEnd: blockStart + insert.length };
 }
+
+// Wrap the selection as a markdown link. With a selection, it becomes the link
+// TEXT and the `url` placeholder is selected (type/paste the address next).
+// Collapsed, a full placeholder is inserted with `text` selected.
+export function insertLink(body, start, end) {
+  let [s, e] = clamp(body, start, end);
+  [s, e] = trimEdges(body, s, e);
+  if (s === e) {
+    return { replaceStart: s, replaceEnd: e, insert: '[text](url)', selStart: s + 1, selEnd: s + 5 };
+  }
+  const sel = body.slice(s, e);
+  return { replaceStart: s, replaceEnd: e, insert: `[${sel}](url)`, selStart: s + sel.length + 3, selEnd: s + sel.length + 6 };
+}
