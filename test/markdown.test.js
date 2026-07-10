@@ -99,3 +99,17 @@ describe('markdown math', () => {
     expect(() => renderMarkdown('$\\frac{1}{$')).not.toThrow();
   });
 });
+
+describe('format-bar inline HTML (underline / highlight)', () => {
+  it('keeps <u> and <mark> through sanitization', () => {
+    const html = renderMarkdown('a <u>b</u> and <mark>c</mark>');
+    expect(html).toContain('<u>b</u>');
+    expect(html).toContain('<mark>c</mark>');
+  });
+
+  it('still strips a script smuggled next to allowed inline HTML', () => {
+    const html = renderMarkdown('<u>ok</u><script>alert(1)</script>');
+    expect(html).toContain('<u>ok</u>');
+    expect(html).not.toContain('<script');
+  });
+});
