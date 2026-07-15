@@ -1,6 +1,6 @@
 // Copy the designer-supplied, size-specific icons into the extension build.
-// Keeping these exact renders avoids re-cropping the artwork and preserves the
-// intended spacing and small-size detail in Chrome's toolbar and tab strip.
+// The 16 px and 32 px renders use the head-only artwork so it stays legible in
+// Chrome's toolbar. Larger extension and store icons keep the full owl.
 import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';
 
 const sizes = [16, 32, 48, 128];
