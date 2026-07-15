@@ -94,6 +94,38 @@ describe('editor', () => {
     expect(el.querySelector('.preview img')).not.toBeNull();
   });
 
+  it('opens preview photos in an enlarged view and closes it with Escape', () => {
+    const el = document.getElementById('editor');
+    renderEditor(el, { body: '![A bird](https://example.test/bird.png)' });
+    const previewImage = el.querySelector('.preview img');
+    const lightbox = el.querySelector('.image-lightbox');
+    expect(previewImage.title).toContain('enlarge');
+    previewImage.click();
+    expect(lightbox.hidden).toBe(false);
+    expect(lightbox.querySelector('.image-lightbox-image').src).toContain('bird.png');
+    expect(lightbox.querySelector('.image-lightbox-zoom').textContent).toBe('100%');
+    lightbox.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, cancelable: true }));
+    expect(lightbox.querySelector('.image-lightbox-zoom').textContent).toBe('115%');
+    expect(lightbox.querySelector('.image-lightbox-image').style.transform).toBe('scale(1.15)');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(lightbox.hidden).toBe(true);
+  });
+
+  it('finds text within the current note from the right side of the format bar', () => {
+    const el = document.getElementById('editor');
+    renderEditor(el, { body: 'Owl one\nno match\nowl two' });
+    const bar = el.querySelector('.format-bar');
+    const search = bar.querySelector('.note-search');
+    const input = search.querySelector('.note-search-input');
+    expect(bar.lastElementChild).toBe(search);
+    input.value = 'owl';
+    input.dispatchEvent(new Event('input'));
+    expect(search.querySelector('.note-search-count').textContent).toBe('1/2');
+    expect(el.querySelectorAll('.note-body-highlights .note-search-hit')).toHaveLength(2);
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    expect(search.querySelector('.note-search-count').textContent).toBe('2/2');
+  });
+
   it('renders a Delete button only when onDelete is provided, and fires it', () => {
     const el = document.getElementById('editor');
     const onDelete = vi.fn();

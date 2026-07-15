@@ -759,6 +759,7 @@ async function refreshNoteList() {
   ui.selected = new Set([...ui.selected].filter((h) => Hset.has(h)));
   renderNoteList(document.getElementById('note-list'), {
     notes: list,
+    query: ui.query,
     driveEnabled,
     activeHandle: ui.activeBookmarkId ?? ui.activeLocalId ?? (isDraft ? DRAFT_ID : null),
     onOpen: (handle) => {
@@ -781,6 +782,7 @@ async function refreshNoteList() {
     onClearSelection: () => { ui.selected = new Set(); refreshNoteList(); },
     onOpenFocused: () => { if (H[ui.focus]) openHandle(H[ui.focus]); },
     onBatchDelete: () => batchTrash(),
+    onAsk: askPanel ? () => askPanel.open(document.activeElement) : null,
   });
 }
 
@@ -1540,6 +1542,26 @@ async function doImportFiles(files) {
 
 // Boot is implemented incrementally; guarded so tests importing saveNote don't run UI.
 export async function boot() {
+  // Chrome's "Create shortcut" launches app.html itself, bypassing action.onClicked.
+  // Register every app tab so action clicks still find it on browsers that predate
+  // runtime.getContexts. Plain launches are deduplicated; #note bookmarks only register.
+  if (chrome.runtime?.sendMessage) {
+    try {
+      const currentTab = await chrome.tabs?.getCurrent?.();
+      const claim = await chrome.runtime.sendMessage({
+        type: 'owl-app-opened',
+        dedupe: !location.hash,
+        tabId: currentTab?.id,
+        windowId: currentTab?.windowId,
+      });
+      if (claim?.reused) {
+        // The worker removes tab-backed duplicates. window.close is the fallback for
+        // Chrome shortcut/app-window contexts that do not expose a tab id.
+        try { window.close(); } catch { /* best-effort */ }
+        return;
+      }
+    } catch { /* service worker unavailable — continue booting this tab */ }
+  }
   if (!(await selfTest(createNote({ body: 'self-test' })))) {
     toast('Encoding self-test failed — saving disabled', true);
     return;

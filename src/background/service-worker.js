@@ -7,6 +7,8 @@ import { saveNote } from '../lib/save-note.js';
 import { buildQuickNote } from '../lib/quick-note.js';
 
 const SAVE_SELECTION_ID = 'owl-save-selection';
+const APP_OPENED_MESSAGE = 'owl-app-opened';
+const APP_TAB_KEY = 'owl:appTab';
 // A one-shot signal the app tab watches (chrome.storage.onChanged): after a capture it
 // jumps to All notes (root) so the new note shows on top. Carries {id, at} — a fresh
 // timestamp each time so back-to-back captures always register as a change.
@@ -19,7 +21,7 @@ export async function handleInstalled() {
 }
 
 export async function handleActionClick() {
-  await chrome.tabs.create({ url: 'app.html' });
+  await focusOrOpenApp();
 }
 
 // Save the right-clicked selection as a note (selection + a markdown source link), then
@@ -46,6 +48,47 @@ export async function handleSaveSelection(info, tab) {
 // tabs.update/windows.update activate+focus without it either. Any gap — old Chrome with
 // no getContexts, a query error, a since-closed tab — falls through to opening a new tab.
 export async function focusOrOpenApp() {
+  if (await focusExistingApp()) return;
+  // Fallback also guarded: nothing may escape (the note + signal may already be saved,
+  // and this can run as a fire-and-forget callback).
+  try { await chrome.tabs.create({ url: 'app.html' }); } catch { /* best-effort */ }
+}
+
+// Focus an existing app tab, optionally excluding the newly opened launcher tab.
+// The exclusion powers Chrome's "Create shortcut" flow: app.html starts in a fresh
+// window, identifies itself through sender.tab.id, and asks us to reuse an older tab.
+function appTabStore() {
+  // session survives MV3 service-worker sleeps but clears with the browser, so a tab
+  // id can never go stale across a browser restart. Older browsers fall back to local;
+  // a failed tabs.update below validates and clears that stale entry before use.
+  return chrome.storage?.session || chrome.storage?.local;
+}
+
+async function rememberAppTab(tabId, windowId) {
+  if (typeof tabId !== 'number' || tabId < 0) return;
+  try { await appTabStore()?.set?.({ [APP_TAB_KEY]: { tabId, windowId } }); } catch { /* best-effort */ }
+}
+
+async function forgetAppTab() {
+  try { await appTabStore()?.remove?.(APP_TAB_KEY); } catch { /* best-effort */ }
+}
+
+export async function focusExistingApp(excludeTabId = null, excludeDocumentId = null) {
+  // Primary path after an app page has launched once: focus its registered tab id.
+  // This works on browsers older than runtime.getContexts (Chrome 116).
+  try {
+    const remembered = (await appTabStore()?.get?.(APP_TAB_KEY))?.[APP_TAB_KEY];
+    if (typeof remembered?.tabId === 'number' && remembered.tabId >= 0 && remembered.tabId !== excludeTabId) {
+      await chrome.tabs.update(remembered.tabId, { active: true });
+      if (typeof remembered.windowId === 'number' && remembered.windowId >= 0) {
+        try { await chrome.windows?.update?.(remembered.windowId, { focused: true }); } catch { /* best-effort */ }
+      }
+      return true;
+    }
+  } catch {
+    await forgetAppTab(); // tab closed or a legacy stored id is no longer valid
+  }
+
   try {
     const base = chrome.runtime?.getURL?.('app.html');
     if (base && chrome.runtime?.getContexts) {
@@ -55,7 +98,8 @@ export async function focusOrOpenApp() {
       // documentUrls:[base] filter would exact-match the full URL spec and MISS those,
       // spawning a duplicate tab. Prefix-match instead.
       const ctxs = await chrome.runtime.getContexts({ contextTypes: ['TAB'] });
-      const ctx = (ctxs || []).find((c) => typeof c.tabId === 'number' && c.tabId >= 0
+      const ctx = (ctxs || []).find((c) => typeof c.tabId === 'number' && c.tabId >= 0 && c.tabId !== excludeTabId
+        && (!excludeDocumentId || c.documentId !== excludeDocumentId)
         && typeof c.documentUrl === 'string'
         && (c.documentUrl === base || c.documentUrl.startsWith(`${base}#`)));
       if (ctx) {
@@ -63,14 +107,34 @@ export async function focusOrOpenApp() {
         if (typeof ctx.windowId === 'number' && ctx.windowId >= 0) {
           try { await chrome.windows?.update?.(ctx.windowId, { focused: true }); } catch { /* window focus is best-effort */ }
         }
-        return;
+        await rememberAppTab(ctx.tabId, ctx.windowId);
+        return true;
       }
     }
-  } catch { /* getContexts/update unavailable or failed — open a fresh tab instead */ }
-  // Fallback also guarded: nothing may escape (the note + signal are already saved, and
-  // this runs as a fire-and-forget context-menu callback — an unhandled rejection helps
-  // no one and skips flashSaved).
-  try { await chrome.tabs.create({ url: 'app.html' }); } catch { /* best-effort */ }
+  } catch { /* getContexts/update unavailable or failed */ }
+  return false;
+}
+
+// A plain app.html opened through Chrome's desktop shortcut reports itself here. Reply
+// before removing the duplicate so its boot can stop cleanly; hash-linked note bookmarks
+// deliberately do not send this message.
+export function handleRuntimeMessage(message, sender, sendResponse) {
+  if (!message || message.type !== APP_OPENED_MESSAGE) return undefined;
+  // getCurrent() data supplied by app.html is a fallback for shortcut/app-window
+  // contexts where Chrome omits sender.tab.
+  const senderTabId = sender?.tab?.id ?? message.tabId;
+  const senderWindowId = sender?.tab?.windowId ?? message.windowId;
+  const checkExisting = message.dedupe === false
+    ? Promise.resolve(false)
+    : focusExistingApp(senderTabId, sender?.documentId);
+  checkExisting.then(async (reused) => {
+    if (!reused) await rememberAppTab(senderTabId, senderWindowId);
+    sendResponse?.({ reused });
+    if (reused && typeof senderTabId === 'number') {
+      setTimeout(() => chrome.tabs?.remove?.(senderTabId)?.catch?.(() => {}), 0);
+    }
+  }).catch(() => sendResponse?.({ reused: false }));
+  return true;
 }
 
 // Brief ✓ on the toolbar icon as save confirmation (best-effort; no extra permission).
@@ -97,6 +161,7 @@ export function wireEvents() {
   /* eslint-disable no-undef */
   const c = typeof chrome !== 'undefined' ? chrome : undefined;
   c?.runtime?.onInstalled?.addListener(handleInstalled);
+  c?.runtime?.onMessage?.addListener(handleRuntimeMessage);
   c?.action?.onClicked?.addListener(handleActionClick);
   c?.contextMenus?.onClicked?.addListener(handleSaveSelection);
   c?.bookmarks?.onChanged?.addListener(handleBookmarkChanged);

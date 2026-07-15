@@ -155,6 +155,85 @@ export function renderEditor(
     ta.setSelectionRange(edit.selStart, edit.selEnd);
   };
   renderFormatBar(formatBar, { apply: applyFormat, actions: fmtActions });
+
+  // Compact current-note search lives at the right edge of the formatting row. It
+  // highlights every body match without taking focus away while the user is typing;
+  // Enter / Shift+Enter cycles forward / backward.
+  const noteSearch = document.createElement('div');
+  noteSearch.className = 'note-search';
+  noteSearch.setAttribute('role', 'search');
+  const noteSearchIcon = document.createElement('span');
+  noteSearchIcon.className = 'note-search-icon';
+  noteSearchIcon.textContent = '⌕';
+  noteSearchIcon.setAttribute('aria-hidden', 'true');
+  const noteSearchInput = document.createElement('input');
+  noteSearchInput.type = 'search';
+  noteSearchInput.className = 'note-search-input';
+  noteSearchInput.placeholder = 'Find in note…';
+  noteSearchInput.setAttribute('aria-label', 'Find in current note');
+  noteSearchInput.title = 'Find in current note (Enter for next, Shift+Enter for previous)';
+  const noteSearchCount = document.createElement('output');
+  noteSearchCount.className = 'note-search-count';
+  noteSearchCount.setAttribute('aria-live', 'polite');
+  noteSearch.append(noteSearchIcon, noteSearchInput, noteSearchCount);
+  formatBar.appendChild(noteSearch);
+
+  let searchMatches = [];
+  let activeSearchMatch = 0;
+
+  function collectSearchMatches() {
+    const query = noteSearchInput.value;
+    searchMatches = [];
+    if (!query) return;
+    const haystack = ta.value.toLocaleLowerCase();
+    const needle = query.toLocaleLowerCase();
+    if (!needle) return;
+    let from = 0;
+    while (from <= haystack.length - needle.length) {
+      const start = haystack.indexOf(needle, from);
+      if (start < 0) break;
+      searchMatches.push({ start, end: start + query.length });
+      from = start + Math.max(needle.length, 1);
+    }
+  }
+
+  function scrollToSearchMatch() {
+    if (!searchMatches.length) return;
+    const match = searchMatches[activeSearchMatch];
+    ta.setSelectionRange(match.start, match.end);
+    const line = ta.value.slice(0, match.start).split('\n').length - 1;
+    const lineHeight = Number.parseFloat(getComputedStyle(ta).lineHeight) || 24;
+    ta.scrollTop = Math.max(0, line * lineHeight - ta.clientHeight / 3);
+    backdrop.scrollTop = ta.scrollTop;
+  }
+
+  function updateNoteSearch({ reset = false, scroll = false } = {}) {
+    collectSearchMatches();
+    if (reset || activeSearchMatch >= searchMatches.length) activeSearchMatch = 0;
+    const hasQuery = !!noteSearchInput.value;
+    noteSearchCount.hidden = !hasQuery;
+    noteSearchCount.textContent = hasQuery
+      ? (searchMatches.length ? `${activeSearchMatch + 1}/${searchMatches.length}` : '0/0')
+      : '';
+    noteSearch.classList.toggle('no-match', hasQuery && !searchMatches.length);
+    renderHighlights();
+    if (scroll) scrollToSearchMatch();
+  }
+
+  noteSearchInput.addEventListener('input', () => updateNoteSearch({ reset: true, scroll: true }));
+  noteSearchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      noteSearchInput.value = '';
+      updateNoteSearch({ reset: true });
+      ta.focus();
+      return;
+    }
+    if (e.key !== 'Enter' || !searchMatches.length) return;
+    e.preventDefault();
+    activeSearchMatch = (activeSearchMatch + (e.shiftKey ? -1 : 1) + searchMatches.length) % searchMatches.length;
+    updateNoteSearch({ scroll: true });
+  });
   editPane.append(titleRow, formatBar, bodyWrap);
   const attachBar = document.createElement('div');
   attachBar.className = 'attachments-bar';
@@ -188,6 +267,85 @@ export function renderEditor(
   content.className = 'preview-content';
   preview.appendChild(content);
 
+  // Preview image lightbox. Event delegation on `content` survives every Markdown
+  // refresh (including the later Drive-image replacement).
+  const lightbox = document.createElement('div');
+  lightbox.className = 'image-lightbox';
+  lightbox.hidden = true;
+  lightbox.setAttribute('role', 'dialog');
+  lightbox.setAttribute('aria-modal', 'true');
+  lightbox.setAttribute('aria-label', 'Enlarged note image');
+  const lightboxZoom = document.createElement('output');
+  lightboxZoom.className = 'image-lightbox-zoom';
+  lightboxZoom.setAttribute('aria-live', 'polite');
+  const lightboxClose = document.createElement('button');
+  lightboxClose.type = 'button';
+  lightboxClose.className = 'image-lightbox-close';
+  lightboxClose.textContent = '×';
+  lightboxClose.setAttribute('aria-label', 'Close enlarged image');
+  const lightboxImage = document.createElement('img');
+  lightboxImage.className = 'image-lightbox-image';
+  lightbox.append(lightboxZoom, lightboxClose, lightboxImage);
+  let lightboxOpener = null;
+  let lightboxScale = 1;
+
+  function setLightboxScale(value) {
+    lightboxScale = Math.min(5, Math.max(0.5, Math.round(value * 100) / 100));
+    lightboxImage.style.transform = `scale(${lightboxScale})`;
+    lightboxZoom.value = `${Math.round(lightboxScale * 100)}%`;
+    lightboxZoom.textContent = lightboxZoom.value;
+  }
+
+  function closeLightbox() {
+    if (lightbox.hidden) return;
+    lightbox.hidden = true;
+    lightboxImage.removeAttribute('src');
+    setLightboxScale(1);
+    lightboxOpener?.focus?.();
+    lightboxOpener = null;
+  }
+
+  function openLightbox(img) {
+    lightboxOpener = img;
+    lightboxImage.src = img.currentSrc || img.src;
+    lightboxImage.alt = img.alt || 'Enlarged note image';
+    lightbox.hidden = false;
+    setLightboxScale(1);
+    lightboxClose.focus();
+  }
+
+  function decoratePreviewImages(root) {
+    for (const img of root.querySelectorAll('img')) {
+      img.tabIndex = 0;
+      img.title = img.title || 'Click to enlarge';
+      img.setAttribute('role', 'button');
+      img.setAttribute('aria-label', `Enlarge ${img.alt || 'note image'}`);
+    }
+  }
+
+  content.addEventListener('click', (e) => {
+    const img = e.target.closest?.('img');
+    if (!img || !content.contains(img)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openLightbox(img);
+  });
+  content.addEventListener('keydown', (e) => {
+    const img = e.target.closest?.('img');
+    if (!img || !content.contains(img) || (e.key !== 'Enter' && e.key !== ' ')) return;
+    e.preventDefault();
+    openLightbox(img);
+  });
+  lightboxClose.addEventListener('click', closeLightbox);
+  lightbox.addEventListener('click', (e) => { if (e.target === lightbox) closeLightbox(); });
+  lightbox.addEventListener('wheel', (e) => {
+    if (lightbox.hidden) return;
+    e.preventDefault();
+    setLightboxScale(lightboxScale * (e.deltaY < 0 ? 1.15 : (1 / 1.15)));
+  }, { passive: false });
+  const onLightboxKeydown = (e) => { if (e.key === 'Escape' && !lightbox.hidden) closeLightbox(); };
+  document.addEventListener('keydown', onLightboxKeydown);
+
   // Clickable notebook path for the open note (📓 Notes › Work › Research). Empty
   // when no note is open — CSS hides the row via :empty.
   const crumbs = document.createElement('nav');
@@ -202,7 +360,7 @@ export function renderEditor(
     crumbs.appendChild(cb);
   });
 
-  container.append(crumbs, bar, split);
+  container.append(crumbs, bar, split, lightbox);
   growTitle(); // size the title to its content now that it's in the DOM
   // Recompute the auto-grown title height when the edit pane's width changes (pane drag /
   // window resize): a title that now wraps to more lines would otherwise clip (UI audit).
@@ -324,6 +482,7 @@ export function renderEditor(
         bodyEl.innerHTML = renderMarkdown(linkifyFileRefs(resolved));
         decorateCodeBlocks(content);
         wireFileLinks(content);
+        decoratePreviewImages(content);
       }
     } finally { resolving = false; }
   }
@@ -334,11 +493,18 @@ export function renderEditor(
   const escHtml = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
   function renderHighlights() {
     const text = ta.value;
+    const ranges = [];
+    for (const m of text.matchAll(HL_RE)) ranges.push({ start: m.index, end: m.index + m[0].length, kind: 'attachment' });
+    searchMatches.forEach((m, index) => ranges.push({ ...m, kind: index === activeSearchMatch ? 'search-active' : 'search' }));
+    ranges.sort((a, b) => a.start - b.start || (a.kind.startsWith('search') ? -1 : 1));
     let html = '';
     let last = 0;
-    for (const m of text.matchAll(HL_RE)) {
-      html += escHtml(text.slice(last, m.index)) + '<mark>' + escHtml(m[0]) + '</mark>';
-      last = m.index + m[0].length;
+    for (const range of ranges) {
+      if (range.start < last) continue;
+      const cls = range.kind === 'attachment' ? 'attachment-ref'
+        : (range.kind === 'search-active' ? 'note-search-hit active' : 'note-search-hit');
+      html += escHtml(text.slice(last, range.start)) + `<mark class="${cls}">` + escHtml(text.slice(range.start, range.end)) + '</mark>';
+      last = range.end;
     }
     backdrop.innerHTML = html + escHtml(text.slice(last)) + '\n'; // trailing \n keeps the last line aligned
     backdrop.scrollTop = ta.scrollTop;
@@ -360,8 +526,9 @@ export function renderEditor(
     content.appendChild(bodyEl);
     decorateCodeBlocks(content);
     wireFileLinks(content);
+    decoratePreviewImages(content);
     renderChips();
-    renderHighlights();
+    updateNoteSearch();
     resolveDriveImages().catch(() => {});
     updateSize();
   };
@@ -505,7 +672,7 @@ export function renderEditor(
     getAttachments: () => atts,
     replaceBody, // [Task E10] undo-preserving whole-body replace (Format's Apply path)
     flush: () => doSave({ auto: true }),
-    destroy: () => { clearTimeout(saveTimer); titleRO?.disconnect(); }, // cancel pending auto-save + stop observing on teardown
+    destroy: () => { clearTimeout(saveTimer); titleRO?.disconnect(); document.removeEventListener('keydown', onLightboxKeydown); }, // cancel pending auto-save + stop observing on teardown
   };
 }
 

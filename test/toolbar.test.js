@@ -84,4 +84,14 @@ describe('toolbar', () => {
     await new Promise((r) => setTimeout(r)); // let the async change handler settle
     expect(box.checked).toBe(false); // reverted because enable() resolved false
   });
+
+  it('places Ask Owl at the far-right edge and fires its handler', () => {
+    const onAsk = vi.fn();
+    const el = document.getElementById('toolbar');
+    renderToolbar(el, opts({ onAsk, onToggleDrive: vi.fn() }));
+    const ask = el.querySelector('.ask-owl-button');
+    expect(el.lastElementChild).toBe(ask);
+    ask.click();
+    expect(onAsk).toHaveBeenCalledTimes(1);
+  });
 });

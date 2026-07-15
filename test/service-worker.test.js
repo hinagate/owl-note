@@ -9,6 +9,54 @@ import { getBackup } from '../src/lib/mirror.js';
 beforeEach(() => installFakeChrome());
 
 describe('service worker handlers', () => {
+  it('the extension icon focuses an existing OWL-Note tab instead of opening a duplicate', async () => {
+    const base = chrome.runtime.getURL('app.html');
+    chrome.runtime.getContexts = async () => [{ contextType: 'TAB', tabId: 8, windowId: 2, documentUrl: `${base}#note` }];
+    const updated = []; const created = [];
+    chrome.tabs.update = async (id, opts) => { updated.push([id, opts]); };
+    chrome.tabs.create = async (opts) => { created.push(opts); };
+    await sw.handleActionClick();
+    expect(updated).toEqual([[8, { active: true }]]);
+    expect(created).toEqual([]);
+  });
+
+  it('a plain desktop-shortcut launch focuses the older app tab and closes only the duplicate', async () => {
+    const base = chrome.runtime.getURL('app.html');
+    chrome.runtime.getContexts = async () => [
+      { contextType: 'TAB', tabId: 7, windowId: 2, documentUrl: `${base}#open-note` },
+      { contextType: 'TAB', tabId: 99, windowId: 5, documentUrl: base },
+    ];
+    const updated = []; const removed = [];
+    chrome.tabs.update = async (id, opts) => { updated.push([id, opts]); };
+    chrome.tabs.remove = async (id) => { removed.push(id); };
+    let response = null;
+    expect(sw.handleRuntimeMessage({ type: 'owl-app-opened' }, { tab: { id: 99 } }, (value) => { response = value; })).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(response).toEqual({ reused: true });
+    expect(updated).toEqual([[7, { active: true }]]);
+    expect(removed).toEqual([99]);
+  });
+
+  it('reuses a registered app tab when runtime.getContexts is unavailable', async () => {
+    chrome.runtime.getContexts = undefined; // Chrome < 116 / browser without the API
+    const updated = []; const created = [];
+    chrome.tabs.update = async (id, opts) => { updated.push([id, opts]); };
+    chrome.tabs.create = async (opts) => { created.push(opts); };
+
+    let registered = null;
+    sw.handleRuntimeMessage(
+      { type: 'owl-app-opened', dedupe: false, tabId: 41, windowId: 6 },
+      {},
+      (value) => { registered = value; },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(registered).toEqual({ reused: false });
+
+    await sw.handleActionClick();
+    expect(updated).toEqual([[41, { active: true }]]);
+    expect(created).toEqual([]);
+  });
+
   it('handleInstalled creates the Notes root', async () => {
     await sw.handleInstalled();
     const children = await chrome.bookmarks.getChildren('2');

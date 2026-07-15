@@ -75,15 +75,15 @@ export function renderToolbar(container, { query = '', onSearch, onExportMarkdow
 
   container.append(searchWrap, exportWrap, importBtn, importInput);
 
-  // "Ask your notes" drawer opener. Rendered only when the app supplies a handler
-  // (optional-handler pattern, like onToggleDrive). Opening the drawer is a plain
-  // synchronous action — no user-gesture-sensitive work happens here.
+  // "Ask your notes" drawer opener. Build it here, but append it LAST below so it
+  // owns the toolbar's right margin even when the optional Drive control is present.
+  let askBtn = null;
   if (onAsk) {
-    const askBtn = document.createElement('button');
+    askBtn = document.createElement('button');
+    askBtn.className = 'ask-owl-button';
     askBtn.textContent = '🦉 Ask Owl';
     askBtn.title = 'Ask Owl';
     askBtn.addEventListener('click', () => onAsk());
-    container.append(askBtn);
   }
 
   // Drive sync opt-in toggle. Rendered only when the app supplies a handler.
@@ -113,4 +113,6 @@ export function renderToolbar(container, { query = '', onSearch, onExportMarkdow
     driveWrap.append(driveBox, driveText);
     container.append(driveWrap);
   }
+
+  if (askBtn) container.append(askBtn);
 }

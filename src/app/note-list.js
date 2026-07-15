@@ -1,5 +1,5 @@
 // src/app/note-list.js
-export function renderNoteList(container, { notes, activeHandle, onOpen = () => {}, onTogglePin = () => {}, onNew = () => {}, trashView = false, onRestore = () => {}, onDeleteForever = () => {}, onEmptyTrash = () => {}, selected = new Set(), focusIndex = -1, onCardClick = null, onMove = () => {}, onSelectAll = () => {}, onClearSelection = () => {}, onOpenFocused = () => {}, onBatchDelete = () => {}, driveEnabled = false }) {
+export function renderNoteList(container, { notes, activeHandle, onOpen = () => {}, onTogglePin = () => {}, onNew = () => {}, trashView = false, onRestore = () => {}, onDeleteForever = () => {}, onEmptyTrash = () => {}, selected = new Set(), focusIndex = -1, onCardClick = null, onMove = () => {}, onSelectAll = () => {}, onClearSelection = () => {}, onOpenFocused = () => {}, onBatchDelete = () => {}, driveEnabled = false, query = '', onAsk = null }) {
   // Fall back to onOpen for plain clicks when no modifier-aware handler is provided
   // (maintains backward compat with unit tests that pass onOpen directly).
   const _cardClick = onCardClick ?? ((idx, handle, mod) => { if (!mod.ctrl && !mod.shift) onOpen(handle); });
@@ -16,10 +16,25 @@ export function renderNoteList(container, { notes, activeHandle, onOpen = () => 
     bar.appendChild(empty);
     container.appendChild(bar);
     if (!notes.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
       const p = document.createElement('p');
-      p.className = 'empty';
-      p.textContent = 'Trash is empty.';
-      container.appendChild(p);
+      if (String(query).trim()) {
+        p.textContent = 'No keyword matches. Try Ask Owl for semantic search.';
+        empty.appendChild(p);
+        if (onAsk) {
+          const ask = document.createElement('button');
+          ask.type = 'button';
+          ask.className = 'empty-ask';
+          ask.textContent = '🦉 Ask Owl';
+          ask.addEventListener('click', () => onAsk());
+          empty.appendChild(ask);
+        }
+      } else {
+        p.textContent = 'Trash is empty.';
+        empty.appendChild(p);
+      }
+      container.appendChild(empty);
       return;
     }
     for (const n of notes) {
@@ -77,10 +92,25 @@ export function renderNoteList(container, { notes, activeHandle, onOpen = () => 
   }
 
   if (!notes.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
     const p = document.createElement('p');
-    p.className = 'empty';
-    p.textContent = 'No notes yet.';
-    container.appendChild(p);
+    if (String(query).trim()) {
+      p.textContent = 'No keyword matches. Try Ask Owl for semantic search.';
+      empty.appendChild(p);
+      if (onAsk) {
+        const ask = document.createElement('button');
+        ask.type = 'button';
+        ask.className = 'empty-ask';
+        ask.textContent = '🦉 Ask Owl';
+        ask.addEventListener('click', () => onAsk());
+        empty.appendChild(ask);
+      }
+    } else {
+      p.textContent = 'No notes yet.';
+      empty.appendChild(p);
+    }
+    container.appendChild(empty);
     return;
   }
   let ndIndex = -1;

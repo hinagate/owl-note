@@ -25,6 +25,17 @@ describe('note list', () => {
     expect(el.textContent).toContain('No notes');
   });
 
+  it('suggests Ask Owl when a keyword search has no matches', () => {
+    const onAsk = vi.fn();
+    const el = document.getElementById('note-list');
+    renderNoteList(el, { notes: [], activeHandle: null, query: 'conceptual phrase', onAsk });
+    expect(el.textContent).toContain('No keyword matches');
+    expect(el.textContent).toContain('semantic search');
+    expect(el.textContent).not.toContain('No notes yet');
+    el.querySelector('.empty-ask').click();
+    expect(onAsk).toHaveBeenCalledTimes(1);
+  });
+
   it('renders a snippet from the note body when present', () => {
     const el = document.getElementById('note-list');
     renderNoteList(el, {
