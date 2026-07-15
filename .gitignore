@@ -10,6 +10,7 @@ Thumbs.db
 node_modules/
 dist/
 *.log
+owl-note-*.zip
 screenshots/
 docs/
 
