@@ -59,10 +59,10 @@ export function renderToolbar(container, { query = '', onSearch, onExportMarkdow
   });
   exportWrap.append(exportBtn, menu);
 
-  // Import (smart: .json / .zip / .md / .enex / .docx)
+  // Import (smart: .owl-note / .json / .zip / .md / .enex / .docx)
   const importInput = document.createElement('input');
   importInput.type = 'file';
-  importInput.accept = '.json,.zip,.md,.enex,.docx';
+  importInput.accept = '.owl-note,.json,.zip,.md,.enex,.docx';
   importInput.multiple = true;
   importInput.style.display = 'none';
   importInput.addEventListener('change', () => {

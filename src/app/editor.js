@@ -8,7 +8,7 @@ import { renderFormatBar, formatActions } from './format-bar.js';
 
 export function renderEditor(
   container,
-  { title = '', body = '', attachments = [], onChange = () => {}, onSave = () => {}, onDelete = null, focusTitle = false, measure = null, breadcrumb = [], onNavigate = () => {}, onSuggestTitle = null },
+  { title = '', body = '', attachments = [], onChange = () => {}, onSave = () => {}, onDelete = null, focusTitle = false, measure = null, breadcrumb = [], onNavigate = () => {}, onSuggestTitle = null, shareActions = [] },
 ) {
   container.innerHTML = '';
   // Images live in `atts` (as data: URIs); the body only carries short owl-img refs.
@@ -20,6 +20,55 @@ export function renderEditor(
   const save = document.createElement('button');
   save.className = 'save primary';
   save.textContent = 'Save';
+
+  const shareWrap = document.createElement('div');
+  shareWrap.className = 'menu-wrap share-wrap';
+  const shareBtn = document.createElement('button');
+  shareBtn.type = 'button';
+  shareBtn.className = 'share-button';
+  shareBtn.textContent = 'Share ▾';
+  shareBtn.setAttribute('aria-haspopup', 'menu');
+  shareBtn.setAttribute('aria-expanded', 'false');
+  const shareMenu = document.createElement('div');
+  shareMenu.className = 'menu share-menu';
+  shareMenu.setAttribute('role', 'menu');
+  shareMenu.hidden = true;
+  const shareItems = new Map();
+  const shareSnapshot = () => ({
+    title: titleInput.value,
+    body: ta.value,
+    attachments: pruneAttachments(ta.value, atts),
+  });
+  for (const action of shareActions) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'menu-item';
+    item.textContent = action.label;
+    item.hidden = !!action.hidden;
+    item.disabled = !!action.disabled;
+    item.setAttribute('role', 'menuitem');
+    item.addEventListener('click', async () => {
+      shareMenu.hidden = true;
+      shareBtn.setAttribute('aria-expanded', 'false');
+      shareBtn.disabled = true;
+      try { await action.run(shareSnapshot()); }
+      finally { shareBtn.disabled = false; }
+    });
+    shareItems.set(action.id, item);
+    shareMenu.appendChild(item);
+  }
+  shareBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    shareMenu.hidden = !shareMenu.hidden;
+    shareBtn.setAttribute('aria-expanded', String(!shareMenu.hidden));
+  });
+  const closeShareMenu = (event) => {
+    if (shareWrap.contains(event.target)) return;
+    shareMenu.hidden = true;
+    shareBtn.setAttribute('aria-expanded', 'false');
+  };
+  document.addEventListener('click', closeShareMenu);
+  shareWrap.append(shareBtn, shareMenu);
 
   const status = document.createElement('span'); // subtle auto-save status: Unsaved… / Saving… / Saved ✓
   status.className = 'save-status';
@@ -66,7 +115,7 @@ export function renderEditor(
   readingHint.textContent = '📖 Reading mode';
 
   // viewBtn (« / ») sits to the LEFT of Save — a quick "preview only" reading toggle.
-  bar.append(viewBtn, save, codeBtn, imgBtn, imgInput, fileBtn, fileInput, listBtn, readingHint);
+  bar.append(viewBtn, save, shareWrap, codeBtn, imgBtn, imgInput, fileBtn, fileInput, listBtn, readingHint);
 
   if (onDelete) {
     const del = document.createElement('button');
@@ -671,8 +720,14 @@ export function renderEditor(
     getTitle: () => titleInput.value,
     getAttachments: () => atts,
     replaceBody, // [Task E10] undo-preserving whole-body replace (Format's Apply path)
+    setShareActionVisible: (id, visible) => { const item = shareItems.get(id); if (item) item.hidden = !visible; },
     flush: () => doSave({ auto: true }),
-    destroy: () => { clearTimeout(saveTimer); titleRO?.disconnect(); document.removeEventListener('keydown', onLightboxKeydown); }, // cancel pending auto-save + stop observing on teardown
+    destroy: () => {
+      clearTimeout(saveTimer);
+      titleRO?.disconnect();
+      document.removeEventListener('keydown', onLightboxKeydown);
+      document.removeEventListener('click', closeShareMenu);
+    }, // cancel pending auto-save + stop observing on teardown
   };
 }
 

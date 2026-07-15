@@ -53,6 +53,30 @@ describe('editor panel toggles', () => {
   });
 });
 
+describe('note Share menu', () => {
+  it('sits beside Save and passes the latest unsaved snapshot to an action', async () => {
+    const run = vi.fn();
+    render({ shareActions: [{ id: 'export', label: 'Export this note as .owl-note', run }] });
+    const bar = document.querySelector('.editor-bar');
+    const children = [...bar.children];
+    expect(children.indexOf(bar.querySelector('.save')) + 1).toBe(children.indexOf(bar.querySelector('.share-wrap')));
+    document.querySelector('.note-title').value = 'Fresh title';
+    document.querySelector('.note-body').value = 'Fresh body';
+    bar.querySelector('.share-button').click();
+    bar.querySelector('.share-menu .menu-item').click();
+    await Promise.resolve();
+    expect(run).toHaveBeenCalledWith({ title: 'Fresh title', body: 'Fresh body', attachments: [] });
+  });
+
+  it('reveals the Drive action when Drive sync is enabled later', () => {
+    const api = render({ shareActions: [{ id: 'drive', label: 'Create Drive share link', hidden: true, run: vi.fn() }] });
+    const item = document.querySelector('.share-menu .menu-item');
+    expect(item.hidden).toBe(true);
+    api.setShareActionVisible('drive', true);
+    expect(item.hidden).toBe(false);
+  });
+});
+
 describe('paste image into the editor', () => {
   it('inserts a downscaled image ref + attachment from a pasted image item', async () => {
     const api = render({ body: '' });

@@ -79,4 +79,22 @@ export async function deleteFile(fileId) {
   await authedFetch(`${DRIVE_FILES_URL}/${fileId}`, { method: 'DELETE' });
 }
 
+// Publish one app-created file as read-only and return its normal Drive viewer URL.
+// `drive.file` is sufficient because OWL-Note created the file itself.
+export async function createPublicShareLink(fileId) {
+  const encodedId = encodeURIComponent(fileId);
+  const meta = await (await authedFetch(
+    `${DRIVE_FILES_URL}/${encodedId}?fields=webViewLink,permissions(id,type,role)`,
+  )).json();
+  const alreadyPublic = (meta.permissions || []).some((p) => p.type === 'anyone' && p.role === 'reader');
+  if (!alreadyPublic) {
+    await authedFetch(`${DRIVE_FILES_URL}/${encodedId}/permissions?sendNotificationEmail=false`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'anyone', role: 'reader' }),
+    });
+  }
+  return meta.webViewLink || `https://drive.google.com/file/d/${encodedId}/view?usp=sharing`;
+}
+
 export { authedFetch };

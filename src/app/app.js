@@ -34,6 +34,13 @@ import { suggestTitle } from '../lib/providers/title.js';
 import { tidyMarkdown } from '../lib/tidy-markdown.js';
 import { renderAskPanel } from './ask-panel.js';
 import { builtinAskActions } from './ask-actions.js';
+import { buildOwlNotePackage, parseOwlNotePackage, owlNoteFilename } from '../lib/owl-note-package.js';
+import { buildNotePdf, notePdfFilename, verifiedPdfBytes, verifiedPdfFile } from '../lib/note-pdf.js';
+import * as driveClient from '../lib/drive/client.js';
+import SparkMD5 from 'spark-md5';
+import { showShareLinkDialog } from './share-link-dialog.js';
+import { showPdfShareDialog } from './pdf-share-dialog.js';
+import { updatePdfProgress, hidePdfProgress } from './pdf-progress.js';
 // [Task E18] The first-run Welcome note content + its fixed id. Single source: this
 // module both creates the note (below) and gates the E17 sample offer's "only-welcome"
 // case on WELCOME_NOTE_ID, so no id string is duplicated across the two features.
@@ -166,7 +173,7 @@ export async function reconcileLocalToDrive(save = saveNote) {
 
 const recentIds = []; // ids of notes created this session — float to the top until reload (in-memory)
 
-const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1, indexReady: null };
+const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1, indexReady: null, driveEnabled: false };
 
 export function resetUI() {
   ui.rootId = null;
@@ -186,6 +193,7 @@ export function resetUI() {
   ui.isNew = false;
   ui.selected = new Set(); ui.anchor = null; ui.focus = -1;
   ui.indexReady = null;
+  ui.driveEnabled = false;
   // Drop the Ask drawer/controller so the next initUI rebinds to the fresh DOM
   // (test harnesses replace document.body between runs).
   if (askPanel && askPanel.destroy) askPanel.destroy();
@@ -995,15 +1003,18 @@ async function refreshPanes() {
     trashActive: ui.activeFolder === ui.trashId,
     onOpenTrash: async () => { ui.selected = new Set(); ui.anchor = null; ui.focus = -1; ui.activeFolder = ui.trashId; await refreshPanes(); },
   });
+  ui.driveEnabled = await isEnabled();
   renderToolbar(document.getElementById('toolbar'), {
     query: ui.query,
     onSearch: async (q) => { ui.selected = new Set(); ui.anchor = null; ui.focus = -1; ui.query = q; await refreshNoteList(); },
     onExportMarkdown: () => doExportMarkdown(),
     onExportJson: doExport,
     onImport: (files) => doImportFiles(files),
-    driveEnabled: await isEnabled(),
+    driveEnabled: ui.driveEnabled,
     onToggleDrive: async (checked) => {
       const result = await toggleDriveSync(checked);
+      ui.driveEnabled = result;
+      ui.editor?.setShareActionVisible?.('drive', result);
       await refreshNoteList(); // refresh note-card sync badges right after toggling
       return result;
     },
@@ -1133,6 +1144,11 @@ function renderCurrentEditor(opts = {}) {
       if (title === null) toast("On-device AI isn't available — enable it in the Ask panel", true);
       return title;
     },
+    shareActions: [
+      { id: 'pdf', label: 'Share with PDF', run: shareNoteWithPdf },
+      { id: 'drive', label: 'Create Drive share link', hidden: !ui.driveEnabled, run: createDriveShareLink },
+      { id: 'owl-note', label: 'Export this note as .owl-note', run: exportSharedOwlNote },
+    ],
   });
   // Every note open/close/switch funnels through this function, so this one call
   // keeps the Ask drawer's context chip following the open note live (not just at
@@ -1315,6 +1331,89 @@ async function doExport() {
   URL.revokeObjectURL(a.href);
 }
 
+function downloadBlob(blob, filename) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+async function exportSharedOwlNote(snapshot) {
+  try {
+    toast('Creating .owl-note package…');
+    const blob = await buildOwlNotePackage({ ...ui.current, ...snapshot }, getBytes);
+    downloadBlob(blob, owlNoteFilename(snapshot.title));
+    toast('Editable .owl-note copy exported');
+  } catch (error) {
+    console.warn('OWL-Note package export failed:', error);
+    toast("Couldn't export this note — an attachment may be unavailable", true);
+  }
+}
+
+async function pdfForSnapshot(snapshot) {
+  updatePdfProgress({ percent: 0, label: 'Creating PDF…' });
+  try {
+    return await buildNotePdf(
+      { ...ui.current, ...snapshot },
+      { onProgress: ({ percent }) => updatePdfProgress({ percent, label: 'Creating PDF…' }) },
+    );
+  } catch (error) {
+    hidePdfProgress();
+    throw error;
+  }
+}
+
+async function createDriveShareLink(snapshot) {
+  try {
+    if (!(await isEnabled())) {
+      ui.driveEnabled = false;
+      ui.editor?.setShareActionVisible?.('drive', false);
+      toast('Enable Drive sync to create a Drive share link', true);
+      return;
+    }
+    const blob = await pdfForSnapshot(snapshot);
+    updatePdfProgress({ percent: null, label: 'Uploading PDF to Drive…' });
+    const bytes = await verifiedPdfBytes(blob);
+    const hash = `share-${SparkMD5.ArrayBuffer.hash(bytes.buffer)}`;
+    let fileId = await driveClient.findByHash(hash);
+    if (!fileId) {
+      fileId = await driveClient.uploadFile({
+        name: notePdfFilename(snapshot.title),
+        mime: 'application/pdf',
+        bytes,
+        hash,
+      });
+    }
+    const link = await driveClient.createPublicShareLink(fileId);
+    showShareLinkDialog(link);
+    hidePdfProgress();
+    toast('Read-only Drive share link created');
+  } catch (error) {
+    hidePdfProgress();
+    console.warn('Drive share failed:', error);
+    toast("Couldn't create the Drive share link", true);
+  }
+}
+
+async function shareNoteWithPdf(snapshot) {
+  try {
+    const blob = await pdfForSnapshot(snapshot);
+    const file = await verifiedPdfFile(blob, notePdfFilename(snapshot.title));
+    showPdfShareDialog({
+      file,
+      title: snapshot.title,
+      download: (readyFile) => downloadBlob(readyFile, readyFile.name),
+      onShared: () => toast('PDF shared'),
+    });
+    hidePdfProgress();
+  } catch (error) {
+    hidePdfProgress();
+    console.warn('PDF share failed:', error);
+    toast("Couldn't create the PDF", true);
+  }
+}
+
 // Gather every saved note from the bookmark tree, decode it, and build the
 // per-note markdown file list. Pure of DOM/download concerns so it is testable.
 export async function collectExportEntries(root, fetchDriveBody = noteDrive.loadNoteBody) {
@@ -1456,7 +1555,13 @@ export async function importFiles(files, onProgress) {
     const discover = (n) => { progress.total += n; pending += n; report(); };
     const step = () => { progress.done += 1; pending -= 1; report(); };
     try {
-      if (name.endsWith('.zip')) {
+      if (name.endsWith('.owl-note')) {
+        const imported = await parseOwlNotePackage(new Uint8Array(await file.arrayBuffer()));
+        // A shared note is always an independent editable copy, never an update of
+        // the sender's original id (even if this package is imported twice).
+        await importOne({ ...imported, id: undefined }, root, ctx);
+        step();
+      } else if (name.endsWith('.zip')) {
         const entries = (await unzip(new Uint8Array(await file.arrayBuffer())))
           .filter((e) => e.path.toLowerCase().endsWith('.md'));
         discover(entries.length); step(); // file parsed; each entry is now its own unit

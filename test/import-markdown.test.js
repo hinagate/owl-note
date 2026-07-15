@@ -5,6 +5,7 @@ import * as bm from '../src/lib/bookmarks.js';
 import { decode } from '../src/lib/codec.js';
 import { zipFiles } from '../src/lib/zip.js';
 import { importFiles } from '../src/app/app.js';
+import { buildOwlNotePackage } from '../src/lib/owl-note-package.js';
 
 beforeEach(() => installFakeChrome());
 
@@ -25,6 +26,25 @@ async function notesByTitle(root) {
 }
 
 describe('importFiles', () => {
+  it('imports an .owl-note as a fresh editable copy with its photo', async () => {
+    const root = await bm.ensureRoot();
+    const blob = await buildOwlNotePackage({
+      id: 'sender-id',
+      title: 'Shared Copy',
+      body: '![owl](owl-img:pic1)',
+      attachments: [{ id: 'pic1', name: 'owl.png', mime: 'image/png', dataUri: 'data:image/png;base64,AQID' }],
+    });
+    const buffer = await blob.arrayBuffer();
+    const portable = { name: 'Shared Copy.owl-note', arrayBuffer: async () => buffer, text: async () => '' };
+    await importFiles([portable]);
+    await importFiles([portable]);
+    const imported = [];
+    for (const row of await bm.allNotes(root)) imported.push(await decode(row.payload));
+    expect(imported).toHaveLength(2);
+    expect(new Set(imported.map((note) => note.id)).size).toBe(2);
+    expect(imported.every((note) => note.id !== 'sender-id')).toBe(true);
+    expect(imported[0].attachments[0].dataUri).toBe('data:image/png;base64,AQID');
+  });
   it('imports a zip, recreating notebooks from folders (Inbox -> root)', async () => {
     const root = await bm.ensureRoot();
     const file = await zipFile('export.zip', [

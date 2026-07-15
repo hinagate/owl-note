@@ -97,7 +97,13 @@ export function renderSidebar(
       del.className = 'nb-delete';
       del.title = 'Delete notebook';
       del.textContent = '🗑';
-      del.addEventListener('click', (e) => { e.stopPropagation(); onDeleteNotebook(node.id); });
+      del.addEventListener('click', (e) => {
+        e.stopPropagation();
+        // The callback performs several asynchronous bookmark mutations. Keep a
+        // late refresh failure from escaping the click handler as an unhandled
+        // rejection (especially if the view is torn down while it is finishing).
+        Promise.resolve(onDeleteNotebook(node.id)).catch((err) => console.warn('delete notebook failed', err));
+      });
       row.appendChild(del);
     }
 

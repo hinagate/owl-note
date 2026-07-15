@@ -33,12 +33,12 @@ describe('toolbar', () => {
     expect(onExportJson).toHaveBeenCalled();
   });
 
-  it('Import accepts .json,.zip,.md (multiple) and passes selected files to onImport', () => {
+  it('Import accepts supported formats (multiple) and passes selected files to onImport', () => {
     const onImport = vi.fn();
     const el = document.getElementById('toolbar');
     renderToolbar(el, opts({ onImport }));
     const input = el.querySelector('input[type="file"]');
-    expect(input.accept).toBe('.json,.zip,.md,.enex,.docx');
+    expect(input.accept).toBe('.owl-note,.json,.zip,.md,.enex,.docx');
     expect(input.multiple).toBe(true);
     const f = new File(['x'], 'a.md', { type: 'text/markdown' });
     Object.defineProperty(input, 'files', { value: [f], configurable: true });
