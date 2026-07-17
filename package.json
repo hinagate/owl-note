@@ -1,6 +1,6 @@
 {
   "name": "owl-note",
-  "version": "2.3.1",
+  "version": "2.3.2",
   "private": true,
   "license": "GPL-3.0-or-later",
   "type": "module",
@@ -15,7 +15,7 @@
     "pack": "node scripts/pack.mjs"
   },
   "dependencies": {
-    "@huggingface/transformers": "^4.2.0",
+    "@huggingface/transformers": "4.2.0",
     "dompurify": "^3.1.0",
     "highlight.js": "^11.9.0",
     "html2canvas": "^1.4.1",

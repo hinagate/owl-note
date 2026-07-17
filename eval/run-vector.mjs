@@ -41,6 +41,16 @@ import {
 // weights and the runtime that uses them share one implementation and cannot drift
 // (Task V3). fusion.js is a pure module (no DOM/chrome), so it imports cleanly here.
 import { rrfFuse, RRF_K } from '../src/lib/fusion.js';
+import {
+  EMBEDDING_MODEL_ID,
+  EMBEDDING_MODEL_REVISION,
+  EMBEDDING_DTYPE,
+  EMBEDDING_POOLING,
+  EMBEDDING_NORMALIZE,
+  EMBEDDING_PASSAGE_PREFIX,
+  EMBEDDING_QUERY_PREFIX,
+  EMBEDDING_FINGERPRINT,
+} from '../src/lib/embedding-config.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -72,8 +82,20 @@ const FIXTURES_PATH = join(HERE, 'fixtures', 'vectors.json');
 // superseded by the dtype option.
 const MODELS = [
   { id: 'Xenova/all-MiniLM-L6-v2', label: 'MiniLM-L6-v2', docPrefix: '', queryPrefix: '' },
-  { id: 'Xenova/multilingual-e5-small', label: 'multilingual-e5-small', docPrefix: 'passage: ', queryPrefix: 'query: ' },
+  {
+    id: EMBEDDING_MODEL_ID,
+    revision: EMBEDDING_MODEL_REVISION,
+    dtype: EMBEDDING_DTYPE,
+    label: E5_LABEL,
+    docPrefix: EMBEDDING_PASSAGE_PREFIX,
+    queryPrefix: EMBEDDING_QUERY_PREFIX,
+  },
 ];
+const EXTRACT_OPTS = { pooling: EMBEDDING_POOLING, normalize: EMBEDDING_NORMALIZE };
+const pipelineOptions = (model) => ({
+  dtype: model.dtype || 'q8',
+  ...(model.revision ? { revision: model.revision } : {}),
+});
 
 const f3 = (x) => x.toFixed(3);
 
@@ -161,8 +183,8 @@ async function writeFixtures({ index, chunks, golden }) {
   process.stderr.write(
     `\n[write-fixtures] loading ${model.label} (q8) + embedding ${chunks.length} chunks + ${golden.questions.length} questions...\n`,
   );
-  const extractor = await pipeline('feature-extraction', model.id, { dtype: 'q8' });
-  const embed = async (text) => (await extractor(text, { pooling: 'mean', normalize: true })).data;
+  const extractor = await pipeline('feature-extraction', model.id, pipelineOptions(model));
+  const embed = async (text) => (await extractor(text, EXTRACT_OPTS)).data;
 
   // Corpus chunks — embed the SAME cleaned `text` field the lexical index tokenizes
   // (never the raw markdown), with e5's mandatory 'passage: ' prefix.
@@ -182,6 +204,8 @@ async function writeFixtures({ index, chunks, golden }) {
 
   const fixture = {
     model: model.id, // Xenova/multilingual-e5-small, dtype q8 (int8) — see eval/RESULTS.md
+    revision: model.revision,
+    fingerprint: EMBEDDING_FINGERPRINT,
     dim, // 384
     corpusHash: corpusHash(chunks),
     chunks: chunkVecs, // { [chunkId]: base64 Float32 }
@@ -224,11 +248,11 @@ const mb = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 async function runModel(model, { corpus, golden, index, chunks, answerable }) {
   // --- load ---
   const t0 = performance.now();
-  const extractor = await pipeline('feature-extraction', model.id, { dtype: 'q8' });
+  const extractor = await pipeline('feature-extraction', model.id, pipelineOptions(model));
   const loadMs = performance.now() - t0;
 
   const embed = async (text) => {
-    const out = await extractor(text, { pooling: 'mean', normalize: true });
+    const out = await extractor(text, EXTRACT_OPTS);
     return out.data; // Float32Array (mean-pooled, L2-normalized)
   };
 
@@ -354,8 +378,8 @@ function renderPerf(perf) {
 async function runSweep({ index, chunks, answerable }) {
   const model = MODELS.find((m) => m.label === E5_LABEL);
   process.stderr.write(`\n[sweep] loading e5 + embedding ${chunks.length} chunks + ${answerable.length} queries...\n`);
-  const extractor = await pipeline('feature-extraction', model.id, { dtype: 'q8' });
-  const embed = async (text) => (await extractor(text, { pooling: 'mean', normalize: true })).data;
+  const extractor = await pipeline('feature-extraction', model.id, pipelineOptions(model));
+  const embed = async (text) => (await extractor(text, EXTRACT_OPTS)).data;
 
   const chunkVecs = [];
   for (const c of chunks) chunkVecs.push(await embed(model.docPrefix + c.text));

@@ -10,22 +10,24 @@
 // model/network code here. IndexedDB is a web API — fine in both the app page and
 // tests (via fake-indexeddb). No chrome.* APIs, no timers.
 
-// The model these vectors were produced by. Stored in the `meta` store so a future
-// model swap (different dim/geometry) can DETECT the mismatch and rebuild rather
-// than silently mixing incompatible vectors. Kept as a constant, not a param —
-// V1 has exactly one embedder (spike E15: multilingual-e5-small).
-const MODEL_ID = 'Xenova/multilingual-e5-small';
+// The complete embedding contract is stored in `meta`, so model/config changes
+// invalidate old vectors instead of mixing incompatible embedding spaces.
+import {
+  EMBEDDING_DIMENSION,
+  EMBEDDING_FINGERPRINT,
+  EMBEDDING_METADATA,
+  EMBEDDING_MODEL_ID,
+} from './embedding-config.js';
 const SCHEMA_VERSION = 1;
 const CHUNKS_STORE = 'chunks';
 const META_STORE = 'meta';
 
 // Dot product of two vectors. The embedder L2-normalizes every vector, so the dot
-// product IS the cosine similarity — no per-query normalization needed. Iterates
-// the shorter length as a guard against a mismatched-dim query vector.
+// product IS the cosine similarity — no per-query normalization needed. Dimensions
+// are validated before this helper; partial dot products are never meaningful.
 function dot(a, b) {
-  const n = Math.min(a.length, b.length);
   let s = 0;
-  for (let i = 0; i < n; i += 1) s += a[i] * b[i];
+  for (let i = 0; i < a.length; i += 1) s += a[i] * b[i];
   return s;
 }
 
@@ -45,7 +47,11 @@ function txDone(tx) {
   });
 }
 
-export function createVectorIndex({ dbName = 'owl-ask-vectors' } = {}) {
+export function createVectorIndex({
+  dbName = 'owl-ask-vectors',
+  embeddingFingerprint = EMBEDDING_FINGERPRINT,
+  expectedDimension = EMBEDDING_DIMENSION,
+} = {}) {
   let db = null;
   // chunkId -> { noteId, vector: Float32Array } — the search mirror (hot path).
   const chunks = new Map();
@@ -66,7 +72,13 @@ export function createVectorIndex({ dbName = 'owl-ask-vectors' } = {}) {
         if (!idb.objectStoreNames.contains(META_STORE)) {
           const meta = idb.createObjectStore(META_STORE, { keyPath: 'key' });
           meta.put({ key: 'schema', version: SCHEMA_VERSION });
-          meta.put({ key: 'model', model: MODEL_ID });
+          meta.put({ key: 'model', model: EMBEDDING_MODEL_ID });
+          meta.put({
+            key: 'embedding',
+            ...EMBEDDING_METADATA,
+            fingerprint: embeddingFingerprint,
+            dimension: expectedDimension,
+          });
         }
       };
       req.onsuccess = () => resolve(req.result);
@@ -74,16 +86,57 @@ export function createVectorIndex({ dbName = 'owl-ask-vectors' } = {}) {
     });
   }
 
-  // Load every stored chunk into the in-memory mirror (a few hundred chunks ×
-  // 384 floats — tiny). Vectors round-trip as { ArrayBuffer, dim }; reconstruct
-  // the Float32Array view here.
+  // Atomically compare the complete embedding contract and discard stale vectors
+  // before they can enter the in-memory mirror. Existing v1 databases have only a
+  // `model` row, so the missing fingerprint deliberately triggers one rebuild.
+  function validateEmbeddingContract() {
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction([META_STORE, CHUNKS_STORE], 'readwrite');
+      const meta = tx.objectStore(META_STORE);
+      const storedReq = meta.get('embedding');
+      let invalidated = false;
+
+      storedReq.onsuccess = () => {
+        const stored = storedReq.result;
+        if (!stored
+          || stored.fingerprint !== embeddingFingerprint
+          || stored.dimension !== expectedDimension) {
+          invalidated = true;
+          tx.objectStore(CHUNKS_STORE).clear();
+          meta.put({ key: 'model', model: EMBEDDING_MODEL_ID });
+          meta.put({
+            key: 'embedding',
+            ...EMBEDDING_METADATA,
+            fingerprint: embeddingFingerprint,
+            dimension: expectedDimension,
+          });
+        }
+      };
+      storedReq.onerror = () => reject(storedReq.error);
+      tx.oncomplete = () => resolve(invalidated);
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  }
+
+  // Load every stored chunk into the in-memory mirror. A malformed row invalidates
+  // the cache, and the normal semantic catch-up path will re-embed every note.
   async function loadMirror() {
     const tx = db.transaction(CHUNKS_STORE, 'readonly');
     const rows = await reqDone(tx.objectStore(CHUNKS_STORE).getAll());
     chunks.clear();
     notes.clear();
     for (const row of rows) {
-      chunks.set(row.id, { noteId: row.noteId, vector: new Float32Array(row.vector) });
+      const vector = new Float32Array(row.vector);
+      if (vector.length !== expectedDimension || row.dim !== expectedDimension) {
+        const clearTx = db.transaction(CHUNKS_STORE, 'readwrite');
+        clearTx.objectStore(CHUNKS_STORE).clear();
+        await txDone(clearTx);
+        chunks.clear();
+        notes.clear();
+        return;
+      }
+      chunks.set(row.id, { noteId: row.noteId, vector });
       let entry = notes.get(row.noteId);
       if (!entry) { entry = { hash: row.hash, chunkIds: [] }; notes.set(row.noteId, entry); }
       entry.chunkIds.push(row.id);
@@ -95,6 +148,18 @@ export function createVectorIndex({ dbName = 'owl-ask-vectors' } = {}) {
   // transaction is all-or-nothing — a failed request aborts it and touches nothing.
   // The in-memory mirror is updated only AFTER commit, keeping memory == db.
   function writeNote(note, vectors) {
+    if (!Array.isArray(vectors) || vectors.length !== note.chunks.length) {
+      throw new Error(
+        `vector-index: embedder returned ${vectors?.length ?? 0} vectors for ${note.chunks.length} chunks`,
+      );
+    }
+    for (const vector of vectors) {
+      if (!vector || vector.length !== expectedDimension) {
+        throw new Error(
+          `vector-index: embedding dimension ${vector?.length ?? 0} does not match expected ${expectedDimension}`,
+        );
+      }
+    }
     const existing = notes.get(note.id);
     const oldChunkIds = existing ? existing.chunkIds : [];
     // Copy each embedding into its OWN ArrayBuffer: it may be a view into a larger
@@ -126,6 +191,7 @@ export function createVectorIndex({ dbName = 'owl-ask-vectors' } = {}) {
     async open() {
       if (db) return;
       db = await openDb();
+      await validateEmbeddingContract();
       await loadMirror();
     },
 
@@ -174,6 +240,11 @@ export function createVectorIndex({ dbName = 'owl-ask-vectors' } = {}) {
     // run-to-run. [] when not open, empty, or given no query vector.
     query(queryVec, k = 8) {
       if (!db || chunks.size === 0 || !queryVec || queryVec.length === 0 || k <= 0) return [];
+      if (queryVec.length !== expectedDimension) {
+        throw new Error(
+          `vector-index: query dimension ${queryVec.length} does not match expected ${expectedDimension}`,
+        );
+      }
       const results = [];
       for (const [chunkId, entry] of chunks) {
         results.push({ chunkId, noteId: entry.noteId, score: dot(queryVec, entry.vector) });

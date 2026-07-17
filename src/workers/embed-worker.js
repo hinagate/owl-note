@@ -20,6 +20,14 @@
 //   Float32Array buffer, transferred (zero-copy) back to the page.
 
 import { pipeline, env } from '@huggingface/transformers';
+import {
+  EMBEDDING_MODEL_ID,
+  EMBEDDING_MODEL_REVISION,
+  EMBEDDING_DTYPE,
+  EMBEDDING_DIMENSION,
+  EMBEDDING_POOLING,
+  EMBEDDING_NORMALIZE,
+} from '../lib/embedding-config.js';
 
 // --- MV3 / Chrome Web Store environment lockdown ------------------------------
 // Remote CODE is a CWS policy violation; model WEIGHTS are data. So the int8 ONNX
@@ -41,16 +49,16 @@ env.backends.onnx.wasm.numThreads = 1;
 // int8 (q8) weights, mean pooling + L2 normalize -> 384-dim, dot-product-ready.
 // device:'wasm' is the only browser-specific addition — it pins the WASM EP so we
 // never fall through to a WebGPU path that would need a different .wasm artifact.
-const MODEL_ID = 'Xenova/multilingual-e5-small';
-const EXTRACT_OPTS = { pooling: 'mean', normalize: true };
+const EXTRACT_OPTS = { pooling: EMBEDDING_POOLING, normalize: EMBEDDING_NORMALIZE };
 
 // ONE pipeline instance, created lazily on the first ensure/embed.
 let pipePromise = null;
 
 function getPipeline() {
   if (!pipePromise) {
-    pipePromise = pipeline('feature-extraction', MODEL_ID, {
-      dtype: 'q8',
+    pipePromise = pipeline('feature-extraction', EMBEDDING_MODEL_ID, {
+      revision: EMBEDDING_MODEL_REVISION,
+      dtype: EMBEDDING_DTYPE,
       device: 'wasm',
       progress_callback: (p) => {
         // Untargeted load-progress; embed-client forwards these to its onProgress.
@@ -97,6 +105,11 @@ async function handleEmbed(texts) {
     // out.data is a Float32Array view into a larger pooled buffer; copy into a
     // tight Float32Array so its .buffer is exactly dim*4 bytes and transferable.
     const vec = new Float32Array(out.data);
+    if (vec.length !== EMBEDDING_DIMENSION) {
+      throw new Error(
+        `embedding dimension ${vec.length} does not match expected ${EMBEDDING_DIMENSION}`,
+      );
+    }
     dim = vec.length;
     vectors.push(vec.buffer);
   }

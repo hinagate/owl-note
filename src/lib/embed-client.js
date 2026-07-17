@@ -15,6 +15,11 @@
 // Worker API — so it stays out of app.js's bundle (the transformers weight is
 // confined to the separate embed-worker.js entry).
 
+import {
+  EMBEDDING_PASSAGE_PREFIX,
+  EMBEDDING_QUERY_PREFIX,
+} from './embedding-config.js';
+
 /**
  * @param {object} [opts]
  * @param {string} [opts.workerUrl] URL of the bundled worker, resolved relative to
@@ -106,13 +111,13 @@ export function createEmbedClient({
 
   async function embedPassages(texts) {
     // e5 document prefix (see header note).
-    const res = await post('embed', { texts: texts.map((t) => `passage: ${t}`) });
+    const res = await post('embed', { texts: texts.map((t) => EMBEDDING_PASSAGE_PREFIX + t) });
     return res.vectors.map((b) => new Float32Array(b));
   }
 
   async function embedQuery(text) {
     // e5 query prefix (see header note).
-    const res = await post('embed', { texts: [`query: ${text}`] });
+    const res = await post('embed', { texts: [EMBEDDING_QUERY_PREFIX + text] });
     return new Float32Array(res.vectors[0]);
   }
 

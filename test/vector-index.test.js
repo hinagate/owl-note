@@ -3,6 +3,12 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, vi } from 'vitest';
 import { createVectorIndex } from '../src/lib/vector-index.js';
+import {
+  EMBEDDING_DIMENSION,
+  EMBEDDING_FINGERPRINT,
+  EMBEDDING_MODEL_ID,
+  EMBEDDING_MODEL_REVISION,
+} from '../src/lib/embedding-config.js';
 
 // Small, hand-built vector space (dim 4) so query ordering is asserted against
 // KNOWN one-hot dims — never a coincidence of the fake embedder. The module is
@@ -31,7 +37,8 @@ const threeNotes = () => [
 // isolation demands a new name (except the persistence tests, which reuse one).
 let dbSeq = 0;
 const freshDb = () => `owl-test-vectors-${Date.now()}-${dbSeq++}`;
-const makeIndex = () => createVectorIndex({ dbName: freshDb() });
+const TEST_FINGERPRINT = 'test-embedding-v1';
+const makeIndex = () => makeIndexNamed(freshDb());
 
 describe('createVectorIndex — open / lifecycle', () => {
   it('is not ready before open(); query is safe (returns [])', () => {
@@ -47,11 +54,44 @@ describe('createVectorIndex — open / lifecycle', () => {
     expect(idx.stats()).toEqual({ notes: 0, chunks: 0, ready: true });
   });
 
-  it('writes the model-id meta row so a future model swap can detect + rebuild', async () => {
+  it('writes the complete pinned embedding contract to metadata', async () => {
     const name = freshDb();
-    await makeIndexNamed(name).open();
-    const row = await rawMetaGet(name, 'model');
-    expect(row.model).toBe('Xenova/multilingual-e5-small');
+    await createVectorIndex({ dbName: name }).open();
+    const row = await rawMetaGet(name, 'embedding');
+    expect(row).toMatchObject({
+      fingerprint: EMBEDDING_FINGERPRINT,
+      model: EMBEDDING_MODEL_ID,
+      revision: EMBEDDING_MODEL_REVISION,
+      dimension: EMBEDDING_DIMENSION,
+    });
+  });
+
+  it('clears persisted vectors and records the new fingerprint on mismatch', async () => {
+    const name = freshDb();
+    const old = makeIndexNamed(name, { embeddingFingerprint: 'old-space' });
+    await old.open();
+    await old.upsertMissing(threeNotes(), embed);
+    expect(old.stats().chunks).toBe(4);
+
+    const current = makeIndexNamed(name, { embeddingFingerprint: 'new-space' });
+    await current.open();
+
+    expect(current.stats()).toEqual({ notes: 0, chunks: 0, ready: true });
+    expect((await rawMetaGet(name, 'embedding')).fingerprint).toBe('new-space');
+  });
+
+  it('treats a legacy database with no fingerprint as stale', async () => {
+    const name = freshDb();
+    const old = makeIndexNamed(name);
+    await old.open();
+    await old.upsertMissing(threeNotes(), embed);
+    await rawMetaDelete(name, 'embedding');
+
+    const reopened = makeIndexNamed(name);
+    await reopened.open();
+
+    expect(reopened.stats()).toEqual({ notes: 0, chunks: 0, ready: true });
+    expect((await rawMetaGet(name, 'embedding')).fingerprint).toBe(TEST_FINGERPRINT);
   });
 });
 
@@ -81,6 +121,18 @@ describe('createVectorIndex — upsertMissing + query', () => {
     expect(idx.query(oneHot(0), 2)).toHaveLength(2);
     expect(idx.query(new Float32Array(DIM), 0)).toEqual([]);
     expect(idx.query(undefined)).toEqual([]);
+  });
+
+  it('rejects query and document vectors from a different dimension', async () => {
+    const idx = makeIndex();
+    await idx.open();
+    await idx.upsertMissing(threeNotes(), embed);
+
+    expect(() => idx.query(oneHot(0, DIM - 1))).toThrow(/query dimension 3.*expected 4/);
+    await expect(idx.upsertMissing([
+      { id: 'bad', hash: 'bad', chunks: [{ id: 'bad::0', text: 'bad' }] },
+    ], async () => [oneHot(0, DIM - 1)])).rejects.toThrow(/embedding dimension 3.*expected 4/);
+    expect(idx.stats()).toEqual({ notes: 3, chunks: 4, ready: true });
   });
 
   it('breaks score ties deterministically by chunkId (ascending)', async () => {
@@ -274,11 +326,16 @@ describe('createVectorIndex — mid-upsert embed failure (atomicity)', () => {
 });
 
 // --- helpers -------------------------------------------------------------
-function makeIndexNamed(dbName) {
-  return createVectorIndex({ dbName });
+function makeIndexNamed(dbName, overrides = {}) {
+  return createVectorIndex({
+    dbName,
+    embeddingFingerprint: TEST_FINGERPRINT,
+    expectedDimension: DIM,
+    ...overrides,
+  });
 }
 
-// Raw IDB read of a meta row, used only to prove the model-id row is persisted.
+// Raw IDB helpers used only to inspect/mutate migration metadata.
 function rawMetaGet(dbName, key) {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(dbName);
@@ -288,6 +345,21 @@ function rawMetaGet(dbName, key) {
       const g = tx.objectStore('meta').get(key);
       g.onsuccess = () => { resolve(g.result); db.close(); };
       g.onerror = () => { reject(g.error); db.close(); };
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function rawMetaDelete(dbName, key) {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(dbName);
+    req.onsuccess = () => {
+      const db = req.result;
+      const tx = db.transaction('meta', 'readwrite');
+      tx.objectStore('meta').delete(key);
+      tx.oncomplete = () => { resolve(); db.close(); };
+      tx.onerror = () => { reject(tx.error); db.close(); };
+      tx.onabort = () => { reject(tx.error); db.close(); };
     };
     req.onerror = () => reject(req.error);
   });

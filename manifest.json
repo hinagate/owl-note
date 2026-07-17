@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OWL-Note",
-  "version": "2.3.1",
+  "version": "2.3.2",
   "description": "Markdown notes that live in your browser bookmarks. Photos, attachments, built-in RAG. Free, private. Syncs via Google/Microsoft.",
   "permissions": ["bookmarks", "storage", "unlimitedStorage", "contextMenus", "activeTab", "scripting", "identity"],
   "content_security_policy": { "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'" },
