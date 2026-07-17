@@ -36,7 +36,7 @@ So I set myself one constraint: build the simplest note app I could, using only 
 - **Hybrid search** — an always-on keyword index, plus an optional on-device semantic layer (a one-time ~130 MB model) that matches "what do I pay for housing?" to a note that only says "rent: $1,400." Recall on paraphrased questions went 0.455 → 1.000 ([measured, not vibes](eval/RESULTS.md)).
 - **One-click note tools** — Summarize the open note, Tidy its Markdown (deterministic — it never rewrites your words), or suggest a title.
 - **Import & export, no lock-in** — bring in Word (`.docx`), Evernote (`.enex`), and Markdown; export everything to a zip of plain `.md` files anytime.
-- **Organize and recover** — nested notebooks and sub-notebooks, multi-select bulk actions, a Trash you can restore from, and attachments (paste or drop in images, or attach any file). Right-click any web selection → "Save selection to OWL-Note."
+- **Organize and recover** — nested notebooks and sub-notebooks, multi-select bulk actions, a Trash you can restore from, and attachments (paste or drop in images, or attach any file). Right-click any web selection → "Save selection to OWL-Note" with headings, lists, links, code, and emphasis preserved.
 - **Private by design** — no server, no telemetry, no account; Manifest V3 with minimal permissions. Auto-save with a compressed local backup on every device. Optional Google Drive sync (off by default) parks oversized notes and attachments in an "OWL-Note Sync" folder in your own Drive. ([Full privacy policy](PRIVACY.md))
 
 ## Install

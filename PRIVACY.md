@@ -1,6 +1,6 @@
 # OWL-Note privacy policy
 
-_Last updated: 2026-07-06_
+_Last updated: 2026-07-17_
 
 OWL-Note stores your notes **as bookmarks in your own browser**. A note's text
 is compressed and placed inside the bookmark's URL. A local backup copy is kept
@@ -76,6 +76,10 @@ including the Limited Use requirements.
 - `storage` and `unlimitedStorage` — for the local backup copy of your notes and
   the cached on-device semantic-search model.
 - `contextMenus` — for the "Save selection to OWL-Note" right-click item.
+- `activeTab` and `scripting` — only after you click that right-click item, to
+  read the selected fragment's formatting and convert it to Markdown. OWL-Note
+  does not receive persistent access to pages or access to pages you did not
+  explicitly capture from.
 - `identity` — only used to sign in to your own Google account if you turn on
   Drive sync.
 

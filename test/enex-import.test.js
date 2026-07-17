@@ -89,4 +89,19 @@ describe('parseEnexNotes resources', () => {
     const out = parseEnexNotes(build(`<en-media hash="deadbeef" type="image/png"/>`, ''));
     expect(out[0].body).toBe('');
   });
+
+  it('imports a web clip as readable content plus its source URL, without cached page assets', () => {
+    const out = parseEnexNotes(`<en-export><note><title>Clipped article</title>
+      <content><![CDATA[<en-note><div>Useful <b>article</b> text.</div><img src="data:image/png;base64,${img}"><en-media hash="${imgHash}" type="image/png"/></en-note>]]></content>
+      <resource><data>${img}</data><mime>image/png</mime><resource-attributes><file-name>site-icon.png</file-name></resource-attributes></resource>
+      <note-attributes><source>web.clip7</source><source-application>webclipper.evernote</source-application>
+        <source-url>https://example.com/articles/useful?id=7&amp;view=full</source-url></note-attributes>
+      </note></en-export>`);
+
+    expect(out[0].body).toBe(
+      'Source: <https://example.com/articles/useful?id=7&view=full>\n\nUseful **article** text.',
+    );
+    expect(out[0].body).not.toContain('data:image');
+    expect(out[0].body).not.toContain('site-icon.png');
+  });
 });

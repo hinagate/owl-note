@@ -5,6 +5,7 @@ import { saveBackup } from '../lib/mirror.js';
 import { createNote } from '../lib/note.js';
 import { saveNote } from '../lib/save-note.js';
 import { buildQuickNote } from '../lib/quick-note.js';
+import { captureSelectionMarkdown } from '../lib/selection-capture.js';
 
 const SAVE_SELECTION_ID = 'owl-save-selection';
 const APP_OPENED_MESSAGE = 'owl-app-opened';
@@ -24,7 +25,24 @@ export async function handleActionClick() {
   await focusOrOpenApp();
 }
 
-// Save the right-clicked selection as a note (selection + a markdown source link), then
+// Capture the selected DOM while the context-menu click grants activeTab access.
+// Restricted pages and browser-internal URLs reject injection; callers then use
+// contextMenus.selectionText as a quoted plain-text fallback.
+export async function captureRichSelection(info, tab) {
+  if (!Number.isInteger(tab?.id) || !chrome.scripting?.executeScript) return null;
+  const target = Number.isInteger(info?.frameId)
+    ? { tabId: tab.id, frameIds: [info.frameId] }
+    : { tabId: tab.id };
+  try {
+    const results = await chrome.scripting.executeScript({ target, func: captureSelectionMarkdown });
+    const captured = results?.[0]?.result;
+    return captured && typeof captured === 'object' ? captured : null;
+  } catch {
+    return null;
+  }
+}
+
+// Save the right-clicked selection as a formatted note with a source URL, then
 // bring OWL-Note to the front so the capture is immediately visible on top of All notes.
 export async function handleSaveSelection(info, tab) {
   if (info.menuItemId !== SAVE_SELECTION_ID) return;
@@ -32,7 +50,13 @@ export async function handleSaveSelection(info, tab) {
   if (!selection) return;
   const url = info.pageUrl || (tab && tab.url) || '';
   const title = (tab && tab.title) || ''; // best-effort; no `tabs` permission required
-  const { title: noteTitle, body } = buildQuickNote({ title, url, selection });
+  const rich = await captureRichSelection(info, tab);
+  const { title: noteTitle, body } = buildQuickNote({
+    title: rich?.title || title,
+    url,
+    selection,
+    selectionMarkdown: rich?.markdown || '',
+  });
   const note = createNote({ title: noteTitle, body });
   const root = await ensureRoot();
   await saveNote(note, root, undefined);

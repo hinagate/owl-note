@@ -8,4 +8,10 @@ describe('manifest', () => {
     expect(manifest.optional_host_permissions).toContain('https://www.googleapis.com/*');
     expect(manifest.optional_host_permissions).toContain('https://oauth2.googleapis.com/*');
   });
+
+  it('uses temporary active-tab scripting for formatted right-click captures', () => {
+    expect(manifest.permissions).toContain('activeTab');
+    expect(manifest.permissions).toContain('scripting');
+    expect(manifest.host_permissions || []).toEqual([]);
+  });
 });

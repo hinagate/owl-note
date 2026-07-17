@@ -68,4 +68,21 @@ describe('importFiles .enex', () => {
     expect(entry.text).toContain(`![pic.png](data:image/png;base64,${img})`);
     expect(entry.text).not.toContain('owl-img:');
   });
+
+  it('keeps web-clip text and source URL without importing its cached resources', async () => {
+    const img = 'iVBORw0KGgo=';
+    const hash = SparkMD5.ArrayBuffer.hash(b64bytes(img).buffer);
+    const enex = '<en-export><note><title>Web clip</title>'
+      + `<content><![CDATA[<en-note><div>Readable <b>content</b>.</div><img src="data:image/png;base64,${img}"><en-media hash="${hash}" type="image/png"/></en-note>]]></content>`
+      + `<resource><data>${img}</data><mime>image/png</mime><resource-attributes><file-name>cached.png</file-name></resource-attributes></resource>`
+      + '<note-attributes><source>web.clip7</source><source-application>webclipper.evernote</source-application>'
+      + '<source-url>https://example.com/article</source-url></note-attributes></note></en-export>';
+    const root = await bm.ensureRoot();
+    await importFiles([enexFile('Clips.enex', enex)]);
+
+    const folder = (await bm.listNotebooks(root)).find((n) => n.title === 'Clips');
+    const imported = await decode((await bm.listNotes(folder.id))[0].payload);
+    expect(imported.body).toBe('Source: <https://example.com/article>\n\nReadable **content**.');
+    expect(imported.attachments).toEqual([]);
+  });
 });

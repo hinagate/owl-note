@@ -10,6 +10,24 @@ function text(parent, tag) {
   return el ? el.textContent : '';
 }
 
+// Evernote Web Clipper exports both an offline ENML snapshot and the page it
+// came from. Import the useful article text and source link, but not the cached
+// page furniture (icons, avatars, tracking images, and other resources).
+function webClipSourceUrl(noteEl) {
+  const attrs = noteEl.getElementsByTagName('note-attributes')[0];
+  if (!attrs) return '';
+  const source = text(attrs, 'source').trim().toLowerCase();
+  const app = text(attrs, 'source-application').trim().toLowerCase();
+  if (!source.startsWith('web.clip') && !app.includes('webclipper')) return '';
+  const raw = text(attrs, 'source-url').trim();
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+
 function newTurndown() {
   return new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced', bulletListMarker: '-' });
 }
@@ -84,11 +102,15 @@ function addCodeBlockRule(td) {
   });
 }
 
-function enmlToMarkdown(enml, resByHash) {
+function enmlToMarkdown(enml, resByHash, { dropImages = false } = {}) {
   const td = newTurndown();
   td.use(gfm);
   addCodeBlockRule(td);
-  if (resByHash) addMediaRule(td, resByHash);
+  if (dropImages) {
+    // Full-page clips also contain ordinary <img src="data:..."> elements in
+    // addition to en-media resources. Neither should become an attachment.
+    td.addRule('webClipImages', { filter: 'img', replacement: () => '' });
+  } else if (resByHash) addMediaRule(td, resByHash);
   return td.turndown(preprocessMedia(enmlInner(enml))).trim();
 }
 
@@ -98,8 +120,15 @@ export function parseEnexNotes(xmlText) {
   for (const noteEl of Array.from(doc.getElementsByTagName('note'))) {
     const title = (text(noteEl, 'title') || 'Untitled').trim() || 'Untitled';
     const created = (text(noteEl, 'created') || '').trim();
-    const resByHash = buildResourceMap(noteEl);
-    const body = enmlToMarkdown(text(noteEl, 'content'), resByHash);
+    const sourceUrl = webClipSourceUrl(noteEl);
+    // A web clip's resources are a browser-page cache, not user attachments.
+    // Avoid even decoding/hashing them; unmatched en-media nodes drop out while
+    // Turndown preserves the snapshot's readable text and ordinary links.
+    const resByHash = sourceUrl ? null : buildResourceMap(noteEl);
+    const converted = enmlToMarkdown(text(noteEl, 'content'), resByHash, { dropImages: !!sourceUrl });
+    const body = sourceUrl
+      ? [`Source: <${sourceUrl}>`, converted].filter(Boolean).join('\n\n')
+      : converted;
     const id = 'enex-' + contentHash(created + ' ' + title + ' ' + String(body.length));
     out.push({ meta: { title, id }, title, body });
   }

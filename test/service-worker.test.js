@@ -72,7 +72,7 @@ describe('service worker handlers', () => {
     expect(backup.current.body).toBe('hello');
   });
 
-  it('handleSaveSelection saves the selected text + a source link as a note in root', async () => {
+  it('handleSaveSelection saves a quoted-text fallback + source URL in root', async () => {
     const root = await bm.ensureRoot();
     await sw.handleSaveSelection(
       { menuItemId: 'owl-save-selection', selectionText: 'LLM output here', pageUrl: 'https://chat.example/c/1' },
@@ -81,8 +81,33 @@ describe('service worker handlers', () => {
     const notes = await bm.allNotes(root);
     expect(notes.length).toBe(1);
     const note = await decode(notes[0].payload);
-    expect(note.body).toContain('LLM output here');
-    expect(note.body).toContain('[A Chat](https://chat.example/c/1)');
+    expect(note.body).toBe('> LLM output here\n\nSource: <https://chat.example/c/1>');
+  });
+
+  it('captures rich selection Markdown in the clicked frame and uses the page H1 as title', async () => {
+    const calls = [];
+    chrome.scripting = { executeScript: async (options) => {
+      calls.push(options);
+      return [{ result: {
+        title: 'Lessons From the Leaderboard: What 5,000+ Kagglers Taught Us About Improving AI Reasoning',
+        markdown: '## Lesson 1\n\nUse **verifiable** reasoning.\n\n1. Check the answer\n2. Check the trace',
+      } }];
+    } };
+    const root = await bm.ensureRoot();
+    await sw.handleSaveSelection(
+      { menuItemId: 'owl-save-selection', selectionText: 'plain fallback', pageUrl: 'https://developer.nvidia.com/blog/reasoning/', frameId: 4 },
+      { id: 19, title: 'Long browser title | NVIDIA Technical Blog', url: 'https://developer.nvidia.com/blog/reasoning/' },
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].target).toEqual({ tabId: 19, frameIds: [4] });
+    expect(typeof calls[0].func).toBe('function');
+    const note = await decode((await bm.allNotes(root))[0].payload);
+    expect(note.title).toBe('Lessons From the Leaderboard: What 5,000+ Kagglers Taught Us About Improving AI Reasoning');
+    expect(note.body).toBe(
+      '## Lesson 1\n\nUse **verifiable** reasoning.\n\n1. Check the answer\n2. Check the trace'
+      + '\n\nSource: <https://developer.nvidia.com/blog/reasoning/>',
+    );
   });
 
   it('ignores other menu items and empty selections', async () => {
