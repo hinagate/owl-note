@@ -1,8 +1,7 @@
-import html2canvas from 'html2canvas';
-import { jsPDF } from 'jspdf';
 import { renderMarkdown } from './markdown.js';
 import { inlineImagesAsync, linkifyFileRefs } from './note-images.js';
 import { getBytes } from './attachment-store.js';
+import { A4_PAGE_HEIGHT, A4_PAGE_WIDTH, createRasterPdf } from './raster-pdf.js';
 
 function safeFilename(value) {
   const cleaned = String(value || 'Untitled note')
@@ -80,8 +79,11 @@ export async function verifiedPdfFile(blob, filename, FileCtor = File) {
 // Rasterizing the rendered preview keeps photos, tables and Markdown styling together.
 // Each tall canvas slice becomes one A4 page, avoiding the huge single-image PDF pattern.
 export async function buildNotePdf(note, options = {}) {
-  const rasterize = options.rasterize || html2canvas;
-  const Pdf = options.Pdf || jsPDF;
+  // Production loads the untouched official html2canvas browser build as a
+  // separate, hash-matchable vendor file. Tests inject a rasterizer directly.
+  const rasterize = options.rasterize || globalThis.html2canvas;
+  if (typeof rasterize !== 'function') throw new Error('html2canvas library is not loaded');
+  const createPdf = options.createPdf || createRasterPdf;
   const resolveAttachment = options.resolveAttachment || getBytes;
   const report = options.onProgress || (() => {});
   report({ percent: 2, phase: 'preparing' });
@@ -110,9 +112,8 @@ export async function buildNotePdf(note, options = {}) {
   try {
     await document.fonts?.ready;
     await waitForImages(host);
-    const pdf = new Pdf({ orientation: 'portrait', unit: 'pt', format: 'a4', compress: true });
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
+    const pageWidth = A4_PAGE_WIDTH;
+    const pageHeight = A4_PAGE_HEIGHT;
     const measured = options.measureHost
       ? options.measureHost(host)
       : { width: host.getBoundingClientRect().width, height: Math.max(host.scrollHeight, host.getBoundingClientRect().height) };
@@ -126,6 +127,7 @@ export async function buildNotePdf(note, options = {}) {
     // Four A4 pages per capture stays comfortably below that limit at scale 2,
     // while avoiding one expensive DOM clone for every individual page.
     const captureHeight = cssPageHeight * 4;
+    const pages = [];
     let pageIndex = 0;
     for (let captureY = 0; captureY < totalHeight; captureY += captureHeight) {
       const height = Math.min(captureHeight, totalHeight - captureY);
@@ -141,13 +143,16 @@ export async function buildNotePdf(note, options = {}) {
       const pagePixels = Math.max(1, Math.floor(canvas.width * pageHeight / pageWidth));
       for (let y = 0; y < canvas.height; y += pagePixels) {
         const sliceHeight = Math.min(pagePixels, canvas.height - y);
-        if (pageIndex > 0) pdf.addPage();
         const slice = makePdfPage(canvas, y, sliceHeight);
         // A full-page PNG for every page makes long notes enormous and can leave
         // the Windows share sheet busy while the browser stages the file. At the
         // 2x capture resolution, high-quality JPEG remains crisp for text/photos
         // while dramatically reducing encoding time and hand-off size.
-        pdf.addImage(slice.toDataURL('image/jpeg', 0.9), 'JPEG', 0, 0, pageWidth, pageWidth * sliceHeight / canvas.width, undefined, 'FAST');
+        pages.push({
+          dataUrl: slice.toDataURL('image/jpeg', 0.9),
+          pixelWidth: slice.width,
+          pixelHeight: slice.height,
+        });
         pageIndex += 1;
         report({
           percent: Math.min(98, 10 + Math.round((pageIndex / totalPages) * 88)),
@@ -157,7 +162,7 @@ export async function buildNotePdf(note, options = {}) {
         });
       }
     }
-    const blob = pdf.output('blob');
+    const blob = createPdf(pages, { pageWidth, pageHeight });
     report({ percent: 100, phase: 'complete', page: totalPages, totalPages });
     return blob;
   } finally {

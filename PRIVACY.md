@@ -1,6 +1,6 @@
 # OWL-Note privacy policy
 
-_Last updated: 2026-07-17_
+_Last updated: 2026-07-18_
 
 OWL-Note stores your notes **as bookmarks in your own browser**. A note's text
 is compressed and placed inside the bookmark's URL. A local backup copy is kept
@@ -19,7 +19,8 @@ in the extension's `chrome.storage.local` on each device.
 Even though everything is processed locally, we disclose it plainly. OWL-Note
 handles only:
 
-- **Your note content** (titles, body text, and any attachments you add) — stored
+- **Your note content** (titles, body text, attachments you add, and web content
+  you explicitly select with the Save-selection command) — stored
   in your browser's bookmarks and its local backup, and, if you turn on Drive
   sync, in your own Google Drive. Never sent to us.
 - **A Google sign-in token** — only if you turn on Drive sync, only to access the
@@ -69,6 +70,18 @@ of your Drive. It's keyed to your Google account, and we never see it.
 OWL-Note's use of information received from Google APIs adheres to the
 [Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy),
 including the Limited Use requirements.
+
+## Explicit export and sharing
+
+- **Share with PDF** creates the PDF entirely on your device and opens the
+  operating system's share panel. OWL-Note does not send it anywhere; it leaves
+  the device only if you choose a share target, whose own privacy terms then
+  apply.
+- **Create Drive share link** is available only when Drive sync is enabled. After
+  you confirm the warning, OWL-Note uploads a PDF copy to your own Google Drive
+  and makes that one file readable by anyone who has its link. You can revoke
+  access or delete the file in Google Drive at any time.
+- Download and `.owl-note` export create local files only.
 
 ## Permissions
 

@@ -1372,6 +1372,12 @@ async function createDriveShareLink(snapshot) {
       toast('Enable Drive sync to create a Drive share link', true);
       return;
     }
+    const confirmed = window.confirm(
+      'Create a public read-only PDF link?\n\n'
+      + 'A PDF copy of this note will be stored in your Google Drive. Anyone '
+      + 'who receives the link can view it until you revoke access or delete the file in Drive.',
+    );
+    if (!confirmed) return;
     const blob = await pdfForSnapshot(snapshot);
     updatePdfProgress({ percent: null, label: 'Uploading PDF to Drive…' });
     const bytes = await verifiedPdfBytes(blob);

@@ -26,6 +26,15 @@ afterEach(async () => {
 
 const settle = (ms = 40) => new Promise((r) => setTimeout(r, ms));
 
+async function waitFor(predicate, timeoutMs = 1000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await settle(10);
+  }
+  if (!predicate()) throw new Error('Timed out waiting for live index refresh');
+}
+
 // Write a real note bookmark under `folder`, exactly as a normal save would, so
 // loadNotes() decodes it back into the corpus.
 async function seedNote(folder, { id, title, body }) {
@@ -157,11 +166,11 @@ describe('ask index lifecycle', () => {
     // Trash: real trash.js path, moves the bookmark into Trash — fires onMoved only.
     const trashId = await ensureTrash(root);
     await trashNotes([{ id: note.id, bookmarkId, folderId: root }], trashId);
-    await settle();
+    await waitFor(() => idx.query('phoenix').length === 0);
     expect(idx.query('phoenix').length).toBe(0); // gone once trashed
     // Restore: real trash.js path, moves the bookmark back out of Trash — fires onMoved only.
     await restoreNotes([{ id: note.id, bookmarkId, folderId: trashId }], root);
-    await settle();
+    await waitFor(() => idx.query('phoenix').some((hit) => hit.noteId === 'rs'));
     expect(idx.query('phoenix').some((h) => h.noteId === 'rs')).toBe(true);
     expect(idx.stats().notes).toBe(1);
   });

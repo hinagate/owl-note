@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildNotePdf, notePdfFilename, verifiedPdfBytes, verifiedPdfFile } from '../src/lib/note-pdf.js';
+import { createRasterPdf } from '../src/lib/raster-pdf.js';
 
 let originalGetContext;
 let originalToDataUrl;
@@ -12,24 +13,13 @@ beforeEach(() => {
     fillRect: vi.fn(),
     drawImage: vi.fn(),
   }));
-  HTMLCanvasElement.prototype.toDataURL = vi.fn(() => 'data:image/png;base64,AAAA');
+  HTMLCanvasElement.prototype.toDataURL = vi.fn(() => 'data:image/jpeg;base64,/9j/2Q==');
 });
 
 afterEach(() => {
   HTMLCanvasElement.prototype.getContext = originalGetContext;
   HTMLCanvasElement.prototype.toDataURL = originalToDataUrl;
 });
-
-function fakePdf() {
-  return class {
-    constructor() {
-      this.internal = { pageSize: { getWidth: () => 595, getHeight: () => 842 } };
-      this.addImage = vi.fn();
-      this.addPage = vi.fn();
-    }
-    output() { return new Blob(['pdf'], { type: 'application/pdf' }); }
-  };
-}
 
 function capturedCanvas(visible = true, width = 100, height = 100) {
   return {
@@ -39,6 +29,15 @@ function capturedCanvas(visible = true, width = 100, height = 100) {
       getImageData: () => ({ data: new Uint8ClampedArray(400).fill(visible ? 0 : 255) }),
     }),
   };
+}
+
+function readBlob(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsArrayBuffer(blob);
+  });
 }
 
 describe('note PDF capture', () => {
@@ -67,9 +66,11 @@ describe('note PDF capture', () => {
     });
     const blob = await buildNotePdf(
       { title: 'Visible title', body: 'Visible body', attachments: [] },
-      { rasterize, Pdf: fakePdf(), onProgress: (event) => progress.push(event.percent) },
+      { rasterize, onProgress: (event) => progress.push(event.percent) },
     );
     expect(blob.type).toBe('application/pdf');
+    const buffer = await readBlob(blob);
+    await expect(verifiedPdfBytes({ arrayBuffer: async () => buffer })).resolves.toHaveLength(blob.size);
     expect(document.querySelector('.pdf-note')).toBeNull();
     expect(progress[0]).toBe(2);
     expect(progress.at(-1)).toBe(100);
@@ -79,7 +80,7 @@ describe('note PDF capture', () => {
   it('rejects an all-white capture instead of uploading an empty PDF', async () => {
     await expect(buildNotePdf(
       { title: 'Should render', body: 'Body', attachments: [] },
-      { rasterize: async () => capturedCanvas(false), Pdf: fakePdf() },
+      { rasterize: async () => capturedCanvas(false) },
     )).rejects.toThrow(/capture is blank/i);
     expect(document.querySelector('.pdf-note')).toBeNull();
   });
@@ -90,7 +91,6 @@ describe('note PDF capture', () => {
       { title: 'Long note', body: 'Body', attachments: [] },
       {
         rasterize,
-        Pdf: fakePdf(),
         measureHost: () => ({ width: 794, height: 60000 }),
       },
     );
@@ -102,5 +102,19 @@ describe('note PDF capture', () => {
 
   it('sanitizes the downloaded PDF filename', () => {
     expect(notePdfFilename('Trip / July')).toBe('Trip - July.pdf');
+  });
+
+  it('writes a self-contained multipage PDF with local JPEG objects', async () => {
+    const jpeg = 'data:image/jpeg;base64,/9j/2Q==';
+    const blob = createRasterPdf([
+      { dataUrl: jpeg, pixelWidth: 100, pixelHeight: 200 },
+      { dataUrl: jpeg, pixelWidth: 100, pixelHeight: 50 },
+    ]);
+    const text = new TextDecoder('latin1').decode(await readBlob(blob));
+    expect(text.startsWith('%PDF-1.4')).toBe(true);
+    expect(text).toContain('/Count 2');
+    expect(text.match(/\/Filter \/DCTDecode/g)).toHaveLength(2);
+    expect(text).toContain('startxref');
+    expect(text.endsWith('%%EOF\n')).toBe(true);
   });
 });

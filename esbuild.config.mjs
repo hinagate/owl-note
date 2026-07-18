@@ -25,6 +25,25 @@ const stubOnnxNode = {
   },
 };
 
+// Transformers includes a browser fallback that points ONNX Runtime at
+// jsDelivr. OWL-Note always sets wasmPaths to the packaged extension root, but
+// Chrome Web Store's Blue Argon review also rejects dormant remote-code paths.
+// Rewrite that fallback to the same local directory and fail loudly if an
+// upstream update changes the source so this protection cannot silently rot.
+const forceLocalOnnxRuntime = {
+  name: 'force-local-onnx-runtime',
+  setup(b) {
+    b.onLoad({ filter: /[\\/]@huggingface[\\/]transformers[\\/](?:src[\\/]backends[\\/]onnx|dist[\\/]transformers\.web)\.js$/ }, (args) => {
+      const contents = readFileSync(args.path, 'utf8');
+      const remoteFallback = 'const wasmPathPrefix = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ONNX_ENV.versions.web}/dist/`;';
+      if (!contents.includes(remoteFallback)) {
+        throw new Error('Transformers ONNX fallback changed; verify that all runtime files remain packaged locally');
+      }
+      return { contents: contents.replace(remoteFallback, "const wasmPathPrefix = './';"), loader: 'js' };
+    });
+  },
+};
+
 await build({
   // embed-worker.js is a SECOND, self-contained iife entry (M9): only it imports
   // @huggingface/transformers, keeping the ~1MB lib out of app.js. iife format
@@ -42,7 +61,7 @@ await build({
     __OWL_DRIVE_CLIENT_ID__: JSON.stringify(creds.clientId || ''),
     __OWL_DRIVE_CLIENT_SECRET__: JSON.stringify(creds.clientSecret || ''),
   },
-  plugins: [stubOnnxNode],
+  plugins: [stubOnnxNode, forceLocalOnnxRuntime],
   minify: PROD,
   logLevel: 'info',
 });
@@ -86,5 +105,12 @@ if (existsSync(katexFonts)) cpSync(katexFonts, 'dist/fonts', { recursive: true, 
 // from our minified business logic. app.html loads it (window.mammoth) before app.js.
 const mammothBrowser = 'node_modules/mammoth/mammoth.browser.min.js';
 if (existsSync(mammothBrowser)) cpSync(mammothBrowser, 'dist/mammoth.browser.min.js');
+
+// PDF capture follows the same review-friendly vendor rule as Mammoth: copy the
+// official minified browser artifact byte-for-byte instead of mixing it into
+// app.js. The release audit verifies this exact copy before packaging.
+const html2canvasBrowser = 'node_modules/html2canvas/dist/html2canvas.min.js';
+if (existsSync(html2canvasBrowser)) cpSync(html2canvasBrowser, 'dist/html2canvas.min.js');
+else throw new Error(`Missing html2canvas browser artifact: ${html2canvasBrowser}`);
 
 console.log('Build complete -> dist/');
