@@ -21,7 +21,7 @@ export const WELCOME_NOTE_BODY = [
   '## A few things you can do',
   '',
   '- **Write in Markdown** with headings, lists, **bold**, `inline code`, and a live preview as you type.',
-  '- **Clip from any page** by right-clicking a selection and choosing **"Save selection to OWL-Note"**.',
+  '- **Clip from any page** by right-clicking a selection to save formatted text, or right-clicking the page to capture its full length as an image.',
   '- **Bring your notes with you**: import from Evernote (`.enex`), Word (`.docx`), or Markdown, and export everything back to plain `.md` files anytime. No lock-in.',
   '- **Stay organized** with notebooks you can nest and drag to rearrange.',
   '',

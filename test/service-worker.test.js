@@ -58,9 +58,15 @@ describe('service worker handlers', () => {
   });
 
   it('handleInstalled creates the Notes root', async () => {
+    const menus = [];
+    chrome.contextMenus.create = (options) => menus.push(options);
     await sw.handleInstalled();
     const children = await chrome.bookmarks.getChildren('2');
     expect(children.some((c) => c.title === '📓 Notes')).toBe(true);
+    expect(menus).toEqual([
+      { id: 'owl-save-selection', title: 'Save selection to OWL-Note', contexts: ['selection'] },
+      { id: 'owl-capture-full-page', title: 'Capture full page to OWL-Note', contexts: ['page'] },
+    ]);
   });
 
   it('mirrors a note when its bookmark changes', async () => {
@@ -128,6 +134,40 @@ describe('service worker handlers', () => {
     expect(sig).toBeTruthy();
     expect(sig.id).toBe(saved.id);       // the exact note just created
     expect(typeof sig.at).toBe('number'); // timestamp so repeated captures always change the value
+  });
+
+  it('saves a full-page JPEG as an image attachment with its source URL', async () => {
+    const root = await bm.ensureRoot();
+    const capture = async () => ({
+      dataUri: 'data:image/jpeg;base64,AQID',
+      mime: 'image/jpeg',
+      width: 1200,
+      height: 4200,
+      tiles: 5,
+    });
+    const result = await sw.handleCaptureFullPage(
+      { menuItemId: 'owl-capture-full-page', pageUrl: 'https://example.com/article' },
+      { id: 17, windowId: 2, title: 'An [Excellent] Article', url: 'https://example.com/article' },
+      capture,
+    );
+
+    expect(result).toBeTruthy();
+    const notes = await bm.allNotes(root);
+    expect(notes).toHaveLength(1);
+    const note = await decode(notes[0].payload);
+    expect(note.title).toBe('An [Excellent] Article');
+    expect(note.body).toContain('![An \\[Excellent\\] Article](owl-img:');
+    expect(note.body).toContain('Source: <https://example.com/article>');
+    expect(note.attachments).toHaveLength(1);
+    expect(note.attachments[0]).toMatchObject({
+      name: 'An [Excellent] Article.jpg',
+      mime: 'image/jpeg',
+      dataUri: 'data:image/jpeg;base64,AQID',
+      width: 1200,
+      height: 4200,
+    });
+    const sig = (await chrome.storage.local.get('owl:quickCapture'))['owl:quickCapture'];
+    expect(sig.id).toBe(note.id);
   });
 
   // Mock getContexts the way REAL chrome behaves: when a documentUrls filter is passed it

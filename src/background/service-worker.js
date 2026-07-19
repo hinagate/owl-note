@@ -1,13 +1,15 @@
 // src/background/service-worker.js
 import { ensureRoot, isNoteUrl, payloadFromUrl } from '../lib/bookmarks.js';
 import { decode } from '../lib/codec.js';
+import { captureFullPage } from '../lib/full-page-capture.js';
 import { saveBackup } from '../lib/mirror.js';
-import { createNote } from '../lib/note.js';
+import { contentHash, createNote } from '../lib/note.js';
 import { saveNote } from '../lib/save-note.js';
 import { buildQuickNote } from '../lib/quick-note.js';
 import { captureSelectionMarkdown } from '../lib/selection-capture.js';
 
 const SAVE_SELECTION_ID = 'owl-save-selection';
+const CAPTURE_FULL_PAGE_ID = 'owl-capture-full-page';
 const APP_OPENED_MESSAGE = 'owl-app-opened';
 const APP_TAB_KEY = 'owl:appTab';
 // A one-shot signal the app tab watches (chrome.storage.onChanged): after a capture it
@@ -17,8 +19,9 @@ const QUICK_CAPTURE_KEY = 'owl:quickCapture';
 
 export async function handleInstalled() {
   await ensureRoot();
-  // Right-click "Save selection to OWL-Note" — shown only when text is selected.
+  // Both commands are explicit gestures and therefore grant temporary activeTab.
   chrome.contextMenus?.create({ id: SAVE_SELECTION_ID, title: 'Save selection to OWL-Note', contexts: ['selection'] });
+  chrome.contextMenus?.create({ id: CAPTURE_FULL_PAGE_ID, title: 'Capture full page to OWL-Note', contexts: ['page'] });
 }
 
 export async function handleActionClick() {
@@ -62,9 +65,96 @@ export async function handleSaveSelection(info, tab) {
   await saveNote(note, root, undefined);
   // Signal the (possibly already-open) app tab to reveal it, THEN focus/open the tab.
   // Written first so an open tab reacts as it comes forward; best-effort, never fatal.
-  try { await chrome.storage?.local?.set?.({ [QUICK_CAPTURE_KEY]: { id: note.id, at: Date.now() } }); } catch { /* signal is best-effort */ }
+  await signalQuickCapture(note);
   await focusOrOpenApp();
   await flashSaved();
+}
+
+function cleanCaptureTitle(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim() || 'Full-page capture';
+}
+
+function captureFilename(title) {
+  const stem = cleanCaptureTitle(title)
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-')
+    .replace(/[. ]+$/g, '')
+    .slice(0, 80) || 'full-page';
+  return `${stem}.jpg`;
+}
+
+function markdownAlt(value) {
+  return cleanCaptureTitle(value).replace(/[\\\[\]]/g, '\\$&');
+}
+
+async function signalQuickCapture(note) {
+  try { await chrome.storage?.local?.set?.({ [QUICK_CAPTURE_KEY]: { id: note.id, at: Date.now() } }); } catch { /* best-effort */ }
+}
+
+async function showCaptureProgress({ completed = 0, total = 1 } = {}) {
+  try {
+    const percent = Math.min(99, Math.round((completed / Math.max(1, total)) * 100));
+    await chrome.action?.setBadgeText?.({ text: `${percent}%` });
+    await chrome.action?.setBadgeBackgroundColor?.({ color: '#3567c8' });
+    await chrome.action?.setTitle?.({ title: `OWL-Note — capturing page (${completed}/${total})` });
+  } catch { /* progress is cosmetic */ }
+}
+
+async function flashCaptureError(error) {
+  const reason = String(error?.message || error || 'Capture failed').slice(0, 160);
+  try {
+    await chrome.action?.setBadgeText?.({ text: '!' });
+    await chrome.action?.setBadgeBackgroundColor?.({ color: '#b3261e' });
+    await chrome.action?.setTitle?.({ title: `OWL-Note — ${reason}` });
+    setTimeout(() => {
+      chrome.action?.setBadgeText?.({ text: '' });
+      chrome.action?.setTitle?.({ title: 'Open OWL-Note' });
+    }, 8000);
+  } catch { /* badge is cosmetic */ }
+}
+
+// Capture before focusing OWL-Note (captureVisibleTab always targets the active
+// tab), stitch locally, then use the normal attachment and optional Drive path.
+export async function handleCaptureFullPage(info, tab, capture = captureFullPage) {
+  if (info.menuItemId !== CAPTURE_FULL_PAGE_ID) return null;
+  try {
+    await showCaptureProgress({ completed: 0, total: 1 });
+    const captured = await capture(tab, { onProgress: showCaptureProgress });
+    if (!captured?.dataUri) throw new Error('The browser returned an empty capture');
+
+    const title = cleanCaptureTitle(tab?.title);
+    const id = contentHash(captured.dataUri);
+    const attachment = {
+      id,
+      name: captureFilename(title),
+      mime: captured.mime || 'image/jpeg',
+      dataUri: captured.dataUri,
+      width: captured.width,
+      height: captured.height,
+    };
+    const imageRef = `![${markdownAlt(title)}](owl-img:${id})`;
+    const { body } = buildQuickNote({
+      title,
+      url: info.pageUrl || tab?.url || '',
+      selectionMarkdown: imageRef,
+    });
+    const note = createNote({ title, body, attachments: [attachment] });
+    const root = await ensureRoot();
+    const saved = await saveNote(note, root, undefined);
+    await signalQuickCapture(note);
+    await focusOrOpenApp();
+    await flashSaved();
+    return { note, saved, captured };
+  } catch (error) {
+    console.warn('[owl-note] Full-page capture failed:', error);
+    await flashCaptureError(error);
+    return null;
+  }
+}
+
+export function handleContextMenuClick(info, tab) {
+  if (info?.menuItemId === SAVE_SELECTION_ID) return handleSaveSelection(info, tab);
+  if (info?.menuItemId === CAPTURE_FULL_PAGE_ID) return handleCaptureFullPage(info, tab);
+  return undefined;
 }
 
 // Bring the OWL-Note app tab to the front, or open one if none exists. Permission-free:
@@ -166,6 +256,7 @@ async function flashSaved() {
   try {
     await chrome.action?.setBadgeText?.({ text: '✓' });
     await chrome.action?.setBadgeBackgroundColor?.({ color: '#2e7d32' });
+    await chrome.action?.setTitle?.({ title: 'Open OWL-Note' });
     setTimeout(() => chrome.action?.setBadgeText?.({ text: '' }), 2000);
   } catch { /* badge is cosmetic */ }
 }
@@ -187,7 +278,7 @@ export function wireEvents() {
   c?.runtime?.onInstalled?.addListener(handleInstalled);
   c?.runtime?.onMessage?.addListener(handleRuntimeMessage);
   c?.action?.onClicked?.addListener(handleActionClick);
-  c?.contextMenus?.onClicked?.addListener(handleSaveSelection);
+  c?.contextMenus?.onClicked?.addListener(handleContextMenuClick);
   c?.bookmarks?.onChanged?.addListener(handleBookmarkChanged);
   c?.bookmarks?.onCreated?.addListener((id, node) => handleBookmarkChanged(id, { url: node.url }));
 }

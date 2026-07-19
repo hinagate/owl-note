@@ -14,7 +14,7 @@ audits again, and creates `owl-note-<version>.zip`.
 Upload only that generated ZIP. Do not ZIP the repository or `node_modules/`.
 Before submission, load `dist/` as an unpacked extension and smoke-test note
 editing, semantic search/model download, DOCX import, PDF export/download/share,
-selection capture, and Google Drive sync.
+selection capture, full-page capture on a long page, and Google Drive sync.
 
 The semantic model is remote **data** pinned to an immutable revision. Its ONNX
 Runtime JavaScript, module loader, and WASM executable are packaged in `dist/`.

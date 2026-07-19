@@ -706,7 +706,7 @@ export async function initUI(rootId) {
     ui.hashWired = true;
   }
   wireLiveRefresh();
-  wireQuickCapture(); // reveal "Save selection" captures at the top of All notes
+  wireQuickCapture(); // reveal right-click captures at the top of All notes
   // Build the ask index in the background — a FLOATING promise so indexing never
   // delays first paint. .catch keeps a build failure from surfacing as an unhandled
   // rejection (best-effort, like healNoteUrls above); ui.indexReady lets tests await it.
@@ -916,7 +916,7 @@ function wireLiveRefresh() {
   c.bookmarks.onMoved?.addListener(liveRefreshNoteList);
 }
 
-// Reveal a note just captured via the "Save selection to OWL-Note" context menu: jump to
+// Reveal a note created by either OWL-Note context-menu capture command: jump to
 // All notes (root) so the new note — newest-first — sits on top, and refresh the list.
 // Deliberately does NOT open the note in the editor: renderCurrentEditor tears down the
 // live editor and CANCELS its pending auto-save (SAVE_DELAY), which could drop an

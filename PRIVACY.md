@@ -1,6 +1,6 @@
 # OWL-Note privacy policy
 
-_Last updated: 2026-07-18_
+_Last updated: 2026-07-19_
 
 OWL-Note stores your notes **as bookmarks in your own browser**. A note's text
 is compressed and placed inside the bookmark's URL. A local backup copy is kept
@@ -19,8 +19,8 @@ in the extension's `chrome.storage.local` on each device.
 Even though everything is processed locally, we disclose it plainly. OWL-Note
 handles only:
 
-- **Your note content** (titles, body text, attachments you add, and web content
-  you explicitly select with the Save-selection command) — stored
+- **Your note content** (titles, body text, attachments you add, web content
+  you explicitly select, and full-page images you explicitly capture) — stored
   in your browser's bookmarks and its local backup, and, if you turn on Drive
   sync, in your own Google Drive. Never sent to us.
 - **A Google sign-in token** — only if you turn on Drive sync, only to access the
@@ -88,11 +88,14 @@ including the Limited Use requirements.
 - `bookmarks` — to store and read your notes.
 - `storage` and `unlimitedStorage` — for the local backup copy of your notes and
   the cached on-device semantic-search model.
-- `contextMenus` — for the "Save selection to OWL-Note" right-click item.
-- `activeTab` and `scripting` — only after you click that right-click item, to
-  read the selected fragment's formatting and convert it to Markdown. OWL-Note
-  does not receive persistent access to pages or access to pages you did not
-  explicitly capture from.
+- `contextMenus` — for the "Save selection to OWL-Note" and "Capture full page
+  to OWL-Note" right-click items.
+- `activeTab` and `scripting` — only after you click one of those right-click
+  items. Selection capture reads the selected fragment's formatting and converts
+  it to Markdown. Full-page capture temporarily measures and scrolls that page,
+  captures its visible tiles with Chrome's screenshot API, stitches them locally,
+  and restores the original scroll position. OWL-Note does not receive persistent
+  page access or access pages you did not explicitly capture from.
 - `identity` — only used to sign in to your own Google account if you turn on
   Drive sync.
 
