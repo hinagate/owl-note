@@ -338,18 +338,64 @@ export function renderEditor(
   lightbox.append(lightboxZoom, lightboxClose, lightboxImage);
   let lightboxOpener = null;
   let lightboxScale = 1;
+  let lightboxPanX = 0;
+  let lightboxPanY = 0;
+  let lightboxDrag = null;
+
+  function applyLightboxTransform() {
+    const pan = lightboxPanX || lightboxPanY
+      ? `translate3d(${Math.round(lightboxPanX)}px, ${Math.round(lightboxPanY)}px, 0) `
+      : '';
+    lightboxImage.style.transform = `${pan}scale(${lightboxScale})`;
+  }
+
+  function clampLightboxPan() {
+    // getBoundingClientRect includes the current transform; dividing by scale
+    // recovers the image's fitted size. jsdom reports zeroes, so tests retain the
+    // raw drag delta while real browser views stay bounded to the image edges.
+    const rect = lightboxImage.getBoundingClientRect();
+    const viewportWidth = lightbox.clientWidth || window.innerWidth;
+    const viewportHeight = lightbox.clientHeight || window.innerHeight;
+    const baseWidth = lightboxScale ? rect.width / lightboxScale : rect.width;
+    const baseHeight = lightboxScale ? rect.height / lightboxScale : rect.height;
+    if (!baseWidth || !baseHeight || !viewportWidth || !viewportHeight) return;
+    const maxX = Math.max(0, (baseWidth * lightboxScale - viewportWidth) / 2);
+    const maxY = Math.max(0, (baseHeight * lightboxScale - viewportHeight) / 2);
+    lightboxPanX = Math.min(maxX, Math.max(-maxX, lightboxPanX));
+    lightboxPanY = Math.min(maxY, Math.max(-maxY, lightboxPanY));
+  }
+
+  function endLightboxDrag(event) {
+    if (!lightboxDrag || (event?.pointerId != null && event.pointerId !== lightboxDrag.pointerId)) return;
+    if (event?.pointerId != null && lightboxImage.hasPointerCapture?.(event.pointerId)) {
+      lightboxImage.releasePointerCapture(event.pointerId);
+    }
+    lightboxDrag = null;
+    lightboxImage.classList.remove('dragging');
+  }
 
   function setLightboxScale(value) {
     lightboxScale = Math.min(5, Math.max(0.5, Math.round(value * 100) / 100));
-    lightboxImage.style.transform = `scale(${lightboxScale})`;
+    if (lightboxScale <= 1) {
+      lightboxPanX = 0;
+      lightboxPanY = 0;
+      endLightboxDrag();
+    }
+    lightboxImage.classList.toggle('pannable', lightboxScale > 1);
+    applyLightboxTransform();
+    clampLightboxPan();
+    applyLightboxTransform();
     lightboxZoom.value = `${Math.round(lightboxScale * 100)}%`;
     lightboxZoom.textContent = lightboxZoom.value;
   }
 
   function closeLightbox() {
     if (lightbox.hidden) return;
+    endLightboxDrag();
     lightbox.hidden = true;
     lightboxImage.removeAttribute('src');
+    lightboxPanX = 0;
+    lightboxPanY = 0;
     setLightboxScale(1);
     lightboxOpener?.focus?.();
     lightboxOpener = null;
@@ -359,7 +405,10 @@ export function renderEditor(
     lightboxOpener = img;
     lightboxImage.src = img.currentSrc || img.src;
     lightboxImage.alt = img.alt || 'Enlarged note image';
+    lightboxImage.draggable = false;
     lightbox.hidden = false;
+    lightboxPanX = 0;
+    lightboxPanY = 0;
     setLightboxScale(1);
     lightboxClose.focus();
   }
@@ -393,6 +442,36 @@ export function renderEditor(
     e.preventDefault();
     setLightboxScale(lightboxScale * (e.deltaY < 0 ? 1.15 : (1 / 1.15)));
   }, { passive: false });
+  lightboxImage.addEventListener('dragstart', (e) => e.preventDefault());
+  lightboxImage.addEventListener('pointerdown', (e) => {
+    if (lightboxScale <= 1 || e.button !== 0) return;
+    e.preventDefault();
+    lightboxDrag = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      panX: lightboxPanX,
+      panY: lightboxPanY,
+    };
+    lightboxImage.setPointerCapture?.(e.pointerId);
+    lightboxImage.classList.add('dragging');
+  });
+  lightboxImage.addEventListener('pointermove', (e) => {
+    if (!lightboxDrag || (e.pointerId != null && e.pointerId !== lightboxDrag.pointerId)) return;
+    e.preventDefault();
+    lightboxPanX = lightboxDrag.panX + e.clientX - lightboxDrag.startX;
+    lightboxPanY = lightboxDrag.panY + e.clientY - lightboxDrag.startY;
+    clampLightboxPan();
+    applyLightboxTransform();
+  });
+  lightboxImage.addEventListener('pointerup', endLightboxDrag);
+  lightboxImage.addEventListener('pointercancel', endLightboxDrag);
+  const onLightboxResize = () => {
+    if (lightbox.hidden) return;
+    clampLightboxPan();
+    applyLightboxTransform();
+  };
+  window.addEventListener('resize', onLightboxResize);
   const onLightboxKeydown = (e) => { if (e.key === 'Escape' && !lightbox.hidden) closeLightbox(); };
   document.addEventListener('keydown', onLightboxKeydown);
 
@@ -695,7 +774,7 @@ export function renderEditor(
     ta.selectionStart = ta.selectionEnd = before.length + open.length + selected.length;
   });
 
-  // Shared image insertion pipeline used by the 🖼 button and paste handler.
+  // Shared image insertion pipeline used by the 🖼 button, paste, and drop.
   async function insertImageFile(file) {
     const label = imgBtn.textContent;
     imgBtn.disabled = true;
@@ -724,11 +803,9 @@ export function renderEditor(
     if (file) await insertImageFile(file);
   });
 
-  fileBtn.addEventListener('click', () => fileInput.click());
-  fileInput.addEventListener('change', async () => {
-    const file = fileInput.files && fileInput.files[0];
-    fileInput.value = '';
-    if (!file) return;
+  // Shared ordinary-file pipeline used by the File button, paste, and drop.
+  // Files become compact owl-file refs while their bytes live in attachments.
+  async function insertAttachmentFile(file) {
     const bytes = new Uint8Array(await file.arrayBuffer());
     let bin = ''; for (let k = 0; k < bytes.length; k++) bin += String.fromCharCode(bytes[k]);
     const dataUri = `data:${file.type || 'application/octet-stream'};base64,${btoa(bin)}`;
@@ -738,12 +815,35 @@ export function renderEditor(
     const before = ta.value.slice(0, start);
     const snippet = (before && !before.endsWith('\n') ? '\n' : '') + ref + '\n';
     insertText(snippet, start, ta.selectionEnd ?? start); // keeps undo alive
+  }
+
+  function filesFromTransfer(transfer) {
+    const itemFiles = [...(transfer?.items || [])]
+      .filter((item) => item.kind === 'file')
+      .map((item) => item.getAsFile?.())
+      .filter(Boolean);
+    return itemFiles.length ? itemFiles : [...(transfer?.files || [])];
+  }
+
+  async function insertTransferredFiles(files) {
+    for (const file of files) {
+      if (String(file.type || '').startsWith('image/')) await insertImageFile(file);
+      else await insertAttachmentFile(file);
+    }
+  }
+
+  fileBtn.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files && fileInput.files[0];
+    fileInput.value = '';
+    if (file) await insertAttachmentFile(file);
   });
 
-  // Paste a copied image straight into the editor (same pipeline as the 🖼 button).
+  // Paste real clipboard files through the same paths as the Image/File buttons.
+  // Plain text is untouched so the browser retains its normal paste behavior.
   ta.addEventListener('paste', async (e) => {
-    const imgs = [...(e.clipboardData?.items || [])].filter((it) => it.kind === 'file' && it.type.startsWith('image/'));
-    if (!imgs.length) {
+    const files = filesFromTransfer(e.clipboardData);
+    if (!files.length) {
       // A copied owl-img/owl-file link contains only an id; recover its attachment
       // from the source note so the preview and eventual save keep working.
       const text = e.clipboardData?.getData?.('text/plain') || '';
@@ -776,7 +876,30 @@ export function renderEditor(
       return;
     }
     e.preventDefault();
-    for (const it of imgs) { const f = it.getAsFile(); if (f) await insertImageFile(f); }
+    await insertTransferredFiles(files);
+  });
+
+  // Dragging over the body mirrors paste, with a clear target so users know both
+  // images and ordinary files can be attached here.
+  const hasDraggedFiles = (transfer) => [...(transfer?.types || [])].includes('Files')
+    || [...(transfer?.items || [])].some((item) => item.kind === 'file');
+  bodyWrap.addEventListener('dragover', (e) => {
+    if (!hasDraggedFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    bodyWrap.classList.add('file-drop-active');
+  });
+  bodyWrap.addEventListener('dragleave', (e) => {
+    if (!bodyWrap.contains(e.relatedTarget)) bodyWrap.classList.remove('file-drop-active');
+  });
+  bodyWrap.addEventListener('drop', async (e) => {
+    const files = filesFromTransfer(e.dataTransfer);
+    bodyWrap.classList.remove('file-drop-active');
+    if (!files.length) return;
+    e.preventDefault();
+    e.stopPropagation();
+    ta.focus();
+    await insertTransferredFiles(files);
   });
 
   if (focusTitle) {
@@ -796,6 +919,7 @@ export function renderEditor(
       clearTimeout(saveTimer);
       titleRO?.disconnect();
       document.removeEventListener('keydown', onLightboxKeydown);
+      window.removeEventListener('resize', onLightboxResize);
       document.removeEventListener('click', closeShareMenu);
     }, // cancel pending auto-save + stop observing on teardown
   };

@@ -67,6 +67,56 @@ describe('editor file attachments', () => {
     expect(document.querySelectorAll('.attachments-bar .attach-chip')).toHaveLength(2);
   });
 
+  it('pastes ordinary clipboard files as owl-file attachments', async () => {
+    const editor = renderEditor(document.getElementById('root'), {});
+    const textarea = document.querySelector('.note-body');
+    const pdf = fakeFile('report.pdf', 'application/pdf', 'PDF');
+    const zip = fakeFile('archive.zip', 'application/zip', 'ZIP');
+    const paste = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, 'clipboardData', {
+      value: {
+        items: [pdf, zip].map((file) => ({ kind: 'file', type: file.type, getAsFile: () => file })),
+        getData: () => '',
+      },
+    });
+
+    textarea.dispatchEvent(paste);
+    await vi.waitFor(() => expect(editor.getAttachments()).toHaveLength(2));
+
+    expect(paste.defaultPrevented).toBe(true);
+    expect(editor.getBody()).toMatch(/\[report\.pdf\]\(owl-file:[A-Za-z0-9]+\)/);
+    expect(editor.getBody()).toMatch(/\[archive\.zip\]\(owl-file:[A-Za-z0-9]+\)/);
+    expect(document.querySelectorAll('.attachments-bar .attach-chip')).toHaveLength(2);
+    editor.destroy();
+  });
+
+  it('accepts multiple dropped files and shows the attachment drop target', async () => {
+    const editor = renderEditor(document.getElementById('root'), {});
+    const textarea = document.querySelector('.note-body');
+    const bodyWrap = document.querySelector('.note-body-wrap');
+    const files = [
+      fakeFile('notes.txt', 'text/plain', 'hello'),
+      fakeFile('data.csv', 'text/csv', 'a,b'),
+    ];
+    const dragover = new Event('dragover', { bubbles: true, cancelable: true });
+    Object.defineProperty(dragover, 'dataTransfer', { value: { types: ['Files'], items: [], dropEffect: 'none' } });
+    textarea.dispatchEvent(dragover);
+
+    expect(dragover.defaultPrevented).toBe(true);
+    expect(bodyWrap.classList.contains('file-drop-active')).toBe(true);
+
+    const drop = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, 'dataTransfer', { value: { items: [], files } });
+    textarea.dispatchEvent(drop);
+    await vi.waitFor(() => expect(editor.getAttachments()).toHaveLength(2));
+
+    expect(drop.defaultPrevented).toBe(true);
+    expect(bodyWrap.classList.contains('file-drop-active')).toBe(false);
+    expect(editor.getBody()).toContain('[notes.txt](owl-file:');
+    expect(editor.getBody()).toContain('[data.csv](owl-file:');
+    editor.destroy();
+  });
+
   it('recovers a copied short image ref and renders it in the target note', async () => {
     const attachment = { id: 'copied123', name: 'owl.png', dataUri: 'data:image/png;base64,AAAA' };
     const recoverAttachments = vi.fn(async () => [attachment]);

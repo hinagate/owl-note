@@ -230,6 +230,11 @@ body.resizing { user-select: none; cursor: col-resize; }
 /* Body editor: a highlight backdrop sits behind a transparent textarea so attachment
    references get a grey box. The two layers MUST share font/padding/wrap to align 1:1. */
 .note-body-wrap { position: relative; flex: 1 1 auto; min-height: 0; background: #fff; }
+.note-body-wrap.file-drop-active::after {
+  content: 'Drop files to attach'; position: absolute; inset: 8px; z-index: 3; display: grid; place-items: center;
+  border: 2px dashed var(--accent); border-radius: 9px; background: rgba(45, 190, 96, 0.12);
+  color: var(--accent-dark); font-weight: 700; pointer-events: none;
+}
 .editor-split textarea.note-body, .note-body-highlights {
   position: absolute; inset: 0; box-sizing: border-box; margin: 0; padding: 18px 20px;
   font: 14px/1.72 ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
@@ -302,7 +307,9 @@ body.resizing { user-select: none; cursor: col-resize; }
   position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
   padding: 40px; background: rgba(15, 23, 42, 0.84); cursor: zoom-out;
 }
-.image-lightbox-image { max-width: 94vw; max-height: 90vh; object-fit: contain; border-radius: 8px; box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45); cursor: default; transform-origin: center; transition: transform 0.08s ease-out; }
+.image-lightbox-image { max-width: 94vw; max-height: 90vh; object-fit: contain; border-radius: 8px; box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45); cursor: default; transform-origin: center; transition: transform 0.08s ease-out; user-select: none; -webkit-user-drag: none; }
+.image-lightbox-image.pannable { cursor: grab; touch-action: none; }
+.image-lightbox-image.dragging { cursor: grabbing; transition: none; }
 .image-lightbox-zoom {
   position: fixed; top: 18px; left: 50%; transform: translateX(-50%); min-width: 58px; padding: 4px 10px;
   border-radius: 999px; background: rgba(0, 0, 0, 0.45); color: #fff; font-size: 12px; text-align: center;

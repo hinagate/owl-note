@@ -106,9 +106,18 @@ describe('editor', () => {
     expect(lightbox.querySelector('.image-lightbox-zoom').textContent).toBe('100%');
     lightbox.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, cancelable: true }));
     expect(lightbox.querySelector('.image-lightbox-zoom').textContent).toBe('115%');
-    expect(lightbox.querySelector('.image-lightbox-image').style.transform).toBe('scale(1.15)');
+    const enlargedImage = lightbox.querySelector('.image-lightbox-image');
+    expect(enlargedImage.style.transform).toBe('scale(1.15)');
+    expect(enlargedImage.classList.contains('pannable')).toBe(true);
+    enlargedImage.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 100, clientY: 90 }));
+    enlargedImage.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, buttons: 1, clientX: 145, clientY: 115 }));
+    expect(enlargedImage.style.transform).toBe('translate3d(45px, 25px, 0) scale(1.15)');
+    expect(enlargedImage.classList.contains('dragging')).toBe(true);
+    enlargedImage.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, button: 0, clientX: 145, clientY: 115 }));
+    expect(enlargedImage.classList.contains('dragging')).toBe(false);
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     expect(lightbox.hidden).toBe(true);
+    expect(enlargedImage.style.transform).toBe('scale(1)');
   });
 
   it('finds text within the current note from the right side of the format bar', () => {
