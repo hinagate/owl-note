@@ -42,16 +42,39 @@ export function inlineImages(body, attachments = []) {
   const byId = new Map((attachments || []).map((a) => [a.id, a]));
   return String(body ?? '').replace(REF_IMG, (whole, pre, id, post) => {
     const a = byId.get(id);
-    return a ? pre + a.dataUri + post : whole;
+    return a && a.dataUri ? pre + a.dataUri + post : whole;
   });
 }
 
-// Drop attachments whose reference (owl-img:<id> or owl-file:<id>) no longer appears in the body.
-export function pruneAttachments(body, attachments = []) {
+// Attachment ids referenced by the body, covering both images and ordinary files.
+// Keeping this in one place also lets paste/save repair a copied short reference.
+export function referencedAttachmentIds(body) {
   const used = new Set();
   const s = String(body ?? '');
   for (const m of s.matchAll(REF_IMG)) used.add(m[2]);
   for (const m of s.matchAll(REF_FILE)) used.add(m[2]);
+  return used;
+}
+
+// Copy only the attachments actually referenced by `body` from other notes. This
+// repairs Markdown such as `![image](owl-img:abc)` copied between notes: the short
+// reference travels through the clipboard, while its bytes/Drive pointer do not.
+// Existing target attachments always win.
+export function inheritReferencedAttachments(body, attachments = [], sourceNotes = []) {
+  const wanted = referencedAttachmentIds(body);
+  if (!wanted.size) return (attachments || []).slice();
+  const byId = new Map((attachments || []).map((a) => [a.id, a]));
+  for (const note of sourceNotes || []) {
+    for (const att of (note && note.attachments) || []) {
+      if (att && wanted.has(att.id) && !byId.has(att.id)) byId.set(att.id, { ...att });
+    }
+  }
+  return [...byId.values()];
+}
+
+// Drop attachments whose reference (owl-img:<id> or owl-file:<id>) no longer appears in the body.
+export function pruneAttachments(body, attachments = []) {
+  const used = referencedAttachmentIds(body);
   return (attachments || []).filter((a) => used.has(a.id));
 }
 

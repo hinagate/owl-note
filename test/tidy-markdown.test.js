@@ -1,6 +1,33 @@
 import { describe, it, expect } from 'vitest';
 import { tidyMarkdown } from '../src/lib/tidy-markdown.js';
 
+describe('tidyMarkdown - adjacent OWL image references', () => {
+  const first = '![AI Policy Quiz | Coursera](owl-img:3d2dc6ce630e3)';
+  const second = '![capture one.png](owl-img:137f3bc27e261)';
+  const third = '![capture two.png](owl-img:18941884c7a4d9)';
+  const fourth = '![capture three.png](owl-img:1c88b616ba061a)';
+
+  it('puts a pasted run of short image links into separate paragraphs', () => {
+    const body = `${first}\n\n${second}${third}${fourth}`;
+    expect(tidyMarkdown(body)).toBe(`${first}\n\n${second}\n\n${third}\n\n${fourth}\n`);
+  });
+
+  it('also normalizes horizontal whitespace between otherwise adjacent refs', () => {
+    expect(tidyMarkdown(`${second}  \t ${third}`)).toBe(`${second}\n\n${third}\n`);
+  });
+
+  it('leaves a single image, mixed prose, and fenced examples untouched', () => {
+    expect(tidyMarkdown(second)).toBe(second + '\n');
+    expect(tidyMarkdown(`Before ${second}${third}`)).toBe(`Before ${second}${third}\n`);
+    expect(tidyMarkdown(`\`\`\`md\n${second}${third}\n\`\`\``)).toBe(`\`\`\`md\n${second}${third}\n\`\`\`\n`);
+  });
+
+  it('is idempotent after separating the images', () => {
+    const once = tidyMarkdown(`${second}${third}${fourth}`);
+    expect(tidyMarkdown(once)).toBe(once);
+  });
+});
+
 // Deterministic, rule-based markdown tidy (replaces the AI Format action, which
 // truncated mid-JSON and rewrote content). Every rule below is content-preserving
 // BY CONSTRUCTION — these tests pin each rule, prove fence content is byte-untouched,

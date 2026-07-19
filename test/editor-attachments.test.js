@@ -66,4 +66,56 @@ describe('editor file attachments', () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(document.querySelectorAll('.attachments-bar .attach-chip')).toHaveLength(2);
   });
+
+  it('recovers a copied short image ref and renders it in the target note', async () => {
+    const attachment = { id: 'copied123', name: 'owl.png', dataUri: 'data:image/png;base64,AAAA' };
+    const recoverAttachments = vi.fn(async () => [attachment]);
+    const editor = renderEditor(document.getElementById('root'), { recoverAttachments });
+    const textarea = document.querySelector('.note-body');
+    const ref = '![owl](owl-img:copied123)';
+    const paste = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, 'clipboardData', {
+      value: { items: [], getData: (type) => type === 'text/plain' ? ref : '' },
+    });
+
+    textarea.dispatchEvent(paste);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(paste.defaultPrevented).toBe(true);
+    expect(recoverAttachments).toHaveBeenCalledWith({ body: ref, attachments: [] });
+    expect(editor.getAttachments()).toEqual([attachment]);
+    expect(document.querySelector('.preview-body img')).toBeTruthy();
+    editor.destroy();
+  });
+
+  it('shows progress for a copied Drive image and refreshes automatically when it loads', async () => {
+    const attachment = { id: 'remote123', name: 'remote.png', mime: 'image/png', driveFileId: 'DRIVE_FILE' };
+    const recoverAttachments = vi.fn(async () => [attachment]);
+    let finishLoading;
+    const loadImageBytes = vi.fn(() => new Promise((resolve) => { finishLoading = resolve; }));
+    const editor = renderEditor(document.getElementById('root'), { recoverAttachments, loadImageBytes });
+    const textarea = document.querySelector('.note-body');
+    const ref = '![remote](owl-img:remote123)';
+    const paste = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, 'clipboardData', {
+      value: { items: [], getData: (type) => type === 'text/plain' ? ref : '' },
+    });
+
+    textarea.dispatchEvent(paste);
+    expect(document.querySelector('.owl-image-placeholder.loading')?.textContent).toContain('Loading image');
+    expect(document.querySelector('.preview-body img')).toBeNull(); // never flash a broken image icon
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(loadImageBytes).toHaveBeenCalledWith(attachment);
+    expect(document.querySelector('.owl-image-placeholder.loading')).toBeTruthy();
+
+    const dataUri = 'data:image/png;base64,AAAA';
+    finishLoading(dataUri);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(document.querySelector('.owl-image-placeholder')).toBeNull();
+    expect(document.querySelector('.preview-body img')?.getAttribute('src')).toBe(dataUri);
+    expect(editor.getAttachments()[0]).toEqual(attachment); // downloaded bytes stay cached; the saved note keeps its compact Drive pointer
+    editor.destroy();
+  });
 });

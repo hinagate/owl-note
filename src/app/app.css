@@ -282,6 +282,20 @@ body.resizing { user-select: none; cursor: col-resize; }
    a uniform corner would show in the pane, looking blank. Scale to fit instead. */
 .preview img { max-width: 100%; height: auto; border-radius: 6px; cursor: zoom-in; }
 .preview img:focus-visible { outline: 3px solid rgba(45, 190, 96, 0.4); outline-offset: 3px; }
+.owl-image-placeholder {
+  box-sizing: border-box; display: flex; align-items: center; gap: 9px; width: 100%; min-height: 76px;
+  margin: 6px 0; padding: 14px 16px; border: 1px dashed var(--border); border-radius: 8px;
+  background: #f8fafc; color: var(--muted);
+}
+.owl-image-placeholder small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.75; }
+.owl-image-state { flex: none; font-weight: 600; color: var(--text); }
+.owl-image-spinner {
+  flex: none; width: 17px; height: 17px; border: 2px solid rgba(45, 190, 96, 0.22);
+  border-top-color: var(--accent-dark); border-radius: 50%; animation: owl-image-spin 0.8s linear infinite;
+}
+.owl-image-placeholder.failed .owl-image-spinner { animation: none; border-color: #d1d5db; position: relative; }
+.owl-image-placeholder.failed .owl-image-spinner::after { content: '!'; position: absolute; inset: -3px 0 0; text-align: center; font-size: 12px; font-weight: 700; }
+@keyframes owl-image-spin { to { transform: rotate(360deg); } }
 /* Full-window image view, kept inside the editor DOM but fixed over the app. */
 .image-lightbox[hidden] { display: none; }
 .image-lightbox {

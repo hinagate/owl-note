@@ -26,6 +26,10 @@ const HEADING_RE = /^#{1,6}\s/;
 // List item: optional indent, then a `-`/`*`/`+` bullet or an ordered `1.`/`1)`
 // marker, then whitespace. Used to space list blocks and to know when NOT to.
 const LIST_ITEM_RE = /^\s*([-*+]|\d+[.)])\s/;
+// A short image reference stored by OWL-Note. Rule 9 uses this token shape only
+// when the entire line is a run of images, so prose containing inline images is
+// never reflowed. The token itself is copied byte-for-byte.
+const OWL_IMAGE_REF_RE = /!\[[^\]]*\]\(owl-img:[A-Za-z0-9]+\)/g;
 // Unicode bullets we normalize to `- ` (leading whitespace, incl. a fullwidth space,
 // is preserved). Conservative set — ASCII `*`/`+`/`-` are intentionally left alone.
 const UNICODE_BULLET_RE = /^(\s*)[•●▪‣◦・][ \t　]?/;
@@ -74,7 +78,11 @@ const PURE_DIVIDER_RE = /^\s*[─═]+\s*$/;
  *     divider lines are not counted as tree evidence. Runs as a structural PRE-PASS
  *     (before rules 2/6) so the tree's interior comes out byte-exact.
  *
- * Deliberately does NOT: reflow paragraphs, change emphasis markers, renumber lists,
+ *  9. Put adjacent `owl-img` references on separate Markdown paragraphs when a line
+ *     consists only of two or more such references. Mixed prose and fences are left
+ *     untouched; every image token is preserved byte-for-byte.
+ *
+ * Deliberately does NOT: reflow prose paragraphs, change emphasis markers, renumber lists,
  * touch tables, convert `*`/`+` bullets to `-`, or alter link/image syntax.
  *
  * @param {string} body
@@ -93,7 +101,13 @@ export function tidyMarkdown(body) {
   // That is what makes tidy(tidy(x)) === tidy(x) hold for line-art. Detection uses the
   // original fence map so a tree already inside a fence is left alone.
   const rawLines = normalized.split('\n');
-  const lines = fenceBoxDrawingBlocks(rawLines, markFences(rawLines));
+  let lines = fenceBoxDrawingBlocks(rawLines, markFences(rawLines));
+
+  // Rule 9 is another structural pre-pass. Blank lines make each image its own
+  // paragraph, which prevents a pasted `)...![...` run from rendering inline.
+  // Fence flags are computed before inserting anything so fenced examples remain
+  // byte-untouched; the inserted lines cannot create or close a fence.
+  lines = separateAdjacentImageRefs(lines, markFences(lines));
 
   // Fence map: mark which lines are protected (inside a fence, marker lines
   // included) — now including any fence rule 8 just inserted. Detection runs on the
@@ -151,6 +165,37 @@ export function tidyMarkdown(body) {
   // ends in one (an unclosed fence whose content ends in a newline stays verbatim).
   const result = out.join('\n');
   return result.endsWith('\n') ? result : result + '\n';
+}
+
+// Split a line only when ALL of its content is two or more short image refs,
+// optionally separated by horizontal whitespace. A leading Markdown-code indent
+// (tab or 4+ spaces) is left alone. Each ref is copied exactly as matched.
+function separateAdjacentImageRefs(lines, protectedFlags) {
+  const out = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (protectedFlags[i]) { out.push(line); continue; }
+
+    const indent = (/^[ \t]*/.exec(line) || [''])[0];
+    if (indent.includes('\t') || indent.length >= 4) { out.push(line); continue; }
+    const content = line.slice(indent.length).replace(/[ \t]+$/, '');
+    const refs = [...content.matchAll(OWL_IMAGE_REF_RE)];
+    if (refs.length < 2) { out.push(line); continue; }
+
+    let cursor = 0;
+    let onlyRefs = true;
+    for (const ref of refs) {
+      if (!/^[ \t]*$/.test(content.slice(cursor, ref.index))) { onlyRefs = false; break; }
+      cursor = ref.index + ref[0].length;
+    }
+    if (!onlyRefs || !/^[ \t]*$/.test(content.slice(cursor))) { out.push(line); continue; }
+
+    refs.forEach((ref, index) => {
+      if (index) out.push('');
+      out.push(indent + ref[0]);
+    });
+  }
+  return out;
 }
 
 // Rule 8: auto-fence Unicode box-drawing (ASCII-tree) blocks. WHY: Markdown collapses

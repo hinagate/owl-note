@@ -1,18 +1,19 @@
 // src/app/editor.js
 import { renderMarkdown } from '../lib/markdown.js';
 import { imageFileToDataUri } from '../lib/image-downscale.js';
-import { extractImages, inlineImages, inlineImagesAsync, pruneAttachments, attachFile, listFileRefs, linkifyFileRefs } from '../lib/note-images.js';
+import { extractImages, inlineImages, pruneAttachments, attachFile, listFileRefs, linkifyFileRefs } from '../lib/note-images.js';
 import { getBytes } from '../lib/attachment-store.js';
 import * as panes from './panes.js';
 import { renderFormatBar, formatActions } from './format-bar.js';
 
 export function renderEditor(
   container,
-  { title = '', body = '', attachments = [], onChange = () => {}, onSave = () => {}, onDelete = null, focusTitle = false, measure = null, breadcrumb = [], onNavigate = () => {}, onSuggestTitle = null, shareActions = [] },
+  { title = '', body = '', attachments = [], onChange = () => {}, onSave = () => {}, onDelete = null, focusTitle = false, measure = null, breadcrumb = [], onNavigate = () => {}, onSuggestTitle = null, shareActions = [], recoverAttachments = null, loadImageBytes = getBytes },
 ) {
   container.innerHTML = '';
   // Images live in `atts` (as data: URIs); the body only carries short owl-img refs.
   let atts = (attachments || []).slice();
+  let destroyed = false;
 
   const bar = document.createElement('div');
   bar.className = 'editor-bar';
@@ -437,6 +438,13 @@ export function renderEditor(
   };
 
   const attById = (id) => atts.find((a) => a.id === id);
+  const PREVIEW_IMG_REF_RE = /!\[([^\]]*)\]\(owl-img:([A-Za-z0-9]+)\)/g;
+  const loadingImageIds = new Set();
+  const recoveringImageIds = new Set();
+  const failedImageIds = new Set();
+  const loadedImageData = new Map();
+
+  const imageRefIds = (text) => [...String(text ?? '').matchAll(PREVIEW_IMG_REF_RE)].map((m) => m[2]);
 
   // Insert text over [start,end] while PRESERVING the textarea's native undo stack — assigning
   // ta.value directly wipes Ctrl+Z. Uses execCommand('insertText') where available (all
@@ -519,27 +527,53 @@ export function renderEditor(
 
   // Drive-backed images have no inline dataUri on this device — fetch + cache them,
   // then re-render so they appear. Sync inlineImages (in refresh) shows what's local first.
-  let resolving = false;
-  async function resolveDriveImages() {
-    if (resolving) return;
-    if (!atts.some((a) => a.driveFileId && !a.dataUri)) return; // all local already
-    resolving = true;
-    try {
-      const resolved = await inlineImagesAsync(ta.value, atts, getBytes);
-      const bodyEl = content.querySelector('.preview-body');
-      if (bodyEl) {
-        bodyEl.innerHTML = renderMarkdown(linkifyFileRefs(resolved));
-        decorateCodeBlocks(content);
-        wireFileLinks(content);
-        decoratePreviewImages(content);
-      }
-    } finally { resolving = false; }
+  function resolveDriveImages() {
+    const referenced = new Set(imageRefIds(ta.value));
+    const pending = atts.filter((a) => referenced.has(a.id) && a.driveFileId && !a.dataUri && !loadedImageData.has(a.id)
+      && !loadingImageIds.has(a.id) && !failedImageIds.has(a.id));
+    for (const att of pending) {
+      loadingImageIds.add(att.id);
+      Promise.resolve()
+        .then(() => loadImageBytes(att))
+        .then((uri) => {
+          if (destroyed) return;
+          loadingImageIds.delete(att.id);
+          if (uri) {
+            // Keep downloaded bytes for this editor session. The saved attachment
+            // remains a compact Drive pointer; getBytes has also cached the URI so a
+            // later editor can recover it without another network request.
+            loadedImageData.set(att.id, uri);
+            failedImageIds.delete(att.id);
+          } else {
+            failedImageIds.add(att.id);
+          }
+          refresh(); // replace the progress box with the image (or unavailable state)
+        })
+        .catch(() => {
+          if (destroyed) return;
+          loadingImageIds.delete(att.id);
+          failedImageIds.add(att.id);
+          refresh();
+        });
+    }
   }
 
   // Draw a grey box behind each owl-img / owl-file reference so attachments stand out in
   // the raw markdown. The backdrop mirrors the textarea text and aligns 1:1 (monospace).
   const HL_RE = /!\[[^\]]*\]\(owl-img:[A-Za-z0-9]+\)|\[[^\]]*\]\(owl-file:[A-Za-z0-9]+\)/g;
-  const escHtml = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const escHtml = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  function withImagePlaceholders(body) {
+    return String(body ?? '').replace(PREVIEW_IMG_REF_RE, (whole, alt, id) => {
+      const att = attById(id);
+      const failed = failedImageIds.has(id) || (!att && !recoveringImageIds.has(id));
+      const state = failed ? 'failed' : 'loading';
+      const label = failed ? 'Image unavailable' : 'Loading image…';
+      const name = alt || (att && att.name) || 'image';
+      return `<span class="owl-image-placeholder ${state}" data-owl-img="${id}" role="status" aria-live="polite">`
+        + `<span class="owl-image-spinner" aria-hidden="true"></span>`
+        + `<span class="owl-image-state">${label}</span><small>${escHtml(name)}</small></span>`;
+    });
+  }
   function renderHighlights() {
     const text = ta.value;
     const ranges = [];
@@ -571,14 +605,18 @@ export function renderEditor(
     }
     const bodyEl = document.createElement('div');
     bodyEl.className = 'preview-body';
-    bodyEl.innerHTML = renderMarkdown(linkifyFileRefs(inlineImages(ta.value, atts))); // img refs -> data URIs, file refs -> links, then sanitized
+    const previewAttachments = atts.map((att) => loadedImageData.has(att.id)
+      ? { ...att, dataUri: loadedImageData.get(att.id) }
+      : att);
+    const previewBody = withImagePlaceholders(inlineImages(ta.value, previewAttachments));
+    bodyEl.innerHTML = renderMarkdown(linkifyFileRefs(previewBody)); // local images inline; remote images show progress until hydrated
     content.appendChild(bodyEl);
     decorateCodeBlocks(content);
     wireFileLinks(content);
     decoratePreviewImages(content);
     renderChips();
     updateNoteSearch();
-    resolveDriveImages().catch(() => {});
+    resolveDriveImages();
     updateSize();
   };
 
@@ -705,7 +743,38 @@ export function renderEditor(
   // Paste a copied image straight into the editor (same pipeline as the 🖼 button).
   ta.addEventListener('paste', async (e) => {
     const imgs = [...(e.clipboardData?.items || [])].filter((it) => it.kind === 'file' && it.type.startsWith('image/'));
-    if (!imgs.length) return; // plain text/other — let the default paste run
+    if (!imgs.length) {
+      // A copied owl-img/owl-file link contains only an id; recover its attachment
+      // from the source note so the preview and eventual save keep working.
+      const text = e.clipboardData?.getData?.('text/plain') || '';
+      if (!recoverAttachments || !/\bowl-(?:img|file):[A-Za-z0-9]+\b/.test(text)) return;
+      e.preventDefault();
+      const pastedImageIds = imageRefIds(text);
+      pastedImageIds.forEach((id) => { recoveringImageIds.add(id); failedImageIds.delete(id); });
+      const start = ta.selectionStart ?? ta.value.length;
+      insertText(text, start, ta.selectionEnd ?? start);
+      let added = false;
+      try {
+        const recovered = await recoverAttachments({ body: ta.value, attachments: atts.slice() });
+        const candidates = Array.isArray(recovered) ? recovered : recovered?.attachments;
+        if (Array.isArray(candidates)) {
+          const byId = new Map(atts.map((a) => [a.id, a]));
+          for (const att of candidates) {
+            if (att && !byId.has(att.id)) { byId.set(att.id, att); failedImageIds.delete(att.id); added = true; }
+          }
+          if (added) atts = [...byId.values()];
+        }
+      } catch { /* leave the pasted text intact when its source attachment is unavailable */ }
+      finally {
+        pastedImageIds.forEach((id) => {
+          recoveringImageIds.delete(id);
+          if (!attById(id)) failedImageIds.add(id);
+        });
+        if (added) fireChange();
+        else refresh();
+      }
+      return;
+    }
     e.preventDefault();
     for (const it of imgs) { const f = it.getAsFile(); if (f) await insertImageFile(f); }
   });
@@ -723,6 +792,7 @@ export function renderEditor(
     setShareActionVisible: (id, visible) => { const item = shareItems.get(id); if (item) item.hidden = !visible; },
     flush: () => doSave({ auto: true }),
     destroy: () => {
+      destroyed = true;
       clearTimeout(saveTimer);
       titleRO?.disconnect();
       document.removeEventListener('keydown', onLightboxKeydown);

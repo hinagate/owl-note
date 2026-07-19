@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractImages, inlineImages, pruneAttachments } from '../src/lib/note-images.js';
+import { extractImages, inlineImages, pruneAttachments, inheritReferencedAttachments } from '../src/lib/note-images.js';
 
 const PNG = 'data:image/png;base64,AAAA';
 const JPG = 'data:image/jpeg;base64,/9j/9w==';
@@ -43,6 +43,11 @@ describe('inlineImages', () => {
     expect(inlineImages('![a](owl-img:deadbeef)', [])).toBe('![a](owl-img:deadbeef)');
   });
 
+  it('leaves a Drive-backed ref intact until its bytes have loaded', () => {
+    const ref = '![remote](owl-img:abc)';
+    expect(inlineImages(ref, [{ id: 'abc', driveFileId: 'DRIVE_FILE', mime: 'image/png' }])).toBe(ref);
+  });
+
   it('is an exact round-trip with extractImages', () => {
     const original = `intro ![one.png](${PNG}) mid ![two.jpg](${JPG}) end`;
     const { body, attachments } = extractImages(original);
@@ -58,5 +63,24 @@ describe('pruneAttachments', () => {
     const pruned = pruneAttachments(keptRef, attachments);
     expect(pruned).toHaveLength(1);
     expect(pruned[0].name).toBe('a');
+  });
+});
+
+describe('inheritReferencedAttachments', () => {
+  it('copies only the attachment referenced by pasted Markdown from another note', () => {
+    const wanted = { id: 'abc', name: 'owl.png', dataUri: PNG };
+    const unrelated = { id: 'other', name: 'other.jpg', dataUri: JPG };
+    const inherited = inheritReferencedAttachments(
+      'copied ![owl](owl-img:abc)',
+      [],
+      [{ attachments: [wanted, unrelated] }],
+    );
+    expect(inherited).toEqual([wanted]);
+  });
+
+  it('does not overwrite an existing target attachment with the same id', () => {
+    const target = { id: 'abc', name: 'target.png', dataUri: PNG };
+    const source = { id: 'abc', name: 'source.png', dataUri: JPG };
+    expect(inheritReferencedAttachments('![owl](owl-img:abc)', [target], [{ attachments: [source] }])).toEqual([target]);
   });
 });

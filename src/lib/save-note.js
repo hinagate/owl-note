@@ -5,6 +5,7 @@ import { encode, decode } from './codec.js';
 import { offloadNote } from './attachment-store.js';
 import { stubForBigNote, deleteNoteBody } from './note-drive.js';
 import { deleteUnreferencedFiles } from './drive-gc.js';
+import { resolveReferencedAttachments } from './attachment-resolver.js';
 
 // Chrome's bookmark sync silently drops bookmarks whose URL is much past ~8 KB,
 // so that — not Chrome's far larger local-bookmark limit — is the real ceiling
@@ -25,7 +26,10 @@ function attachmentFileIds(note) {
   return ((note && note.attachments) || []).filter((a) => a && a.driveFileId).map((a) => a.driveFileId);
 }
 
-export async function saveNote(note, folderId, existingBookmarkId, offload = offloadNote, bigNote = stubForBigNote) {
+export async function saveNote(note, folderId, existingBookmarkId, offload = offloadNote, bigNote = stubForBigNote, resolveAttachments = resolveReferencedAttachments) {
+  // A copied owl-img/owl-file reference contains only an id. Recover its matching
+  // attachment from another note before mirroring, pruning, or Drive offload.
+  const completeNote = await resolveAttachments(note);
   // Capture the note's previously-synced attachment files BEFORE the bookmark is overwritten,
   // so we can delete from Drive any the user has since removed (see the cleanup at the end).
   let prevAtt = [];
@@ -34,9 +38,9 @@ export async function saveNote(note, folderId, existingBookmarkId, offload = off
     if (prevPayload) { try { prevAtt = attachmentFileIds(await decode(prevPayload)); } catch { /* unreadable */ } }
   }
 
-  await mirror.saveBackup(note); // durability first — always, with full inline bytes
-  const toSave = await offload(note); // best-effort Drive offload of attachments (no-op when sync off / on failure)
-  const prevFileId = note._driveBody || null; // a prior Drive-backed body, if this note had one
+  await mirror.saveBackup(completeNote); // durability first — always, with full inline bytes
+  const toSave = await offload(completeNote); // best-effort Drive offload of attachments (no-op when sync off / on failure)
+  const prevFileId = completeNote._driveBody || null; // a prior Drive-backed body, if this note had one
   const { _driveBody, ...content } = toSave; // the stored payload never carries the body-pointer
   const payload = await encode(content);
   const bytes = urlByteLength(payload);
@@ -51,11 +55,11 @@ export async function saveNote(note, folderId, existingBookmarkId, offload = off
       let bookmarkId = existingBookmarkId;
       if (bookmarkId) await bm.updateNote(bookmarkId, content.title, stubPayload);
       else bookmarkId = await bm.createNote(folderId, content.title, stubPayload);
-      await mirror.saveBackup(note, { localOnly: false });
+      await mirror.saveBackup(completeNote, { localOnly: false });
       result = { bookmarkId, status: 'synced' };
     } else {
       if (existingBookmarkId) await bm.deleteNote(existingBookmarkId);
-      await mirror.saveBackup(note, { folderId, localOnly: true });
+      await mirror.saveBackup(completeNote, { folderId, localOnly: true });
       result = { bookmarkId: null, status: 'capped' };
     }
   } else {
@@ -64,7 +68,7 @@ export async function saveNote(note, folderId, existingBookmarkId, offload = off
     let bookmarkId = existingBookmarkId;
     if (bookmarkId) await bm.updateNote(bookmarkId, content.title, payload);
     else bookmarkId = await bm.createNote(folderId, content.title, payload);
-    await mirror.saveBackup(note, { localOnly: false });
+    await mirror.saveBackup(completeNote, { localOnly: false });
     result = { bookmarkId, status: bytes > WARN_URL_BYTES ? 'warn' : 'ok' };
   }
 
@@ -72,5 +76,5 @@ export async function saveNote(note, folderId, existingBookmarkId, offload = off
   // other note still references the same (content-hash-deduped) file.
   const stillHere = new Set(attachmentFileIds(content));
   await deleteUnreferencedFiles(prevAtt.filter((f) => !stillHere.has(f)));
-  return result;
+  return { ...result, note: completeNote };
 }

@@ -15,6 +15,7 @@ import { parseMarkdownNote } from '../lib/markdown-import.js';
 import { parseEnexNotes } from '../lib/enex-import.js';
 import { downscaleImagesInBody } from '../lib/image-downscale.js';
 import { extractImages, inlineImagesAsync } from '../lib/note-images.js';
+import { resolveReferencedAttachments } from '../lib/attachment-resolver.js';
 import { docxToMarkdown } from '../lib/docx-import.js';
 import { saveNote, urlByteLength, MAX_URL_BYTES, WARN_URL_BYTES } from '../lib/save-note.js';
 import { ensureTrash, trashNotes, restoreNotes, deleteForever } from '../lib/trash.js';
@@ -1078,6 +1079,8 @@ function renderCurrentEditor(opts = {}) {
     title: ui.current ? ui.current.title : '',
     body: ui.current ? ui.current.body : '',
     attachments: ui.current ? (ui.current.attachments || []) : [],
+    recoverAttachments: async ({ body, attachments }) =>
+      (await resolveReferencedAttachments({ body, attachments }, { rootId: ui.rootId })).attachments,
     focusTitle: !!opts.focusTitle,
     measure: measureNoteSize,
     onChange: ({ title, body, attachments }) => {
@@ -1098,16 +1101,17 @@ function renderCurrentEditor(opts = {}) {
         ? (ui.activeLocalFolderId ?? ui.activeFolder)
         : (ui.activeFolder === ui.rootId ? ui.rootId : ui.activeFolder);
       const res = await saveNote(note, folder, ui.activeBookmarkId);
-      ui.current = note;
+      const savedNote = res.note || note;
+      ui.current = savedNote;
       ui.activeBookmarkId = res.bookmarkId;
-      ui.activeLocalId = res.bookmarkId ? null : note.id;
+      ui.activeLocalId = res.bookmarkId ? null : savedNote.id;
       ui.activeLocalFolderId = res.bookmarkId ? null : folder;
       ui.isNew = false;
       // Keep the ask index in sync with this save. Synchronous in-memory op — do NOT
       // await it. upsertNote replaces the note's stale chunks when its content hash
       // changed (edit), or just refreshes citation meta when only the folder moved.
       askIndex.upsertNote({
-        ...note, // id, title, body, hash
+        ...savedNote, // id, title, body, hash
         bookmarkId: ui.activeBookmarkId || null,
         folderId: ui.activeLocalId ? (ui.activeLocalFolderId ?? folder) : folder,
         localOnly: !!ui.activeLocalId,
@@ -1115,7 +1119,7 @@ function renderCurrentEditor(opts = {}) {
       // Mirror the save into the vector index too, when semantic search is on. Same
       // fire-and-forget, .catch-guarded discipline as the lexical upsert above; hash-
       // diff means an unchanged body (e.g. a folder-only move) re-embeds nothing.
-      upsertSemantic(note);
+      upsertSemantic(savedNote);
       // [Task E16] Count this successful save toward the one-time review ask. Fire-and-
       // forget (its body is fully .catch-guarded) so it never delays or blocks the save;
       // a cheap in-memory guard stops all counting once the ask has been shown.
