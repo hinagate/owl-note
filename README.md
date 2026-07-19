@@ -15,7 +15,7 @@ Free, private Markdown notes — with code and math — synced by your own brows
 
 <img src="assets/ask-owl.gif" alt="Ask Owl demo: asking a question in the Ask Owl panel — the on-device semantic index searches every note and answers from the right recipe note, with a citation that jumps to it" width="820">
 
-<img src="screenshots/OWL-Note-1280x800.png" alt="OWL-Note editor showing the welcome note in Markdown beside its live rendered preview, with notebooks and note tools" width="820">
+<img src="assets/screenshot.png" alt="OWL-Note editor showing the welcome note in Markdown beside its live rendered preview, with notebooks and note tools" width="820">
 
 </div>
 
