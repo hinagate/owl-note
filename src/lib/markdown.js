@@ -14,6 +14,24 @@ const marked = new Marked(
   }),
 );
 
+// `Text\n---` and `Text\n===` are Setext headings in Markdown, which can look like
+// OWL-Note unexpectedly bolded a sentence when the author intended a divider.
+// Preserve the standard syntax, but explain the ambiguity when the rendered
+// heading is hovered. Normal # headings and actual thematic breaks are untouched.
+marked.use({
+  extensions: [{
+    name: 'heading',
+    renderer(token) {
+      const marker = token.raw.match(/\n {0,3}([=-]+)[ \t]*(?:\n|$)/)?.[1]?.[0];
+      if (!marker) return false;
+      const hint = marker === '-'
+        ? 'Markdown used --- as a heading underline. Add a blank line before --- if you intended a separator.'
+        : 'Markdown used === as a heading underline. For a separator, add a blank line and use --- or ***.';
+      return `<h${token.depth} class="markdown-setext-heading" title="${hint}">${this.parser.parseInline(token.tokens)}</h${token.depth}>\n`;
+    },
+  }],
+});
+
 // Math support: `$$...$$` renders as a display block, `$...$` inline. KaTeX turns
 // each into self-contained HTML + MathML (no runtime needed in the page), which
 // is then sanitized like the rest of the markdown below.

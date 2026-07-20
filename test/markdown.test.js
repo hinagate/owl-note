@@ -9,6 +9,20 @@ describe('markdown', () => {
     expect(html).toContain('Hello');
   });
 
+  it('explains ambiguous Setext headings on hover without changing normal headings or dividers', () => {
+    const dashed = renderMarkdown('This looks like a sentence\n---');
+    expect(dashed).toContain('class="markdown-setext-heading"');
+    expect(dashed).toContain('Add a blank line before ---');
+
+    const equals = renderMarkdown('Another sentence\n===');
+    expect(equals).toContain('class="markdown-setext-heading"');
+    expect(equals).toContain('use --- or ***');
+
+    expect(renderMarkdown('## Normal heading')).not.toContain('markdown-setext-heading');
+    expect(renderMarkdown('Paragraph\n\n---')).toContain('<hr>');
+    expect(renderMarkdown('Paragraph\n\n---')).not.toContain('markdown-setext-heading');
+  });
+
   it('opens external links in a new tab', () => {
     const html = renderMarkdown('[site](https://example.com)');
     expect(html).toContain('target="_blank"');
