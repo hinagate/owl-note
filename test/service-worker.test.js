@@ -108,6 +108,7 @@ describe('service worker handlers', () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0].target).toEqual({ tabId: 19, frameIds: [4] });
+    expect(calls[0].args).toEqual(['smart-selection']);
     expect(typeof calls[0].func).toBe('function');
     const note = await decode((await bm.allNotes(root))[0].payload);
     expect(note.title).toBe('Lessons From the Leaderboard: What 5,000+ Kagglers Taught Us About Improving AI Reasoning');
@@ -115,6 +116,31 @@ describe('service worker handlers', () => {
       '## Lesson 1\n\nUse **verifiable** reasoning.\n\n1. Check the answer\n2. Check the trace'
       + '\n\nSource: <https://developer.nvidia.com/blog/reasoning/>',
     );
+  });
+
+  it('saves selected objects as local attachments even when the selection has no plain text', async () => {
+    const attachment = {
+      id: 'selected-image', name: 'Diagram.jpg', mime: 'image/jpeg',
+      dataUri: 'data:image/jpeg;base64,AQID', width: 600, height: 400,
+    };
+    const capture = async () => ({
+      title: 'Selected architecture',
+      markdown: '![Architecture diagram](owl-img:selected-image)',
+      attachments: [attachment],
+    });
+    const root = await bm.ensureRoot();
+
+    await sw.handleSaveSelection(
+      { menuItemId: 'owl-save-selection', selectionText: '', pageUrl: 'https://chat.example/design' },
+      { id: 29, title: 'Chat', url: 'https://chat.example/design' },
+      capture,
+    );
+
+    const note = await decode((await bm.allNotes(root))[0].payload);
+    expect(note.title).toBe('Selected architecture');
+    expect(note.body).toContain('![Architecture diagram](owl-img:selected-image)');
+    expect(note.body).toContain('Source: <https://chat.example/design>');
+    expect(note.attachments).toEqual([attachment]);
   });
 
   it('ignores other menu items and empty selections', async () => {
@@ -135,7 +161,7 @@ describe('service worker handlers', () => {
     expect(sig).toBeTruthy();
     expect(sig.id).toBe(saved.id);       // the exact note just created
     expect(typeof sig.at).toBe('number'); // timestamp so repeated captures always change the value
-    expect(sig.openNote).toBe(false);     // selection clips preserve the current editor
+    expect(sig.openNote).toBe(true);      // open and focus the exact selection note
   });
 
   it('saves a full-page JPEG as an image attachment with its source URL', async () => {

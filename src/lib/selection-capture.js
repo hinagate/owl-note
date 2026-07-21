@@ -1,7 +1,11 @@
 // Runs inside the page through chrome.scripting.executeScript. Keep every helper
 // nested: Chrome serializes this function without any module scope/closures.
 // The result is structured Markdown plus the page's visible H1 for a clean title.
-export function captureSelectionMarkdown(wholePage = false) {
+export function captureSelectionMarkdown(mode = false) {
+  const wholePage = mode === true || mode === 'whole-page';
+  const smartSelection = mode === 'smart-selection';
+  const semanticCapture = wholePage || smartSelection;
+  const selectionMarker = 'data-owl-note-smart-selection';
   const pageImages = [];
   function compact(value) {
     return String(value || '').replace(/\u00a0/g, ' ').replace(/[ \t]+/g, ' ').trim();
@@ -43,7 +47,7 @@ export function captureSelectionMarkdown(wholePage = false) {
   function invisible(node) {
     if (node.hasAttribute('hidden') || node.getAttribute('aria-hidden') === 'true'
       || /(?:display\s*:\s*none|visibility\s*:\s*hidden)/i.test(node.getAttribute('style') || '')) return true;
-    if (!wholePage) return false;
+    if (!semanticCapture) return false;
     if (/(?:^|\s)(?:sr-only|visually-hidden|screen-reader-text)(?:\s|$)/i.test(node.className || '')) return true;
     try {
       const style = getComputedStyle(node);
@@ -54,9 +58,13 @@ export function captureSelectionMarkdown(wholePage = false) {
   }
 
   function imageRegion(node, src, alt) {
-    const rect = node.getBoundingClientRect();
-    const width = Number(rect.width) || Number(node.naturalWidth) || 0;
-    const height = Number(rect.height) || Number(node.naturalHeight) || 0;
+    const marker = smartSelection ? node.getAttribute?.(selectionMarker) : '';
+    const liveNode = marker
+      ? document.querySelector(`[${selectionMarker}="${marker}"]`) || node
+      : node;
+    const rect = liveNode.getBoundingClientRect();
+    const width = Number(rect.width) || Number(liveNode.naturalWidth) || 0;
+    const height = Number(rect.height) || Number(liveNode.naturalHeight) || 0;
     // Ignore avatars, favicons, reaction glyphs, and other UI chrome. Meaningful chat
     // uploads and generated images are comfortably larger than this threshold.
     if (width < 48 || height < 48) return null;
@@ -94,7 +102,7 @@ export function captureSelectionMarkdown(wholePage = false) {
     if (role === 'user') return 'You';
     if (role === 'assistant') return assistantName();
     if (role === 'tool') return 'Tool';
-    if (!wholePage) return '';
+    if (!semanticCapture) return '';
 
     // Claude's shared-chat DOM does not expose data-message-author-role. Instead, each
     // message owns a direct screen-reader heading such as "You said" or "Claude
@@ -203,27 +211,31 @@ export function captureSelectionMarkdown(wholePage = false) {
     if (invisible(node)) return '';
     if (wholePage && (/^(NAV|ASIDE|FOOTER)$/.test(tag)
       || /^(navigation|complementary|dialog|toolbar)$/.test(node.getAttribute('role') || ''))) return '';
-    if (wholePage && (tag === 'BUTTON' || node.getAttribute('role') === 'button')) {
+    if (semanticCapture && (tag === 'BUTTON' || node.getAttribute('role') === 'button')) {
       return meaningfulButton(node) ? children(node) : '';
     }
 
-    if (wholePage && (/^(SVG|CANVAS|VIDEO|IFRAME|OBJECT|EMBED)$/.test(tag)
+    if (semanticCapture && (/^(SVG|CANVAS|VIDEO|IFRAME|OBJECT|EMBED)$/.test(tag)
       || (node.getAttribute('role') === 'img' && !node.querySelector?.('img')))) {
-      const source = node.currentSrc || node.getAttribute('poster') || node.getAttribute('src') || node.getAttribute('data') || '';
-      return imageRegion(node, imageSource(source), visualLabel(node)) || '';
+      const marker = smartSelection ? node.getAttribute?.(selectionMarker) : '';
+      const liveNode = marker
+        ? document.querySelector(`[${selectionMarker}="${marker}"]`) || node
+        : node;
+      const source = liveNode.currentSrc || liveNode.getAttribute('poster') || liveNode.getAttribute('src') || liveNode.getAttribute('data') || '';
+      return imageRegion(node, imageSource(source), visualLabel(liveNode)) || '';
     }
     if (/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|SVG|CANVAS|BUTTON|FORM|INPUT|SELECT|TEXTAREA|SOURCE)$/.test(tag)) return '';
 
-    if (wholePage && (node.classList?.contains('katex') || node.classList?.contains('katex-display'))) {
+    if (semanticCapture && (node.classList?.contains('katex') || node.classList?.contains('katex-display'))) {
       const tex = compact(node.querySelector('annotation[encoding="application/x-tex"]')?.textContent);
       if (tex) {
         const display = node.classList.contains('katex-display') || node.closest?.('.katex-display');
         return display ? block(`$$\n${tex}\n$$`) : `$${tex}$`;
       }
     }
-    if (wholePage && /^(MATH|MROW|ANNOTATION|SEMANTICS)$/.test(tag)) return '';
+    if (semanticCapture && /^(MATH|MROW|ANNOTATION|SEMANTICS)$/.test(tag)) return '';
 
-    if (wholePage) {
+    if (semanticCapture) {
       const speaker = messageLabel(node);
       if (speaker) {
         const value = clean(children(node));
@@ -233,7 +245,7 @@ export function captureSelectionMarkdown(wholePage = false) {
     }
 
     if (/^H[1-6]$/.test(tag)) {
-      if (wholePage && /^(?:you|chatgpt) said:?$/i.test(compact(node.textContent))) return '';
+      if (semanticCapture && /^(?:you|chatgpt) said:?$/i.test(compact(node.textContent))) return '';
       const level = Number(tag[1]);
       return block(`${'#'.repeat(level)} ${clean(children(node))}`);
     }
@@ -270,9 +282,13 @@ export function captureSelectionMarkdown(wholePage = false) {
     }
     if (tag === 'IMG') {
       const alt = compact(node.getAttribute('alt'));
-      const source = node.currentSrc || node.getAttribute('src') || node.getAttribute('data-src');
-      const src = wholePage ? imageSource(source) : safeUrl(source);
-      if (wholePage) return src ? (imageRegion(node, src, alt) || '') : '';
+      const marker = smartSelection ? node.getAttribute?.(selectionMarker) : '';
+      const liveNode = marker
+        ? document.querySelector(`[${selectionMarker}="${marker}"]`) || node
+        : node;
+      const source = liveNode.currentSrc || liveNode.getAttribute('src') || liveNode.getAttribute('data-src');
+      const src = semanticCapture ? imageSource(source) : safeUrl(source);
+      if (semanticCapture) return src ? (imageRegion(node, src, alt) || '') : '';
       return src ? `![${escapeText(alt || 'Image')}](<${src}>)` : (alt ? `*${escapeText(alt)}*` : '');
     }
     if (tag === 'UL' || tag === 'OL') return block(list(node, tag === 'OL'));
@@ -296,7 +312,7 @@ export function captureSelectionMarkdown(wholePage = false) {
     const heading = Array.from(document.querySelectorAll('h1')).find((el) => compact(el.textContent));
     const headingText = compact(heading?.textContent);
     let documentTitle = compact(document.title);
-    if (wholePage) {
+    if (semanticCapture) {
       documentTitle = documentTitle
         .replace(/^(?:ChatGPT|Claude|Gemini|Microsoft Copilot)\s*[-|:]\s*/i, '')
         .replace(/\s*[-|:]\s*(?:ChatGPT|Claude|Gemini|Microsoft Copilot)$/i, '');
@@ -330,18 +346,45 @@ export function captureSelectionMarkdown(wholePage = false) {
 
   const selection = window.getSelection?.();
   if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
-    return { markdown: '', title: pageTitle() };
+    return smartSelection
+      ? { markdown: '', title: pageTitle(), images: [] }
+      : { markdown: '', title: pageTitle() };
   }
-  const parts = [];
-  for (let i = 0; i < selection.rangeCount; i++) {
-    try {
-      const holder = document.createElement('div');
-      holder.append(selection.getRangeAt(i).cloneContents());
-      const markdown = clean(children(holder));
-      if (markdown) parts.push(markdown);
-    } catch {
-      // A frame/navigation race should fall back to contextMenus.selectionText.
+  const ranges = Array.from({ length: selection.rangeCount }, (_, index) => selection.getRangeAt(index));
+  const marked = [];
+  if (smartSelection) {
+    const candidates = document.querySelectorAll('img, svg, canvas, video, iframe, object, embed, [role="img"]');
+    let nextMarker = 0;
+    for (const node of candidates) {
+      let selected = false;
+      for (const range of ranges) {
+        try {
+          if (range.intersectsNode(node)) { selected = true; break; }
+        } catch { /* detached or inaccessible node */ }
+      }
+      if (!selected) continue;
+      marked.push({ node, hadMarker: node.hasAttribute(selectionMarker), value: node.getAttribute(selectionMarker) });
+      node.setAttribute(selectionMarker, String(nextMarker++));
     }
   }
-  return { markdown: parts.join('\n\n'), title: pageTitle() };
+  const parts = [];
+  try {
+    for (const range of ranges) {
+      try {
+        const holder = document.createElement('div');
+        holder.append(range.cloneContents());
+        const markdown = clean(children(holder));
+        if (markdown) parts.push(markdown);
+      } catch {
+        // A frame/navigation race should fall back to contextMenus.selectionText.
+      }
+    }
+  } finally {
+    for (const { node, hadMarker, value } of marked) {
+      if (hadMarker) node.setAttribute(selectionMarker, value);
+      else node.removeAttribute(selectionMarker);
+    }
+  }
+  const result = { markdown: parts.join('\n\n'), title: pageTitle() };
+  return smartSelection ? { ...result, images: pageImages } : result;
 }

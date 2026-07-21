@@ -62,6 +62,36 @@ describe('captureSelectionMarkdown', () => {
     expect(injected()).toEqual({ title: 'Standalone', markdown: 'A **rich** range.' });
   });
 
+  it('maps objects in a selected clone back to live page geometry for attachment copying', () => {
+    document.title = 'Selected design';
+    document.body.innerHTML = `<div id="selection">
+      <p>Keep this explanation.</p>
+      <div data-testid="file-thumbnail"><button><h3>design.pdf</h3><p>8 pages</p></button></div>
+      <img id="selected-image" src="https://images.example/design.png" alt="System design">
+      <button aria-label="Copy selection">Copy</button>
+    </div>`;
+    const image = document.getElementById('selected-image');
+    image.getBoundingClientRect = () => ({ left: 90, top: 640, width: 720, height: 480, right: 810, bottom: 1120 });
+    selectContents(document.getElementById('selection'));
+
+    const injected = (0, eval)(`(${captureSelectionMarkdown.toString()})`);
+    const captured = injected('smart-selection');
+    expect(captured.markdown).toContain('Keep this explanation.');
+    expect(captured.markdown).toContain('design.pdf');
+    expect(captured.markdown).toContain('8 pages');
+    expect(captured.markdown).toContain('![System design](owl-smart-img:0)');
+    expect(captured.markdown).not.toContain('Copy');
+    expect(captured.images).toEqual([expect.objectContaining({
+      index: 0,
+      src: 'https://images.example/design.png',
+      x: 90,
+      y: 640,
+      width: 720,
+      height: 480,
+    })]);
+    expect(image.hasAttribute('data-owl-note-smart-selection')).toBe(false);
+  });
+
   it('rebuilds a typical LLM conversation with roles, code, math, tables, and image placeholders', () => {
     document.title = 'ChatGPT - Debugging a chart';
     document.body.innerHTML = `

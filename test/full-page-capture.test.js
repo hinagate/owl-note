@@ -8,6 +8,7 @@ import {
   captureOffsets,
   createPageCompositor,
   preparePageForCapture,
+  suppressPageSelectionHighlight,
   restorePageAfterCapture,
   scrollPageForCapture,
 } from '../src/lib/full-page-capture.js';
@@ -56,6 +57,35 @@ describe('full-page capture planning', () => {
       });
       restorePageAfterCapture();
     } finally {
+      document.elementsFromPoint = originalElementsFromPoint;
+      globalThis.scrollTo = originalScrollTo;
+      delete globalThis.__owlNoteFullPageCaptureV1;
+      document.body.innerHTML = '';
+    }
+  });
+
+  it('suppresses the painted selection during capture and restores its ranges afterward', () => {
+    document.body.innerHTML = '<p id="selected">Keep this selected</p>';
+    const range = document.createRange();
+    range.selectNodeContents(document.getElementById('selected'));
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const originalElementsFromPoint = document.elementsFromPoint;
+    const originalScrollTo = globalThis.scrollTo;
+    document.elementsFromPoint = () => [];
+    globalThis.scrollTo = vi.fn();
+
+    try {
+      preparePageForCapture();
+      expect(suppressPageSelectionHighlight()).toBe(1);
+      expect(selection.rangeCount).toBe(0);
+
+      restorePageAfterCapture();
+      expect(selection.rangeCount).toBe(1);
+      expect(selection.toString()).toBe('Keep this selected');
+    } finally {
+      selection.removeAllRanges();
       document.elementsFromPoint = originalElementsFromPoint;
       globalThis.scrollTo = originalScrollTo;
       delete globalThis.__owlNoteFullPageCaptureV1;

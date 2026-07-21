@@ -10,6 +10,21 @@ export const MAX_OUTPUT_PIXELS = 48_000_000;
 
 export const FULL_PAGE_CAPTURE_STATE_KEY = '__owlNoteFullPageCaptureV1';
 
+// captureVisibleTab includes the browser's painted ::selection highlight. Keep
+// the ranges in the page-side capture state so object crops contain the object
+// itself, then restore the user's selection with the rest of the page state.
+export function suppressPageSelectionHighlight() {
+  const state = globalThis.__owlNoteFullPageCaptureV1;
+  const selection = globalThis.getSelection?.();
+  if (!state || !selection || selection.rangeCount === 0 || selection.isCollapsed) return 0;
+  state.selectionRanges = Array.from(
+    { length: selection.rangeCount },
+    (_, index) => selection.getRangeAt(index).cloneRange(),
+  );
+  selection.removeAllRanges();
+  return state.selectionRanges.length;
+}
+
 export function preparePageForCapture() {
   const key = '__owlNoteFullPageCaptureV1';
   const previous = globalThis[key];
@@ -118,6 +133,7 @@ export function preparePageForCapture() {
   const originalY = scrollY;
   const originalTargetX = nestedScroller ? scrollTarget.scrollLeft : 0;
   const originalTargetY = nestedScroller ? scrollTarget.scrollTop : 0;
+  const state = { fixed, nestedScroller, scrollTarget, selectionRanges: [] };
   const restore = () => {
     for (const entry of fixed) {
       if (entry.value) entry.element.style.setProperty('visibility', entry.value, entry.priority);
@@ -129,9 +145,18 @@ export function preparePageForCapture() {
       scrollTarget.scrollTop = originalTargetY;
     }
     globalThis.scrollTo(originalX, originalY);
+    if (state.selectionRanges.length) {
+      const selection = globalThis.getSelection?.();
+      selection?.removeAllRanges();
+      for (const range of state.selectionRanges) {
+        try { selection?.addRange(range); } catch { /* selected nodes were replaced */ }
+      }
+      state.selectionRanges = [];
+    }
     if (globalThis[key]?.restore === restore) delete globalThis[key];
   };
-  globalThis[key] = { fixed, nestedScroller, restore, scrollTarget };
+  state.restore = restore;
+  globalThis[key] = state;
 
   return {
     documentWidth: nestedScroller ? scrollTarget.scrollWidth : rootWidth,
@@ -320,6 +345,9 @@ export async function captureFullPage(tab, deps = {}) {
     const inspection = typeof inspectPage === 'function'
       ? injectionResult(await executeScript({ target, func: inspectPage, args: inspectArgs }))
       : undefined;
+    if (deps.suppressSelectionHighlight) {
+      await executeScript({ target, func: suppressPageSelectionHighlight });
+    }
     const offsets = captureOffsets(meta.documentHeight, meta.viewportHeight);
     if (offsets.length > MAX_CAPTURE_TILES) {
       throw new Error(`This page is too long to capture safely (${offsets.length} screenfuls)`);
