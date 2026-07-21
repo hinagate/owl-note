@@ -7,10 +7,18 @@ import * as client from '../src/lib/drive/client.js';
 import { encode } from '../src/lib/codec.js';
 import { createNote } from '../src/lib/note.js';
 import { ensureTrash, trashNotes, restoreNotes, deleteForever } from '../src/lib/trash.js';
+import { DRIVE_CLEANUP_PENDING_KEY, retryPendingDriveCleanup } from '../src/lib/drive-gc.js';
 
-vi.mock('../src/lib/drive/client.js', () => ({ deleteFile: vi.fn(async () => {}) }));
+vi.mock('../src/lib/drive/client.js', () => ({
+  deleteFile: vi.fn(async () => {}),
+  getMedia: vi.fn(),
+}));
 
-beforeEach(() => { installFakeChrome(); client.deleteFile.mockClear(); });
+beforeEach(() => {
+  installFakeChrome();
+  client.deleteFile.mockReset();
+  client.getMedia.mockReset();
+});
 
 describe('trash', () => {
   it('ensureTrash creates one folder and reuses it', async () => {
@@ -69,6 +77,60 @@ describe('trash', () => {
     expect(client.deleteFile).toHaveBeenCalledWith('BODY1');
     expect(client.deleteFile).toHaveBeenCalledWith('FILE1');
     expect(client.deleteFile).toHaveBeenCalledTimes(2);
+  });
+
+  it('hydrates an over-cap stub and deletes its hidden unique attachments but keeps shared files', async () => {
+    const root = await bm.ensureRoot();
+    await ensureTrash(root);
+    const stub = { id: 'big', title: 'Big', _driveBody: 'BODY1', preview: 'x' };
+    const full = {
+      id: 'big', title: 'Big', body: 'x',
+      attachments: [
+        { id: 'unique', driveFileId: 'UNIQUE' },
+        { id: 'shared', driveFileId: 'SHARED' },
+      ],
+    };
+    const survivor = {
+      id: 'keep', title: 'Keep', body: 'x',
+      attachments: [{ id: 'shared', driveFileId: 'SHARED' }],
+    };
+    const bid = await bm.createNote(root, stub.title, await encode(stub));
+    await bm.createNote(root, survivor.title, await encode(survivor));
+    client.getMedia.mockResolvedValue(new TextEncoder().encode(await encode(full)));
+
+    await deleteForever([{ id: stub.id, bookmarkId: bid }]);
+
+    expect(client.getMedia).toHaveBeenCalledWith('BODY1');
+    expect(client.deleteFile).toHaveBeenCalledWith('BODY1');
+    expect(client.deleteFile).toHaveBeenCalledWith('UNIQUE');
+    expect(client.deleteFile).not.toHaveBeenCalledWith('SHARED');
+    expect(client.deleteFile).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps an unreadable stub body pending, then hydrates and deletes it after reconnect', async () => {
+    const root = await bm.ensureRoot();
+    await ensureTrash(root);
+    const stub = { id: 'big', title: 'Big', _driveBody: 'BODY1', preview: 'x' };
+    const full = {
+      id: 'big', title: 'Big', body: 'x',
+      attachments: [{ id: 'image', driveFileId: 'IMAGE1' }],
+    };
+    const bid = await bm.createNote(root, stub.title, await encode(stub));
+    client.getMedia.mockRejectedValueOnce(new Error('offline'));
+
+    await deleteForever([{ id: stub.id, bookmarkId: bid }]);
+
+    expect(client.deleteFile).not.toHaveBeenCalled();
+    expect((await chrome.storage.local.get(DRIVE_CLEANUP_PENDING_KEY))[DRIVE_CLEANUP_PENDING_KEY])
+      .toEqual({ files: ['BODY1'], stubBodies: ['BODY1'] });
+
+    client.getMedia.mockResolvedValue(new TextEncoder().encode(await encode(full)));
+    await retryPendingDriveCleanup();
+
+    expect(client.deleteFile).toHaveBeenCalledWith('BODY1');
+    expect(client.deleteFile).toHaveBeenCalledWith('IMAGE1');
+    expect((await chrome.storage.local.get(DRIVE_CLEANUP_PENDING_KEY))[DRIVE_CLEANUP_PENDING_KEY])
+      .toBeUndefined();
   });
 
   it('deleteForever from Trash (real flow: trash then delete) removes the note\'s Drive file', async () => {

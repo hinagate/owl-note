@@ -38,6 +38,7 @@ import { builtinAskActions } from './ask-actions.js';
 import { buildOwlNotePackage, parseOwlNotePackage, owlNoteFilename } from '../lib/owl-note-package.js';
 import { buildNotePdf, notePdfFilename, verifiedPdfBytes, verifiedPdfFile } from '../lib/note-pdf.js';
 import * as driveClient from '../lib/drive/client.js';
+import { retryPendingDriveCleanup } from '../lib/drive-gc.js';
 import SparkMD5 from 'spark-md5';
 import { showShareLinkDialog } from './share-link-dialog.js';
 import { showPdfShareDialog } from './pdf-share-dialog.js';
@@ -726,6 +727,11 @@ export async function initUI(rootId) {
   // maybeCatchUpSemantic on the persisted flag, so a never-opted-in user does nothing
   // semantic at boot. ui.semanticReady lets tests await it deterministically.
   ui.semanticReady = maybeCatchUpSemantic().catch((e) => { console.warn('semantic boot catch-up failed:', e); });
+  // A permanent delete performed while offline may have deferred Drive cleanup. Retry in
+  // the background after launch; reference scanning keeps this safe across synced devices.
+  void isEnabled()
+    .then((enabled) => enabled && retryPendingDriveCleanup())
+    .catch((e) => { console.warn('Drive cleanup retry failed:', e); });
 }
 
 export async function loadNotes(folderId) {

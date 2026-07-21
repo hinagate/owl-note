@@ -4,7 +4,12 @@ import * as bm from '../src/lib/bookmarks.js';
 import * as mirror from '../src/lib/mirror.js';
 import * as client from '../src/lib/drive/client.js';
 import { encode } from '../src/lib/codec.js';
-import { deleteUnreferencedFiles, driveFileIdsOf } from '../src/lib/drive-gc.js';
+import {
+  DRIVE_CLEANUP_PENDING_KEY,
+  deleteUnreferencedFiles,
+  driveFileIdsOf,
+  retryPendingDriveCleanup,
+} from '../src/lib/drive-gc.js';
 
 vi.mock('../src/lib/drive/client.js', () => ({ deleteFile: vi.fn(async () => {}), getMedia: vi.fn() }));
 
@@ -50,6 +55,19 @@ describe('drive-gc', () => {
     client.getMedia.mockRejectedValue(new Error('offline'));
     await deleteUnreferencedFiles(['ORPHAN']);
     expect(client.deleteFile).not.toHaveBeenCalled(); // couldn't verify the stub -> leak, never lose
+  });
+
+  it('persists a failed Drive deletion and clears it after a successful retry', async () => {
+    client.deleteFile.mockRejectedValueOnce(new Error('offline'));
+    await deleteUnreferencedFiles(['ORPHAN']);
+
+    expect((await chrome.storage.local.get(DRIVE_CLEANUP_PENDING_KEY))[DRIVE_CLEANUP_PENDING_KEY])
+      .toEqual({ files: ['ORPHAN'], stubBodies: [] });
+    await retryPendingDriveCleanup();
+
+    expect(client.deleteFile).toHaveBeenCalledTimes(2);
+    expect((await chrome.storage.local.get(DRIVE_CLEANUP_PENDING_KEY))[DRIVE_CLEANUP_PENDING_KEY])
+      .toBeUndefined();
   });
 
   it('deleteUnreferencedFiles does nothing for an empty candidate list', async () => {

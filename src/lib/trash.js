@@ -51,11 +51,22 @@ export async function deleteForever(notes) {
   const deletedIds = new Set(notes.map((n) => n.id));
   // Collect the Drive files of the notes being removed, BEFORE we delete them.
   const candidates = new Set();
+  const stubBodyFileIds = new Set();
+  const collect = (note) => {
+    for (const fileId of driveFileIdsOf(note)) candidates.add(fileId);
+    // A real bookmark stub omits attachments entirely. A hydrated note can retain
+    // _driveBody alongside a complete attachment array and needs no remote expansion.
+    if (note?._driveBody && !Array.isArray(note.attachments)) stubBodyFileIds.add(note._driveBody);
+  };
+  for (const note of notes) {
+    collect(note);
+    try { collect((await mirror.getBackup(note.id))?.current); } catch { /* best-effort */ }
+  }
   try {
     const root = await bm.ensureRoot();
     for (const r of await bm.allNotes(root)) {
       let note; try { note = await decode(r.payload); } catch { continue; }
-      if (deletedIds.has(note.id)) for (const f of driveFileIdsOf(note)) candidates.add(f);
+      if (deletedIds.has(note.id)) collect(note);
     }
   } catch { /* tree read failed — skip Drive cleanup, still delete the notes below */ }
 
@@ -68,5 +79,5 @@ export async function deleteForever(notes) {
   await setOrigins(origins);
 
   // Now the notes (and their backups) are gone, delete their files that nothing else uses.
-  await deleteUnreferencedFiles([...candidates]);
+  await deleteUnreferencedFiles([...candidates], { stubBodyFileIds: [...stubBodyFileIds] });
 }
