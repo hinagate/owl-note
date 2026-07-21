@@ -21,54 +21,126 @@ Free, private Markdown notes — with code and math — synced by your own brows
 
 ---
 
+### 📖 The Story
 
-## The story
+I built **OWL‑Note** from a simple belief: **people have the right to take notes for free.**
 
-I built this because of a simple belief: **human beings are born with the right to take notes for free.** Recording your thoughts is a natural act; it shouldn't be over-engineered, and it shouldn't sit behind a paywall.
+Writing down thoughts is natural; it shouldn’t be over‑engineered or locked behind subscriptions.
 
-So I set myself one constraint: build the simplest note app I could, using only infrastructure people already own. Every wall I hit turned into a design decision. Notes became browser bookmarks — personal, private, and synced for free by the account you already have. When a note outgrew what a bookmark can sync, an optional Google Drive layer caught the overflow. And when I wanted AI, I refused to route your notes through a server or bill you per question, so it runs entirely on the model your browser now ships. Constraints all the way down — and every one of them made OWL-Note lighter.
+So I set one constraint: **use only infrastructure people already have** and make the simplest, most private note app possible. That constraint shaped every design choice:
 
-## Features
+- Notes live as **browser bookmarks** — private, portable, and **synced automatically** by the Chrome or Edge account you already use.
+- When a note exceeds bookmark limits, an **optional Google Drive** layer stores the overflow.
+- AI features run **entirely on the browser’s on‑device model** — no servers, no API keys, no per‑question billing.
 
-- **Notes are bookmarks** — they sync across your devices for free through your existing account, and because they're real bookmarks you can find them straight from the browser address bar.
-- **Powerful Markdown** — live preview, syntax-highlighted code blocks, and KaTeX math (inline `$…$` and display `$$…$$`).
-- **Ask Owl** — ask a question in plain language and get answers from your own notes and nothing else, with citations that jump to the source. On-device generation via Gemini Nano (Chrome) or Microsoft Phi (Edge); on devices without built-in browser AI, Ask runs in retrieval-only mode.
-- **Hybrid search** — an always-on keyword index, plus an optional on-device semantic layer (a one-time ~130 MB model) that matches "what do I pay for housing?" to a note that only says "rent: $1,400." Recall on paraphrased questions went 0.455 → 1.000 ([measured, not vibes](eval/RESULTS.md)).
-- **One-click note tools** — Summarize the open note, Tidy its Markdown (deterministic — it never rewrites your words), or suggest a title.
-- **Import & export, no lock-in** — bring in Word (`.docx`), Evernote (`.enex`), and Markdown; export everything to a zip of plain `.md` files anytime.
-- **Capture, organize, and recover** — right-click a page to capture its full length directly into a note, or save a selected fragment with headings, lists, links, code, and emphasis preserved. Includes nested notebooks, multi-select bulk actions, Trash recovery, and image/file attachments.
-- **Private by design** — no server, no telemetry, no account; Manifest V3 with minimal permissions. Auto-save with a compressed local backup on every device. Optional Google Drive sync (off by default) parks oversized notes and attachments in an "OWL-Note Sync" folder in your own Drive. ([Full privacy policy](PRIVACY.md))
-
-## Install
-
-1. Install **OWL-Note** from the [Chrome Web Store](https://chromewebstore.google.com/detail/hjkbpgkmiaeojfhkpnhmokgjipenhcfl).
-2. Pin the extension (optional but recommended).
-3. Click the icon and start writing.
-
-Works on Chrome, Edge, and other Chromium browsers. On Edge, first enable "Allow extensions from other stores" in `edge://extensions`.
-
-## How it works
-
-OWL-Note doesn't invent its own storage. You write clean Markdown; the note is compressed and saved as a bookmark in a dedicated folder; your browser's built-in account sync replicates it to your signed-in devices; and a local backup is kept on each. Ask Owl's whole AI stack — generation and semantic search — runs on-device, with no keys, no server, and no per-question cost, so it keeps working offline. Deep dive in [ARCHITECTURE.md](ARCHITECTURE.md).
-
-## For developers
-
-```bash
-npm install
-npm test
-npm run build
-```
-
-Load the `dist/` folder as an unpacked extension at `chrome://extensions` (or `edge://extensions`).
-
-Notes reference `chrome-extension://<ID>/…`, so the extension ID should stay consistent across installs; if it changes, the app self-heals note URLs on launch. `tools/sync-probe` measures the real bookmark-sync ceiling on your own devices.
+Every constraint made OWL‑Note lighter and more personal. It isn’t a cloud platform — it’s a notebook you actually own.
 
 ---
 
-<div align="center">
+### 🦉 Overview
 
-Because your notes should belong to you, not the other way around.
+**OWL‑Note** is a local‑first Markdown notebook. Notes are stored in your browser bookmarks and sync across devices via Chrome or Edge. It supports photos, attachments, semantic search, on‑device AI, and full LLM chat reconstruction.
 
-[ARCHITECTURE.md](ARCHITECTURE.md) · [PRIVACY.md](PRIVACY.md) · [eval/RESULTS.md](eval/RESULTS.md)
+---
 
-</div>
+### ✨ Features
+
+**Rebuild LLM Chats as Markdown**
+
+Right‑click → **Rebuild LLM chat to OWL‑Note**
+
+Convert ChatGPT, Claude, Gemini and similar conversations into clean, editable Markdown (not screenshots). Preserves:
+
+- **User and assistant messages**
+- **Headings, paragraphs, lists, links**
+- **Tables**
+- **Syntax‑highlighted code blocks**
+- **KaTeX math**
+- **Supported images as attachments**
+- **Original source URL**
+
+**Deterministic. Local‑only.** No API key, no tokens, no cloud conversion.
+
+**Capture Entire Page**
+
+Right‑click → **Capture entire page to OWL‑Note**
+
+Scrolls and stitches the full page (including below the fold) into a single long image. Ideal for long articles, docs, receipts, dashboards, and complex layouts. All processing happens locally.
+
+**Smart Selection Capture**
+
+Right‑click → **Save selection to OWL‑Note**
+
+Save a selected region as structured Markdown while preserving headings, emphasis, lists, links, code blocks, tables, and supported visuals. The new note opens immediately for editing.
+
+**Markdown Notebook**
+
+- Live Markdown preview
+- Automatic saving
+- Code syntax highlighting
+- KaTeX math
+- Photos and file attachments
+- Draggable image preview
+- Nested notebooks and multi‑select organization
+- Trash and permanent deletion
+- Search (including from the browser address bar)
+- Import: Word / Evernote / Markdown
+- Export: Markdown / PDF / portable .owl‑note package
+
+**Ask Owl Local Retrieval and AI**
+
+Ask natural‑language questions and get answers grounded in your notes, with citations.
+
+- Conversational Q&A and follow‑ups
+- Keyword and optional semantic search
+- One‑click summarization
+- Deterministic Markdown tidying (no rewriting)
+- AI title suggestions
+- Chinese / Japanese / Korean support
+
+Uses the browser’s built‑in on‑device model where available; retrieval still works without a local model.
+
+---
+
+### 🔒 Privacy and Sync
+
+- **Notes stored in browser bookmarks** for privacy and portability.
+- **Synced across devices** via your Chrome or Edge account — no new account required.
+- **No OWL‑Note account, no backend, no telemetry, no ads.**
+- All AI, capture, and semantic search operations run locally.
+- Manifest V3 extension.
+- Optional Google Drive support (off by default) for large notes and attachments.
+- Open source under **GPL‑3.0**.
+
+---
+
+### 📦 Installation Import Export
+
+**Installation**
+
+Works with Chrome, Edge, and other Chromium‑based browsers. See Releases or the extension store listing for installation.
+
+**Import**
+
+- Markdown
+- Markdown ZIP
+- JSON backups
+- Evernote ENEX
+- Word DOCX
+- .owl‑note packages
+
+**Export**
+
+- Plain Markdown
+- Markdown ZIP
+- JSON backups
+- PDF
+- .owl‑note portable packages
+
+---
+
+### 🆓 License
+
+**GPL‑3.0**
+
+Source code: **[https://github.com/hinagate/owl-note](https://github.com/hinagate/owl-note)**
