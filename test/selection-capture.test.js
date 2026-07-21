@@ -61,4 +61,118 @@ describe('captureSelectionMarkdown', () => {
     const injected = (0, eval)(`(${captureSelectionMarkdown.toString()})`);
     expect(injected()).toEqual({ title: 'Standalone', markdown: 'A **rich** range.' });
   });
+
+  it('rebuilds a typical LLM conversation with roles, code, math, tables, and image placeholders', () => {
+    document.title = 'ChatGPT - Debugging a chart';
+    document.body.innerHTML = `
+      <nav>Chat history <button>New chat</button></nav>
+      <main>
+        <h1>ChatGPT</h1>
+        <article data-message-author-role="user">
+          <h5 class="sr-only">You said:</h5>
+          <p>Please explain <strong>this chart</strong> and repair the code.</p>
+          <img id="chart" src="https://images.example/chart.png" alt="Latency chart">
+        </article>
+        <article data-message-author-role="assistant">
+          <h5 class="sr-only">ChatGPT said:</h5>
+          <p>The loop has an off-by-one error.</p>
+          <pre><code class="language-js">for (let i = 0; i &lt; rows.length; i++) run(rows[i]);</code></pre>
+          <table><tr><th>Model</th><th>Latency</th></tr><tr><td>Small</td><td>42 ms</td></tr></table>
+          <div class="katex-display"><span class="katex"><math><semantics><annotation encoding="application/x-tex">x^2 + y^2</annotation></semantics></math></span></div>
+          <button>Copy response</button>
+        </article>
+      </main>`;
+    const image = document.getElementById('chart');
+    image.getBoundingClientRect = () => ({ left: 120, top: 480, width: 640, height: 360, right: 760, bottom: 840 });
+
+    const captured = captureSelectionMarkdown(true);
+    expect(captured.title).toBe('Debugging a chart');
+    expect(captured.markdown).toContain('## You');
+    expect(captured.markdown).toContain('Please explain **this chart** and repair the code.');
+    expect(captured.markdown).toContain('![Latency chart](owl-smart-img:0)');
+    expect(captured.markdown).toContain('## ChatGPT');
+    expect(captured.markdown).toContain('```js\nfor (let i = 0; i < rows.length; i++) run(rows[i]);\n```');
+    expect(captured.markdown).toContain('| Model | Latency |\n| --- | --- |\n| Small | 42 ms |');
+    expect(captured.markdown).toContain('$$\nx^2 + y^2\n$$');
+    expect(captured.markdown).not.toMatch(/Chat history|New chat|Copy response|You said|ChatGPT said/);
+    expect(captured.images).toEqual([expect.objectContaining({
+      index: 0,
+      src: 'https://images.example/chart.png',
+      alt: 'Latency chart',
+      x: 120,
+      y: 480,
+      width: 640,
+      height: 360,
+    })]);
+  });
+
+  it('keeps whole-page conversion self-contained for chrome.scripting.executeScript', () => {
+    document.title = 'Portable chat';
+    document.body.innerHTML = '<main><article data-message-author-role="assistant"><p>A portable answer.</p></article></main>';
+    const injected = (0, eval)(`(${captureSelectionMarkdown.toString()})`);
+    expect(injected(true)).toEqual({
+      title: 'Portable chat',
+      markdown: '## ChatGPT\n\nA portable answer.',
+      images: [],
+    });
+  });
+
+  it('preserves Claude message boundaries, attachment cards, artifacts, and rendered visual objects', () => {
+    document.title = 'Claude - Architecture review';
+    document.body.innerHTML = `
+      <main>
+        <div class="group">
+          <div class="human-message-frame">
+            <h2 data-find-omitted class="sr-only">You said: Review the attached design</h2>
+            <div data-find-omitted>
+              <div data-testid="file-thumbnail">
+                <button aria-label="Open file architecture.pdf">
+                  <h3>architecture.pdf</h3><p>PDF · 12 pages</p>
+                </button>
+              </div>
+            </div>
+            <div data-testid="user-message"><p>Review the attached design.</p></div>
+            <button aria-label="Edit message">Edit</button>
+          </div>
+        </div>
+        <div class="group">
+          <div class="assistant-message-frame">
+            <h2 data-find-omitted class="sr-only">Claude responded: Architecture findings</h2>
+            <div class="font-claude-response">
+              <p>The design has two important trade-offs.</p>
+              <button data-testid="artifact-card"><h3>System diagram</h3><p>Interactive artifact</p></button>
+              <svg id="architecture-chart" role="img" aria-label="Architecture dependency graph"><rect width="640" height="320"></rect></svg>
+              <pre><code class="language-ts">const stable = true;</code></pre>
+            </div>
+            <button aria-label="Copy response">Copy</button>
+          </div>
+        </div>
+      </main>`;
+    const chart = document.getElementById('architecture-chart');
+    chart.getBoundingClientRect = () => ({ left: 80, top: 900, width: 640, height: 320, right: 720, bottom: 1220 });
+
+    const captured = captureSelectionMarkdown(true);
+    expect(captured.title).toBe('Architecture review');
+    expect(captured.markdown).toContain('## You');
+    expect(captured.markdown).toContain('architecture.pdf');
+    expect(captured.markdown).toContain('PDF · 12 pages');
+    expect(captured.markdown).toContain('Review the attached design.');
+    expect(captured.markdown).toContain('## Claude');
+    expect(captured.markdown).toContain('System diagram');
+    expect(captured.markdown).toContain('Interactive artifact');
+    expect(captured.markdown).toContain('![Architecture dependency graph](owl-smart-img:0)');
+    expect(captured.markdown).toContain('```ts\nconst stable = true;\n```');
+    expect(captured.markdown).not.toMatch(/You said:|Claude responded:|Edit message|Copy response/);
+    expect(captured.markdown.match(/^## You$/gm)).toHaveLength(1);
+    expect(captured.markdown.match(/^## Claude$/gm)).toHaveLength(1);
+    expect(captured.images).toEqual([expect.objectContaining({
+      index: 0,
+      src: '',
+      alt: 'Architecture dependency graph',
+      x: 80,
+      y: 900,
+      width: 640,
+      height: 320,
+    })]);
+  });
 });

@@ -65,7 +65,8 @@ describe('service worker handlers', () => {
     expect(children.some((c) => c.title === '📓 Notes')).toBe(true);
     expect(menus).toEqual([
       { id: 'owl-save-selection', title: 'Save selection to OWL-Note', contexts: ['selection'] },
-      { id: 'owl-capture-full-page', title: 'Capture full page to OWL-Note', contexts: ['page'] },
+      { id: 'owl-capture-smart-page', title: 'Rebuild LLM chat to OWL-Note', contexts: ['page'] },
+      { id: 'owl-capture-full-page', title: 'Capture entire page to OWL-Note', contexts: ['page'] },
     ]);
   });
 
@@ -134,6 +135,7 @@ describe('service worker handlers', () => {
     expect(sig).toBeTruthy();
     expect(sig.id).toBe(saved.id);       // the exact note just created
     expect(typeof sig.at).toBe('number'); // timestamp so repeated captures always change the value
+    expect(sig.openNote).toBe(false);     // selection clips preserve the current editor
   });
 
   it('saves a full-page JPEG as an image attachment with its source URL', async () => {
@@ -168,6 +170,39 @@ describe('service worker handlers', () => {
     });
     const sig = (await chrome.storage.local.get('owl:quickCapture'))['owl:quickCapture'];
     expect(sig.id).toBe(note.id);
+    expect(sig.openNote).toBe(true); // full-page captures focus this exact note in OWL-Note
+  });
+
+  it('saves a smart full-page conversion with structured Markdown and copied images', async () => {
+    const root = await bm.ensureRoot();
+    const attachment = {
+      id: 'photo1', name: 'Chart.jpg', mime: 'image/jpeg',
+      dataUri: 'data:image/jpeg;base64,AQID', width: 800, height: 500,
+    };
+    const capture = async () => ({
+      title: 'LLM debugging session',
+      markdown: '## You\n\nExplain this chart.\n\n## ChatGPT\n\n```js\nconsole.log("fixed")\n```\n\n![Chart](owl-img:photo1)',
+      attachments: [attachment],
+      totalImages: 1,
+      copiedImages: 1,
+    });
+
+    const result = await sw.handleCaptureSmartPage(
+      { menuItemId: 'owl-capture-smart-page', pageUrl: 'https://chat.example/share/1' },
+      { id: 27, windowId: 3, title: 'Chat page', url: 'https://chat.example/share/1' },
+      capture,
+    );
+
+    expect(result).toBeTruthy();
+    const note = await decode((await bm.allNotes(root))[0].payload);
+    expect(note.title).toBe('LLM debugging session');
+    expect(note.body).toContain('## You');
+    expect(note.body).toContain('```js');
+    expect(note.body).toContain('![Chart](owl-img:photo1)');
+    expect(note.body).toContain('Source: <https://chat.example/share/1>');
+    expect(note.attachments).toEqual([attachment]);
+    const signal = (await chrome.storage.local.get('owl:quickCapture'))['owl:quickCapture'];
+    expect(signal).toMatchObject({ id: note.id, openNote: true });
   });
 
   // Mock getContexts the way REAL chrome behaves: when a documentUrls filter is passed it

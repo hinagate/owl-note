@@ -306,6 +306,8 @@ export async function captureFullPage(tab, deps = {}) {
   const sleep = deps.sleep || delay;
   const clock = deps.clock || Date.now;
   const onProgress = deps.onProgress || (() => {});
+  const inspectPage = deps.inspectPage;
+  const inspectArgs = Array.isArray(deps.inspectArgs) ? deps.inspectArgs : [];
   const target = { tabId: tab.id };
   let prepared = false;
 
@@ -313,6 +315,11 @@ export async function captureFullPage(tab, deps = {}) {
     const meta = injectionResult(await executeScript({ target, func: preparePageForCapture }));
     prepared = true;
     if (!validMeta(meta)) throw new Error('OWL-Note could not measure this page');
+    // Smart capture inspects while the exact scroll target chosen above is available,
+    // allowing image rectangles to use the same coordinate system as the compositor.
+    const inspection = typeof inspectPage === 'function'
+      ? injectionResult(await executeScript({ target, func: inspectPage, args: inspectArgs }))
+      : undefined;
     const offsets = captureOffsets(meta.documentHeight, meta.viewportHeight);
     if (offsets.length > MAX_CAPTURE_TILES) {
       throw new Error(`This page is too long to capture safely (${offsets.length} screenfuls)`);
@@ -345,7 +352,15 @@ export async function captureFullPage(tab, deps = {}) {
       await onProgress({ completed: index + 1, total: offsets.length });
     }
     const result = await compositor.finish();
-    return { ...result, tiles: offsets.length };
+    return {
+      ...result,
+      tiles: offsets.length,
+      inspection,
+      captureMeta: {
+        documentHeight: meta.documentHeight,
+        captureWidth: meta.captureWidth || meta.viewportWidth,
+      },
+    };
   } finally {
     if (prepared) {
       try { await executeScript({ target, func: restorePageAfterCapture }); } catch { /* navigation/restricted page */ }

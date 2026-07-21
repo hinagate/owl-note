@@ -2,6 +2,7 @@
 import { ensureRoot, isNoteUrl, payloadFromUrl } from '../lib/bookmarks.js';
 import { decode } from '../lib/codec.js';
 import { captureFullPage } from '../lib/full-page-capture.js';
+import { captureSmartPage } from '../lib/smart-page-capture.js';
 import { saveBackup } from '../lib/mirror.js';
 import { contentHash, createNote } from '../lib/note.js';
 import { saveNote } from '../lib/save-note.js';
@@ -10,6 +11,7 @@ import { captureSelectionMarkdown } from '../lib/selection-capture.js';
 
 const SAVE_SELECTION_ID = 'owl-save-selection';
 const CAPTURE_FULL_PAGE_ID = 'owl-capture-full-page';
+const CAPTURE_SMART_PAGE_ID = 'owl-capture-smart-page';
 const APP_OPENED_MESSAGE = 'owl-app-opened';
 const APP_TAB_KEY = 'owl:appTab';
 // A one-shot signal the app tab watches (chrome.storage.onChanged): after a capture it
@@ -21,7 +23,8 @@ export async function handleInstalled() {
   await ensureRoot();
   // Both commands are explicit gestures and therefore grant temporary activeTab.
   chrome.contextMenus?.create({ id: SAVE_SELECTION_ID, title: 'Save selection to OWL-Note', contexts: ['selection'] });
-  chrome.contextMenus?.create({ id: CAPTURE_FULL_PAGE_ID, title: 'Capture full page to OWL-Note', contexts: ['page'] });
+  chrome.contextMenus?.create({ id: CAPTURE_SMART_PAGE_ID, title: 'Rebuild LLM chat to OWL-Note', contexts: ['page'] });
+  chrome.contextMenus?.create({ id: CAPTURE_FULL_PAGE_ID, title: 'Capture entire page to OWL-Note', contexts: ['page'] });
 }
 
 export async function handleActionClick() {
@@ -86,8 +89,12 @@ function markdownAlt(value) {
   return cleanCaptureTitle(value).replace(/[\\\[\]]/g, '\\$&');
 }
 
-async function signalQuickCapture(note) {
-  try { await chrome.storage?.local?.set?.({ [QUICK_CAPTURE_KEY]: { id: note.id, at: Date.now() } }); } catch { /* best-effort */ }
+async function signalQuickCapture(note, { openNote = false } = {}) {
+  try {
+    await chrome.storage?.local?.set?.({
+      [QUICK_CAPTURE_KEY]: { id: note.id, at: Date.now(), openNote },
+    });
+  } catch { /* best-effort */ }
 }
 
 async function showCaptureProgress({ completed = 0, total = 1 } = {}) {
@@ -140,7 +147,9 @@ export async function handleCaptureFullPage(info, tab, capture = captureFullPage
     const note = createNote({ title, body, attachments: [attachment] });
     const root = await ensureRoot();
     const saved = await saveNote(note, root, undefined);
-    await signalQuickCapture(note);
+    // Unlike a clipped selection, a full-page screenshot is the user's explicit
+    // destination: ask the app to open this exact note, not merely reveal it in the list.
+    await signalQuickCapture(note, { openNote: true });
     await focusOrOpenApp();
     await flashSaved();
     return { note, saved, captured };
@@ -151,9 +160,40 @@ export async function handleCaptureFullPage(info, tab, capture = captureFullPage
   }
 }
 
+// Rebuild a readable page as editable Markdown and copy its rendered content images as
+// OWL-Note attachments. This remains distinct from full-page screenshot capture: users
+// can choose a faithful bitmap or a semantic note depending on what they need.
+export async function handleCaptureSmartPage(info, tab, capture = captureSmartPage) {
+  if (info.menuItemId !== CAPTURE_SMART_PAGE_ID) return null;
+  try {
+    await showCaptureProgress({ completed: 0, total: 1 });
+    const converted = await capture(tab, { onProgress: showCaptureProgress });
+    if (!converted?.markdown) throw new Error('The page did not contain readable content');
+
+    const title = cleanCaptureTitle(converted.title || tab?.title);
+    const { body } = buildQuickNote({
+      title,
+      url: info.pageUrl || tab?.url || '',
+      selectionMarkdown: converted.markdown,
+    });
+    const note = createNote({ title, body, attachments: converted.attachments || [] });
+    const root = await ensureRoot();
+    const saved = await saveNote(note, root, undefined);
+    await signalQuickCapture(note, { openNote: true });
+    await focusOrOpenApp();
+    await flashSaved();
+    return { note, saved, converted };
+  } catch (error) {
+    console.warn('[owl-note] Smart page capture failed:', error);
+    await flashCaptureError(error);
+    return null;
+  }
+}
+
 export function handleContextMenuClick(info, tab) {
   if (info?.menuItemId === SAVE_SELECTION_ID) return handleSaveSelection(info, tab);
   if (info?.menuItemId === CAPTURE_FULL_PAGE_ID) return handleCaptureFullPage(info, tab);
+  if (info?.menuItemId === CAPTURE_SMART_PAGE_ID) return handleCaptureSmartPage(info, tab);
   return undefined;
 }
 

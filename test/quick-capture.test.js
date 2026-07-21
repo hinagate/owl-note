@@ -1,9 +1,7 @@
-// [feature] "Save selection to OWL-Note" quick capture: when the service worker writes
-// the owl:quickCapture signal, an already-open app tab jumps to All notes (root) and
-// refreshes so the just-saved note is on top — WITHOUT tearing down the editor (which
-// would cancel a pending auto-save), and WITHOUT stealing a not-yet-saved draft's target
-// notebook. Boots the real app over fake-chrome (same harness as app-integration) and
-// drives the signal through chrome.storage.onChanged.
+// Context-menu capture handoff: selection clips reveal the saved note in All notes
+// without disrupting the editor, while full-page screenshots save pending edits and open
+// the exact captured note. Covers both a live chrome.storage.onChanged handoff and the
+// stored one-shot value consumed when a new app tab boots.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { installFakeChrome } from './helpers/fake-chrome.js';
 import { contentHash } from '../src/lib/note.js';
@@ -48,9 +46,9 @@ async function seedRootAndSub(root) {
 
 // Simulate the service worker's capture: create the note bookmark at root and write the
 // signal (which fake-chrome dispatches via chrome.storage.onChanged).
-async function fireQuickCapture(root, { id, title, body }) {
+async function fireQuickCapture(root, { id, title, body, openNote = false }) {
   await seedNote(root, { id, title, body, created: Date.now() + 1000 }); // newest
-  await chrome.storage.local.set({ 'owl:quickCapture': { id, at: Date.now() + 1000 } });
+  await chrome.storage.local.set({ 'owl:quickCapture': { id, at: Date.now() + 1000, openNote } });
 }
 
 async function folderNoteTitles(folderId) {
@@ -116,7 +114,56 @@ describe('quick capture — reveal at top of All notes', () => {
     expect(await folderNoteTitles(root)).not.toContain('Draft note');
   });
 
-  it('a key removal does not re-trigger a reveal (newValue-guarded)', async () => {
+  it('opens the exact full-page capture and saves the note that was being edited first', async () => {
+    const root = await bm.ensureRoot();
+    await seedRootAndSub(root);
+    await app.initUI(root);
+    await settle();
+
+    folderRow('Work').click();
+    await settle();
+    [...document.querySelectorAll('#note-list .item.card')].find((c) => c.textContent.includes('Sub note')).click();
+    await settle();
+    const oldBody = document.querySelector('#editor textarea.note-body');
+    oldBody.value = 'saved before switching to the capture';
+    oldBody.dispatchEvent(new Event('input'));
+
+    await fireQuickCapture(root, {
+      id: 'full1',
+      title: 'Captured full page',
+      body: '![Captured page](owl-img:image1)',
+      openNote: true,
+    });
+    await settle(150);
+
+    expect(document.querySelector('#editor .note-title').value).toBe('Captured full page');
+    expect(document.querySelector('#editor textarea.note-body').value).toContain('owl-img:image1');
+    expect(document.querySelector('#note-list .item.card.active .card-title-text').textContent).toBe('Captured full page');
+    expect((await chrome.storage.local.get('owl:quickCapture'))['owl:quickCapture']).toBeUndefined();
+    const workBodies = [];
+    for (const raw of await bm.listNotes((await bm.listNotebooks(root)).find((n) => n.title === 'Work').id)) {
+      workBodies.push((await decode(raw.payload)).body);
+    }
+    expect(workBodies).toContain('saved before switching to the capture');
+  });
+
+  it('opens a stored full-page capture on fresh app boot even when another note sorts first', async () => {
+    const root = await bm.ensureRoot();
+    await seedNote(root, { id: 'newer', title: 'Newer ordinary note', body: 'newer', created: 20 });
+    await seedNote(root, { id: 'full2', title: 'Stored full-page capture', body: 'captured', created: 10 });
+    await chrome.storage.local.set({
+      'owl:quickCapture': { id: 'full2', at: Date.now() + 1000, openNote: true },
+    });
+
+    await app.initUI(root);
+    await settle();
+
+    expect(document.querySelector('#editor .note-title').value).toBe('Stored full-page capture');
+    expect(document.querySelector('#note-list .item.card.active .card-title-text').textContent).toBe('Stored full-page capture');
+    expect((await chrome.storage.local.get('owl:quickCapture'))['owl:quickCapture']).toBeUndefined();
+  });
+
+  it('consumes the one-shot key without re-triggering a reveal on its removal', async () => {
     const root = await bm.ensureRoot();
     await seedRootAndSub(root);
     await app.initUI(root);
@@ -126,6 +173,7 @@ describe('quick capture — reveal at top of All notes', () => {
     await chrome.storage.local.set({ 'owl:quickCapture': { id: 'x', at: 1 } });
     await settle();
     expect(cardTitles().length).toBe(2);
+    expect((await chrome.storage.local.get('owl:quickCapture'))['owl:quickCapture']).toBeUndefined();
 
     // Go back into the subfolder (1 card), then REMOVE the key — a change with only
     // oldValue. The guard must ignore it and leave us in the subfolder.

@@ -173,6 +173,9 @@ export async function reconcileLocalToDrive(save = saveNote) {
 }
 
 const recentIds = []; // ids of notes created this session — float to the top until reload (in-memory)
+const QUICK_CAPTURE_KEY = 'owl:quickCapture';
+let lastQuickCaptureToken = null;
+let quickCaptureQueue = Promise.resolve();
 
 const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1, indexReady: null, driveEnabled: false };
 
@@ -193,6 +196,8 @@ export function resetUI() {
   ui.hashWired = false;
   ui.isNew = false;
   ui.selected = new Set(); ui.anchor = null; ui.focus = -1;
+  lastQuickCaptureToken = null;
+  quickCaptureQueue = Promise.resolve();
   ui.indexReady = null;
   ui.driveEnabled = false;
   // Drop the Ask drawer/controller so the next initUI rebinds to the fresh DOM
@@ -698,6 +703,9 @@ export async function initUI(rootId) {
   await maybeCreateWelcomeNote();
   renderCurrentEditor();
   await openByHash();
+  // Register before reading the one-shot value so a capture arriving during boot
+  // cannot slip between the initial storage read and listener installation.
+  await wireQuickCapture();
   if (!ui.current) await openLatestNote(); // no specific note in the URL hash — default to the latest
   if (!ui.hashWired) {
     window.addEventListener('hashchange', openByHash);
@@ -707,7 +715,6 @@ export async function initUI(rootId) {
     ui.hashWired = true;
   }
   wireLiveRefresh();
-  wireQuickCapture(); // reveal right-click captures at the top of All notes
   // Build the ask index in the background — a FLOATING promise so indexing never
   // delays first paint. .catch keeps a build failure from surfacing as an unhandled
   // rejection (best-effort, like healNoteUrls above); ui.indexReady lets tests await it.
@@ -917,15 +924,17 @@ function wireLiveRefresh() {
   c.bookmarks.onMoved?.addListener(liveRefreshNoteList);
 }
 
-// Reveal a note created by either OWL-Note context-menu capture command: jump to
-// All notes (root) so the new note — newest-first — sits on top, and refresh the list.
-// Deliberately does NOT open the note in the editor: renderCurrentEditor tears down the
-// live editor and CANCELS its pending auto-save (SAVE_DELAY), which could drop an
-// in-progress edit. refreshPanes only re-renders the list/sidebar, leaving the editor
-// (and its debounced save) untouched. The closed-tab case is handled by boot's
-// openLatestNote, which opens the top note on a fresh window (nothing to clobber).
-async function revealQuickCapture() {
-  if (!ui.rootId) return; // not booted (or reset between tests)
+// Reveal a note created by either context-menu command. Selection captures retain the
+// non-disruptive list-only behavior. A full-page capture carries openNote:true: flush the
+// current editor first, then open the exact captured note instead of merely showing it.
+async function revealQuickCapture(capture) {
+  if (!ui.rootId || !capture?.id) return; // not booted (or malformed signal)
+  const openCapturedNote = capture.openNote === true;
+
+  // Opening another note destroys the current editor and cancels its debounce timer.
+  // Await the save first so focusing a capture cannot discard an in-progress edit.
+  if (openCapturedNote && ui.current) await ui.editor?.flush?.();
+
   // A brand-new, not-yet-saved draft derives its CREATION folder from ui.activeFolder at
   // (debounced) save time, so switching to root here would silently file it in All notes
   // instead of the notebook the user is composing in. Don't disrupt an in-progress new
@@ -933,24 +942,71 @@ async function revealQuickCapture() {
   // and the user can navigate to root themselves. (Existing notes save in place regardless
   // of activeFolder, so they're unaffected.)
   const draftOpen = ui.isNew && ui.current && !ui.activeBookmarkId && !ui.activeLocalId;
-  if (!draftOpen) {
+  if (!draftOpen || openCapturedNote) {
     ui.activeFolder = ui.rootId;
+    ui.query = '';
     ui.selected = new Set(); ui.anchor = null; ui.focus = -1;
   }
-  await refreshPanes().catch((e) => console.warn('quick-capture reveal failed', e));
+  await refreshPanes();
+
+  if (!openCapturedNote) return;
+  const target = (ui.notes || []).find((note) => note.id === capture.id);
+  if (!target) throw new Error('The captured note could not be loaded');
+  ui.focus = (ui.notes || []).filter((note) => !note.draft).findIndex((note) => note.id === capture.id);
+  if (target.localOnly) await openLocalNote(target.id);
+  else await openBookmark(target.bookmarkId);
+  document.querySelector('#note-list .item.card.active')?.scrollIntoView?.({ block: 'nearest' });
 }
 
-// Watch for the service worker's quick-capture signal. Scoped to that one key so ordinary
-// storage writes (review counter, layout, collapse state) and background bookmark sync
-// never yank the user's view — only an explicit capture does. newValue-guarded so a
-// future removal of the key can't re-trigger.
-function wireQuickCapture() {
+function quickCaptureToken(capture) {
+  return capture?.id ? `${capture.id}:${capture.at ?? ''}` : null;
+}
+
+async function consumeQuickCapture(capture) {
+  const token = quickCaptureToken(capture);
+  if (!token || token === lastQuickCaptureToken) return;
+  lastQuickCaptureToken = token;
+  try {
+    await revealQuickCapture(capture);
+  } catch (error) {
+    // Leave a failed signal stored so the next app boot can retry it.
+    if (lastQuickCaptureToken === token) lastQuickCaptureToken = null;
+    throw error;
+  }
+  // Consume only the value we handled. A newer capture may arrive while the editor
+  // is saving, and this older handler must never remove the newer signal.
+  try {
+    const current = (await chrome.storage.local.get(QUICK_CAPTURE_KEY))[QUICK_CAPTURE_KEY];
+    if (quickCaptureToken(current) === token) await chrome.storage.local.remove(QUICK_CAPTURE_KEY);
+  } catch { /* one-shot cleanup is best-effort */ }
+}
+
+function enqueueQuickCapture(capture) {
+  // Preserve arrival order: if two captures complete close together, the newer one
+  // must be the final note in focus rather than racing an older editor flush.
+  quickCaptureQueue = quickCaptureQueue.catch(() => {}).then(() => consumeQuickCapture(capture));
+  return quickCaptureQueue;
+}
+
+// Watch for the service worker's one-shot capture signal. Scoped to this key so ordinary
+// storage writes and bookmark sync never yank the user's view. Read the stored value too:
+// the worker writes it before opening OWL-Note, so a new app tab otherwise misses the
+// onChanged event that occurred before its listener existed.
+async function wireQuickCapture() {
   const c = typeof chrome !== 'undefined' ? chrome : undefined;
+  if (!c?.storage?.local) return;
   c?.storage?.onChanged?.addListener((changes, area) => {
-    if (area === 'local' && changes && changes['owl:quickCapture'] && changes['owl:quickCapture'].newValue) {
-      revealQuickCapture();
+    const value = changes?.[QUICK_CAPTURE_KEY]?.newValue;
+    if (area === 'local' && value) {
+      enqueueQuickCapture(value).catch((e) => console.warn('quick-capture reveal failed', e));
     }
   });
+  try {
+    const pending = (await c.storage.local.get(QUICK_CAPTURE_KEY))[QUICK_CAPTURE_KEY];
+    if (pending) await enqueueQuickCapture(pending);
+  } catch (e) {
+    console.warn('quick-capture restore failed', e);
+  }
 }
 
 async function persistCollapsed() {

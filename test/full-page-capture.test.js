@@ -138,6 +138,17 @@ describe('full-page capture orchestration', () => {
     const sleep = vi.fn(async (ms) => { now += ms; });
     const createCompositor = vi.fn(async () => compositor);
     const onProgress = vi.fn();
+    const inspectPage = () => {};
+    executeScript.mockImplementation(async (options) => {
+      calls.push(options);
+      if (options.func === preparePageForCapture) {
+        return [{ result: { documentWidth: 1200, documentHeight: 2500, viewportWidth: 1200, viewportHeight: 1000 } }];
+      }
+      if (options.func === inspectPage) return [{ result: { markdown: 'Smart content' } }];
+      if (options.func === scrollPageForCapture) return [{ result: { x: 0, y: options.args[1] } }];
+      if (options.func === restorePageAfterCapture) return [{ result: undefined }];
+      throw new Error('unexpected injection');
+    });
 
     const result = await captureFullPage(
       { id: 9, windowId: 4 },
@@ -149,6 +160,8 @@ describe('full-page capture orchestration', () => {
         sleep,
         clock: () => now,
         onProgress,
+        inspectPage,
+        inspectArgs: [true],
       },
     );
 
@@ -165,6 +178,9 @@ describe('full-page capture orchestration', () => {
     expect(onProgress).toHaveBeenLastCalledWith({ completed: 3, total: 3 });
     expect(calls.at(-1).func).toBe(restorePageAfterCapture);
     expect(result).toMatchObject({ dataUri: 'data:image/jpeg;base64,AQID', tiles: 3 });
+    expect(result.inspection).toEqual({ markdown: 'Smart content' });
+    expect(result.captureMeta).toEqual({ documentHeight: 2500, captureWidth: 1200 });
+    expect(calls[1]).toMatchObject({ func: inspectPage, args: [true] });
   });
 
   it('restores the page when the user activates another tab during capture', async () => {
