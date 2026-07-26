@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { showDrawPanel } from '../src/app/draw-panel.js';
 
 beforeEach(() => {
@@ -154,6 +155,32 @@ describe('draw panel', () => {
     click(document.querySelector('.draw-cancel'));
     click(document.querySelector('.draw-discard'));
     expect(document.querySelector('.draw-backdrop')).toBeNull();
+  });
+
+  // Only the save row OR the discard row is ever shown, via the `hidden`
+  // attribute. But `.share-link-dialog footer` sets display:flex, which outranks
+  // the UA stylesheet's [hidden] rule — so hiding silently did nothing and the
+  // panel rendered four buttons. jsdom applies no external stylesheet, so this
+  // has to be asserted against the CSS text itself.
+  it('has a CSS rule that actually hides a hidden footer', () => {
+    const css = readFileSync('src/app/app.css', 'utf8'); // repo-relative, as the docx tests read fixtures
+    expect(css).toMatch(/\.draw-dialog footer\[hidden\]\s*\{[^}]*display:\s*none/);
+  });
+
+  it('shows exactly one footer row at a time', () => {
+    const { canvas } = showDrawPanel({});
+    const rows = () => [...document.querySelectorAll('.draw-dialog footer')];
+    expect(rows().filter((r) => !r.hidden)).toHaveLength(1);
+
+    draw(canvas, [[1, 1], [2, 2]]);
+    click(document.querySelector('.draw-cancel'));
+    const visible = rows().filter((r) => !r.hidden);
+    expect(visible).toHaveLength(1);
+    expect(visible[0].classList.contains('draw-confirm')).toBe(true);
+
+    click(document.querySelector('.draw-keep'));
+    expect(rows().filter((r) => !r.hidden)).toHaveLength(1);
+    expect(rows().filter((r) => !r.hidden)[0].classList.contains('draw-confirm')).toBe(false);
   });
 
   it('restores focus to whatever was focused before it opened', () => {

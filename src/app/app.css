@@ -619,6 +619,10 @@ body.resizing { user-select: none; cursor: col-resize; }
 }
 .draw-status { min-height: 20px; margin-top: 8px; color: #b35900; font-size: 12px; }
 .draw-dialog footer { justify-content: flex-end; margin-top: 12px; padding-top: 12px; }
+/* The shared `.share-link-dialog footer` rule sets display:flex, which outranks
+   the UA stylesheet's [hidden] { display: none } — without this the save row and
+   the discard row both render and the panel shows four buttons at once. */
+.draw-dialog footer[hidden] { display: none; }
 .draw-confirm { align-items: center; }
 .draw-confirm span { margin-right: auto; color: #3c4043; font-size: 13px; }
 .draw-discard { border-color: #d93025; background: #d93025; }
