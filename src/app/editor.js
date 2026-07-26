@@ -5,6 +5,7 @@ import { extractImages, inlineImages, pruneAttachments, attachFile, listFileRefs
 import { getBytes } from '../lib/attachment-store.js';
 import * as panes from './panes.js';
 import { renderFormatBar, formatActions } from './format-bar.js';
+import { showDrawPanel } from './draw-panel.js';
 
 export function renderEditor(
   container,
@@ -129,6 +130,16 @@ export function renderEditor(
   imgInput.accept = 'image/*';
   imgInput.style.display = 'none';
 
+  // Sketchpad. The panel hands back a PNG File, which goes through the very same
+  // pipeline as a picked photo — so a drawing is just an image attachment, and
+  // Drive sync, export, and pruning need to know nothing about drawings.
+  // (insertImageFile is a hoisted function declaration, defined further down.)
+  const drawBtn = document.createElement('button');
+  drawBtn.className = 'insert-drawing';
+  drawBtn.textContent = '✏️ Draw';
+  drawBtn.title = 'Draw a sketch and insert it as an image';
+  drawBtn.addEventListener('click', () => showDrawPanel({ onSave: (file) => insertImageFile(file) }));
+
   const fileBtn = document.createElement('button');
   fileBtn.className = 'attach-file';
   const fileBtnIco = document.createElement('span');
@@ -159,7 +170,7 @@ export function renderEditor(
   readingHint.textContent = '📖 Reading mode';
 
   // viewBtn (« / ») sits to the LEFT of Save — a quick "preview only" reading toggle.
-  bar.append(viewBtn, save, shareWrap, codeBtn, imgBtn, imgInput, fileBtn, fileInput, listBtn, readingHint);
+  bar.append(viewBtn, save, shareWrap, codeBtn, imgBtn, imgInput, drawBtn, fileBtn, fileInput, listBtn, readingHint);
 
   if (onDelete) {
     const del = document.createElement('button');
