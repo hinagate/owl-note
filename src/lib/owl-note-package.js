@@ -87,8 +87,8 @@ export async function buildOwlNotePackage(note, resolveAttachment) {
     note: {
       title: String(note.title || ''),
       body: String(note.body || ''),
-      createdAt: note.createdAt || undefined,
-      updatedAt: note.updatedAt || undefined,
+      createdAt: note.created ?? note.createdAt ?? undefined,
+      updatedAt: note.updated ?? note.updatedAt ?? undefined,
     },
     attachments,
   };
@@ -122,6 +122,8 @@ export async function parseOwlNotePackage(bytes) {
   return {
     title: String(manifest.note.title || ''),
     body: String(manifest.note.body || ''),
+    created: manifest.note.createdAt,
+    updated: manifest.note.updatedAt,
     attachments,
   };
 }

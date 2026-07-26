@@ -189,8 +189,11 @@ body.resizing { user-select: none; cursor: col-resize; }
 .editor-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); }
 .editor-bar button { border: 1px solid var(--border); background: #fff; padding: 6px 12px; border-radius: 8px; font-size: 13px; cursor: pointer; }
 .editor-bar button:hover { background: #f1f3f5; }
-/* Auto-save status sits at the bottom-right of the edit pane — below the chips (no overlap), out of the toolbar. */
-.edit-pane .save-status { align-self: flex-end; margin: 2px 14px 6px 0; font-size: 12px; color: var(--muted); white-space: nowrap; }
+/* Note metadata + auto-save state share a quiet footer below the attachment chips. */
+.edit-pane .editor-status-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; margin: 2px 14px 6px; font-size: 12px; color: var(--muted); }
+.edit-pane .editor-status-row[hidden] { display: none; }
+.edit-pane .note-updated-time { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: help; }
+.edit-pane .save-status { margin-left: auto; white-space: nowrap; }
 .edit-pane .save-status:empty { display: none; }
 .editor-bar .toggle-edit { font-weight: 700; font-size: 15px; line-height: 1; padding: 6px 11px; }
 .editor-bar .attach-file { display: inline-flex; align-items: center; gap: 5px; }

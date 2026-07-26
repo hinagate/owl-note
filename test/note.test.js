@@ -16,15 +16,21 @@ describe('note model', () => {
     expect(n.title).toBe('Title');
     expect(n.hash).toBe(contentHash('# Title\ntext'));
     expect(n.attachments).toEqual([]);
+    expect(n.created).toEqual(expect.any(Number));
+    expect(n.updated).toBe(n.created);
   });
 
   it('bumps version and recomputes title/hash on update', () => {
     const n = createNote({ body: 'old' });
+    n.created = 10;
+    n.updated = 10;
     const u = withUpdatedBody(n, '# New', []);
     expect(u.version).toBe(2);
     expect(u.title).toBe('New');
     expect(u.hash).toBe(contentHash('# New'));
     expect(u.id).toBe(n.id);
+    expect(u.created).toBe(10);
+    expect(u.updated).toBeGreaterThan(10);
   });
 
   it('createNote keeps an explicit title and falls back to extraction when blank', () => {
@@ -34,11 +40,15 @@ describe('note model', () => {
 
   it('withUpdatedContent sets the explicit title, bumps version, recomputes hash', () => {
     const n = createNote({ title: 'A', body: 'b' });
+    n.created = 10;
+    n.updated = 10;
     const u = withUpdatedContent(n, { title: 'B', body: 'c', attachments: [] });
     expect(u.title).toBe('B');
     expect(u.version).toBe(2);
     expect(u.hash).toBe(contentHash('c'));
     expect(u.id).toBe(n.id);
+    expect(u.created).toBe(10);
+    expect(u.updated).toBeGreaterThan(10);
     // blank title falls back to body extraction
     expect(withUpdatedContent(n, { title: '  ', body: '# Z' }).title).toBe('Z');
   });
@@ -52,6 +62,7 @@ describe('withPinned', () => {
     expect(pinned.version).toBe(n.version);
     expect(pinned.hash).toBe(n.hash);
     expect(pinned.body).toBe(n.body);
+    expect(pinned.updated).toBe(n.updated);
     expect(withPinned(pinned, false).pinned).toBe(false);
   });
 });
@@ -59,36 +70,39 @@ describe('withPinned', () => {
 describe('orderNotes', () => {
   const note = (id, pinned) => ({ id, title: id, body: '', pinned });
   it('floats pinned to the top, keeps the rest stable', () => {
-    const out = orderNotes([note('a'), note('b', true), note('c')], []);
+    const out = orderNotes([note('a'), note('b', true), note('c')]);
     expect(out.map((n) => n.id)).toEqual(['b', 'a', 'c']);
   });
-  it('orders recent (newest-first) below pinned and above the rest', () => {
-    const out = orderNotes([note('a'), note('b'), note('c'), note('p', true)], ['c', 'a']);
-    // pinned p; recent newest-first c then a; rest b
-    expect(out.map((n) => n.id)).toEqual(['p', 'c', 'a', 'b']);
+  it('does not give editor-session notes priority over newer external captures', () => {
+    const out = orderNotes([
+      { id: 'editor', created: 100 },
+      { id: 'capture', created: 300 },
+      { id: 'pinned', created: 50, pinned: true },
+    ]);
+    expect(out.map((n) => n.id)).toEqual(['pinned', 'capture', 'editor']);
   });
-  it('keeps input order when nothing is pinned or recent', () => {
-    const out = orderNotes([note('a'), note('b'), note('c')], []);
+  it('keeps input order when recency values are equal', () => {
+    const out = orderNotes([note('a'), note('b'), note('c')]);
     expect(out.map((n) => n.id)).toEqual(['a', 'b', 'c']);
   });
   it('does not mutate the input array', () => {
     const input = [note('a'), note('b', true)];
-    orderNotes(input, []);
+    orderNotes(input);
     expect(input.map((n) => n.id)).toEqual(['a', 'b']);
   });
   it('orders the rest newest-first by created (desc)', () => {
-    const out = orderNotes([{ id: 'old', created: 100 }, { id: 'new', created: 300 }, { id: 'mid', created: 200 }], []);
+    const out = orderNotes([{ id: 'old', created: 100 }, { id: 'new', created: 300 }, { id: 'mid', created: 200 }]);
     expect(out.map((n) => n.id)).toEqual(['new', 'mid', 'old']);
   });
   it('falls back to bookmark dateAdded when a note has no created (existing notes)', () => {
-    const out = orderNotes([{ id: 'a', dateAdded: 100 }, { id: 'c', dateAdded: 300 }, { id: 'b', dateAdded: 200 }], []);
+    const out = orderNotes([{ id: 'a', dateAdded: 100 }, { id: 'c', dateAdded: 300 }, { id: 'b', dateAdded: 200 }]);
     expect(out.map((n) => n.id)).toEqual(['c', 'b', 'a']);
   });
   it('keeps pinned on top, with each group newest-first', () => {
     const out = orderNotes([
       { id: 'a', created: 100 }, { id: 'p1', created: 150, pinned: true },
       { id: 'b', created: 400 }, { id: 'p2', created: 500, pinned: true },
-    ], []);
+    ]);
     expect(out.map((n) => n.id)).toEqual(['p2', 'p1', 'b', 'a']);
   });
 });

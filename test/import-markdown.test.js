@@ -119,10 +119,15 @@ describe('importFiles', () => {
 
   it('imports a JSON backup into root as real bookmarks (fixes the old no-op)', async () => {
     const root = await bm.ensureRoot();
-    const json = JSON.stringify({ version: 1, notes: [{ id: 'j1', title: 'FromJson', body: 'hi', attachments: [], version: 1, hash: 'h' }] });
+    const json = JSON.stringify({ version: 1, notes: [{
+      id: 'j1', title: 'FromJson', body: 'hi', attachments: [], created: 100, updated: 200, version: 1, hash: 'h',
+    }] });
     const tally = await importFiles([textFile('backup.json', json)]);
     expect(tally.created).toBe(1);
-    expect((await notesByTitle(root))['FromJson'].folderId).toBe(root);
+    const imported = (await notesByTitle(root))['FromJson'];
+    expect(imported.folderId).toBe(root);
+    expect(imported.created).toBe(100);
+    expect(imported.updated).toBe(200);
   });
 
   it('strips angle brackets from imported ids so note content cannot forge the Ask <<<NOTE>>> marker', async () => {

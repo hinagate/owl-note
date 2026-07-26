@@ -157,7 +157,7 @@ describe('app integration', () => {
     for (const t of ['First', 'Second', 'Third']) {
       await bm.createNote(root, t, await encode({ id: t, title: t, body: t, version: 1, hash: 'h' }));
     }
-    await app.initUI(root); // recentIds is empty -> pure persistent order, newest first
+    await app.initUI(root); // persistent fallback order: newest bookmark first
     const titles = [...document.querySelectorAll('#note-list .item.card .card-title')].map((e) => e.textContent.trim());
     expect(titles).toEqual(['Third', 'Second', 'First']);
   });
@@ -264,6 +264,33 @@ describe('app integration', () => {
     await new Promise((r) => setTimeout(r, 10)); // let the live refresh re-render
     const titles = [...document.querySelectorAll('#note-list .item.card')].map((el) => el.textContent);
     expect(titles.some((t) => t.includes('From context menu'))).toBe(true);
+  });
+
+  it('puts a newer context-menu note above a note created earlier in the editor session', async () => {
+    const app = await import('../src/app/app.js');
+    const bm = await import('../src/lib/bookmarks.js');
+    const { createNote } = await import('../src/lib/note.js');
+    const { encode } = await import('../src/lib/codec.js');
+    const root = await bm.ensureRoot();
+    await app.initUI(root);
+
+    document.querySelector('button.new').click();
+    const titleInput = document.querySelector('#editor .note-title');
+    titleInput.value = 'Earlier editor note';
+    titleInput.dispatchEvent(new Event('input'));
+    document.querySelector('#editor button.save').click();
+    await new Promise((r) => setTimeout(r, 20));
+
+    const capture = {
+      ...createNote({ title: 'Newer context capture', body: 'captured' }),
+      created: Date.now() + 1000,
+    };
+    await bm.createNote(root, capture.title, await encode(capture));
+    await new Promise((r) => setTimeout(r, 20));
+
+    const titles = [...document.querySelectorAll('#note-list .item.card:not(.draft) .card-title-text')]
+      .map((el) => el.textContent);
+    expect(titles).toEqual(['Newer context capture', 'Earlier editor note']);
   });
 
   it('shows a "New note" draft entry, active, when starting a new note', async () => {

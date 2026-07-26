@@ -8,7 +8,7 @@ import { renderFormatBar, formatActions } from './format-bar.js';
 
 export function renderEditor(
   container,
-  { title = '', body = '', attachments = [], onChange = () => {}, onSave = () => {}, onDelete = null, focusTitle = false, measure = null, breadcrumb = [], onNavigate = () => {}, onSuggestTitle = null, shareActions = [], recoverAttachments = null, loadImageBytes = getBytes },
+  { title = '', body = '', attachments = [], created = null, updated = null, onChange = () => {}, onSave = () => {}, onDelete = null, focusTitle = false, measure = null, breadcrumb = [], onNavigate = () => {}, onSuggestTitle = null, shareActions = [], recoverAttachments = null, loadImageBytes = getBytes },
 ) {
   container.innerHTML = '';
   // Images live in `atts` (as data: URIs); the body only carries short owl-img refs.
@@ -71,8 +71,51 @@ export function renderEditor(
   document.addEventListener('click', closeShareMenu);
   shareWrap.append(shareBtn, shareMenu);
 
+  const statusRow = document.createElement('div');
+  statusRow.className = 'editor-status-row';
+  const updatedLabel = document.createElement('span');
+  updatedLabel.className = 'note-updated-time';
+  const updatedTime = document.createElement('time');
+  updatedLabel.append('Updated ', updatedTime);
   const status = document.createElement('span'); // subtle auto-save status: Unsaved… / Saving… / Saved ✓
   status.className = 'save-status';
+  statusRow.append(updatedLabel, status);
+
+  let createdValue = created;
+  let updatedValue = updated;
+  const asValidDate = (value) => {
+    if (value == null) return null;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+  const formatCompactDate = (date) =>
+    new Intl.DateTimeFormat(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    }).format(date);
+  const formatFullDate = (date) => date ? date.toLocaleString() : 'Not recorded';
+  const setTimestamps = ({ created: nextCreated = createdValue, updated: nextUpdated = updatedValue } = {}) => {
+    createdValue = nextCreated;
+    updatedValue = nextUpdated;
+    const createdDate = asValidDate(createdValue);
+    const editedDate = asValidDate(updatedValue);
+    const visibleDate = editedDate || createdDate; // legacy notes use their best known time
+    updatedLabel.hidden = !visibleDate;
+    if (visibleDate) {
+      updatedTime.dateTime = visibleDate.toISOString();
+      updatedTime.textContent = formatCompactDate(visibleDate);
+      updatedLabel.title = [
+        `Created: ${formatFullDate(createdDate)}`,
+        `Updated: ${editedDate ? formatFullDate(editedDate) : 'Not recorded (showing created time)'}`,
+      ].join('\n');
+    } else {
+      updatedTime.removeAttribute('datetime');
+      updatedTime.textContent = '';
+      updatedLabel.removeAttribute('title');
+    }
+    statusRow.hidden = !visibleDate && !status.textContent;
+  };
+  setTimestamps();
 
   const codeBtn = document.createElement('button');
   codeBtn.className = 'code-block';
@@ -287,7 +330,7 @@ export function renderEditor(
   editPane.append(titleRow, formatBar, bodyWrap);
   const attachBar = document.createElement('div');
   attachBar.className = 'attachments-bar';
-  editPane.append(attachBar, status); // chips under the body; status sits below the chips
+  editPane.append(attachBar, statusRow); // chips under the body; metadata + save state share the footer
   const preview = document.createElement('div');
   preview.className = 'preview';
 
@@ -711,7 +754,10 @@ export function renderEditor(
   let saveTimer = null;
   let saving = false;
   let resaveQueued = false;
-  const setStatus = (s) => { status.textContent = s; };
+  const setStatus = (s) => {
+    status.textContent = s;
+    statusRow.hidden = updatedLabel.hidden && !s;
+  };
   function scheduleAutoSave() {
     setStatus('Unsaved…');
     clearTimeout(saveTimer);
@@ -726,7 +772,8 @@ export function renderEditor(
     saving = true;
     setStatus('Saving…');
     try {
-      await onSave({ title, body, attachments: pruneAttachments(ta.value, atts) }, { auto });
+      const saved = await onSave({ title, body, attachments: pruneAttachments(ta.value, atts) }, { auto });
+      if (saved) setTimestamps({ created: saved.created, updated: saved.updated });
       setStatus('Saved ✓');
     } catch {
       setStatus('Save failed');

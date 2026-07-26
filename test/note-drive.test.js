@@ -59,10 +59,10 @@ describe('note-drive', () => {
   it('stubForBigNote uploads and returns a metadata-only stub when enabled', async () => {
     await chrome.storage.local.set({ 'drive:enabled': true });
     client.uploadFile.mockResolvedValue('FID');
-    const note = { id: 'n', title: 'Big', body: 'BODY '.repeat(80), created: 5, version: 2, hash: 'h2', pinned: false };
+    const note = { id: 'n', title: 'Big', body: 'BODY '.repeat(80), created: 5, updated: 8, version: 2, hash: 'h2', pinned: false };
     const res = await stubForBigNote(note, 'PAYLOAD', null);
     expect(res.fileId).toBe('FID');
-    expect(res.stub).toMatchObject({ id: 'n', title: 'Big', version: 2, hash: 'h2', _driveBody: 'FID' });
+    expect(res.stub).toMatchObject({ id: 'n', title: 'Big', created: 5, updated: 8, version: 2, hash: 'h2', _driveBody: 'FID' });
     expect(res.stub.preview.length).toBeLessThanOrEqual(200);
     expect(res.stub.body).toBeUndefined(); // the stub carries no full body
   });

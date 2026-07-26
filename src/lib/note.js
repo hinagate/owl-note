@@ -20,12 +20,14 @@ export function extractTitle(body) {
 }
 
 export function createNote({ title, body = '', attachments = [] } = {}) {
+  const now = Date.now();
   return {
     id: crypto.randomUUID(),
     title: (typeof title === 'string' && title.trim()) ? title : extractTitle(body),
     body,
     attachments,
-    created: Date.now(), // recency key for newest-first sorting (survives reloads)
+    created: now, // stable creation time and recency key (survives reloads)
+    updated: now,
     version: 1,
     hash: contentHash(body),
   };
@@ -37,6 +39,7 @@ export function withUpdatedBody(note, body, attachments) {
     body,
     attachments,
     title: extractTitle(body),
+    updated: Date.now(),
     version: note.version + 1,
     hash: contentHash(body),
   };
@@ -50,6 +53,7 @@ export function withUpdatedContent(note, { title, body, attachments }) {
     body,
     attachments: attachments ?? note.attachments,
     title: (typeof title === 'string' && title.trim()) ? title : extractTitle(body),
+    updated: Date.now(),
     version: note.version + 1,
     hash: contentHash(body),
   };
@@ -60,11 +64,12 @@ export function withPinned(note, pinned) {
   return { ...note, pinned: !!pinned };
 }
 
-// 3-tier order for the note list: pinned first, then notes created this session
-// (most-recent first, per recentIds), then the rest NEWEST-FIRST by recency
-// (note.created, falling back to the bookmark's dateAdded for older notes). Pure.
-export function orderNotes(notes, recentIds = []) {
-  const rank = (n) => (n.pinned ? 0 : (recentIds.includes(n.id) ? 1 : 2));
+// Two-tier order for the note list: pinned first, then every unpinned note.
+// Both groups are newest-first by note.created, falling back to the bookmark's
+// dateAdded for older notes. Creation source (editor, context menu, or sync)
+// deliberately has no effect, so a fresh capture becomes the top unpinned note.
+export function orderNotes(notes) {
+  const rank = (n) => (n.pinned ? 0 : 1);
   const recency = (n) => n.created ?? n.dateAdded ?? 0; // newest first
   return notes
     .map((n, i) => ({ n, i }))
@@ -72,7 +77,6 @@ export function orderNotes(notes, recentIds = []) {
       const ra = rank(a.n);
       const rb = rank(b.n);
       if (ra !== rb) return ra - rb;
-      if (ra === 1) return recentIds.indexOf(a.n.id) - recentIds.indexOf(b.n.id);
       const byRecency = recency(b.n) - recency(a.n);
       return byRecency !== 0 ? byRecency : a.i - b.i; // stable tiebreak when equal
     })

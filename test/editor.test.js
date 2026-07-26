@@ -258,4 +258,55 @@ describe('editor', () => {
     // Autosave was scheduled by the change path (subtle inline status flips to Unsaved…).
     expect(status.textContent).toBe('Unsaved…');
   });
+
+  it('shows only Updated on the footer and exposes Created + Updated on hover', () => {
+    const el = document.getElementById('editor');
+    const created = Date.UTC(2026, 6, 26, 6, 30);
+    const updated = Date.UTC(2026, 6, 26, 7, 45);
+    const api = renderEditor(el, { body: 'Reference', created, updated, onSave: vi.fn() });
+    const row = el.querySelector('.editor-status-row');
+    const label = row.querySelector('.note-updated-time');
+    const time = label.querySelector('time');
+    const status = row.querySelector('.save-status');
+
+    expect(row.hidden).toBe(false);
+    expect(row.firstElementChild).toBe(label);
+    expect(row.lastElementChild).toBe(status);
+    expect(label.textContent).toContain('Updated');
+    expect(label.textContent).not.toContain('Created');
+    expect(time.dateTime).toBe(new Date(updated).toISOString());
+    expect(label.title).toContain(`Created: ${new Date(created).toLocaleString()}`);
+    expect(label.title).toContain(`Updated: ${new Date(updated).toLocaleString()}`);
+    api.destroy();
+  });
+
+  it('uses the creation time as an honest visible fallback when legacy data has no updated timestamp', () => {
+    const el = document.getElementById('editor');
+    const created = Date.UTC(2025, 0, 2, 3, 4);
+    const api = renderEditor(el, { body: 'Legacy', created });
+    const label = el.querySelector('.note-updated-time');
+    expect(label.querySelector('time').dateTime).toBe(new Date(created).toISOString());
+    expect(label.title).toContain('Updated: Not recorded (showing created time)');
+    api.destroy();
+  });
+
+  it('refreshes the visible Updated time from the successfully saved note', async () => {
+    const el = document.getElementById('editor');
+    const created = Date.UTC(2026, 6, 26, 6, 30);
+    const updated = Date.UTC(2026, 6, 26, 8, 15);
+    const api = renderEditor(el, {
+      body: 'Reference',
+      created,
+      updated: created,
+      onSave: vi.fn().mockResolvedValue({ created, updated }),
+    });
+
+    el.querySelector('button.save').click();
+    await vi.waitFor(() => expect(el.querySelector('.save-status').textContent).toBe('Saved ✓'));
+    const label = el.querySelector('.note-updated-time');
+    expect(label.querySelector('time').dateTime).toBe(new Date(updated).toISOString());
+    expect(label.title).toContain(`Created: ${new Date(created).toLocaleString()}`);
+    expect(label.title).toContain(`Updated: ${new Date(updated).toLocaleString()}`);
+    api.destroy();
+  });
 });

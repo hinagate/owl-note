@@ -40,6 +40,7 @@ export async function stubForBigNote(note, payloadStr, prevFileId) {
     id: note.id,
     title: note.title,
     created: note.created,
+    updated: note.updated,
     version: note.version,
     hash: note.hash,
     pinned: note.pinned,

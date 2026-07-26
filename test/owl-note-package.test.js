@@ -9,6 +9,8 @@ describe('.owl-note package', () => {
       id: 'sender-id',
       title: 'Trip / July',
       body: 'Photo: ![lake](owl-img:img1)\n\nFile: [plan](owl-file:file1)',
+      created: 100,
+      updated: 200,
       attachments: [
         { id: 'img1', name: 'lake.png', mime: 'image/png', dataUri: 'data:image/png;base64,AQID' },
         { id: 'file1', name: 'plan.txt', mime: 'text/plain', dataUri: 'data:text/plain;base64,SGk=' },
@@ -23,6 +25,8 @@ describe('.owl-note package', () => {
 
     const manifest = JSON.parse(new TextDecoder().decode(entries.find((entry) => entry.path === 'note.json').bytes));
     expect(manifest.note).not.toHaveProperty('id');
+    expect(manifest.note.createdAt).toBe(100);
+    expect(manifest.note.updatedAt).toBe(200);
     expect(manifest.attachments).toHaveLength(2);
     const markdown = new TextDecoder().decode(entries.find((entry) => entry.path === 'note.md').bytes);
     expect(markdown).toContain('(attachments/');
@@ -34,12 +38,16 @@ describe('.owl-note package', () => {
     const source = {
       title: 'Shared',
       body: '![photo](owl-img:abc)',
+      created: 300,
+      updated: 400,
       attachments: [{ id: 'abc', name: 'p.jpg', mime: 'image/jpeg', dataUri: 'data:image/jpeg;base64,AQIDBA==' }],
     };
     const blob = await buildOwlNotePackage(source);
     const parsed = await parseOwlNotePackage(new Uint8Array(await blob.arrayBuffer()));
     expect(parsed.title).toBe('Shared');
     expect(parsed.body).toBe(source.body);
+    expect(parsed.created).toBe(300);
+    expect(parsed.updated).toBe(400);
     expect(parsed.attachments).toEqual(source.attachments);
   });
 });

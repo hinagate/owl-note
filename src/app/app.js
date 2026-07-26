@@ -173,7 +173,6 @@ export async function reconcileLocalToDrive(save = saveNote) {
   return synced;
 }
 
-const recentIds = []; // ids of notes created this session — float to the top until reload (in-memory)
 const QUICK_CAPTURE_KEY = 'owl:quickCapture';
 let lastQuickCaptureToken = null;
 let quickCaptureQueue = Promise.resolve();
@@ -667,7 +666,7 @@ async function maybeCreateWelcomeNote() {
   if (!empty) { try { await chrome.storage.local.set({ [WELCOMED_KEY]: true }); } catch { /* best-effort */ } return; }
   // Empty + unflagged: create the Welcome note through the REAL save path so it is an
   // ordinary note (syncs, lists, deletes, indexes like any other — no special storage).
-  const note = { id: WELCOME_NOTE_ID, title: WELCOME_NOTE_TITLE, body: WELCOME_NOTE_BODY, attachments: [], version: 1, hash: contentHash(WELCOME_NOTE_BODY) };
+  const note = { ...createNote({ title: WELCOME_NOTE_TITLE, body: WELCOME_NOTE_BODY }), id: WELCOME_NOTE_ID };
   try {
     await welcomeSaveImpl(note, ui.rootId, undefined);
     await refreshPanes(); // repopulate ui.notes so the open-latest-note flow can land on it
@@ -769,7 +768,7 @@ async function refreshNoteList() {
   const driveEnabled = await isEnabled();
   let notes = await loadNotes(ui.activeFolder);
   if (ui.query) notes = searchNotes(notes, ui.query);
-  const list = orderNotes(notes, recentIds);
+  const list = orderNotes(notes);
   const isDraft = ui.isNew && ui.current && !ui.activeBookmarkId && !ui.query;
   if (isDraft) {
     list.unshift({ bookmarkId: DRAFT_ID, title: ui.current.title || 'New note', body: ui.current.body, draft: true });
@@ -1141,6 +1140,8 @@ function renderCurrentEditor(opts = {}) {
     title: ui.current ? ui.current.title : '',
     body: ui.current ? ui.current.body : '',
     attachments: ui.current ? (ui.current.attachments || []) : [],
+    created: ui.current ? (ui.current.created ?? ui.current.dateAdded) : null,
+    updated: ui.current?.updated ?? null,
     recoverAttachments: async ({ body, attachments }) =>
       (await resolveReferencedAttachments({ body, attachments }, { rootId: ui.rootId })).attachments,
     focusTitle: !!opts.focusTitle,
@@ -1158,7 +1159,6 @@ function renderCurrentEditor(opts = {}) {
       const note = existing
         ? withUpdatedContent(ui.current, { title, body, attachments })
         : createNote({ title, body, attachments });
-      if (!existing) recentIds.unshift(note.id);
       const folder = ui.activeLocalId
         ? (ui.activeLocalFolderId ?? ui.activeFolder)
         : (ui.activeFolder === ui.rootId ? ui.rootId : ui.activeFolder);
@@ -1197,6 +1197,7 @@ function renderCurrentEditor(opts = {}) {
       // Auto-save only needs the list (snippet/title) refreshed, not the whole shell.
       if (auto) await refreshNoteList();
       else await refreshPanes();
+      return savedNote;
     },
     onDelete: ui.current ? () => deleteCurrentNote() : null,
     breadcrumb: ui.current ? folderPath(noteFolderId) : [],
@@ -1573,7 +1574,13 @@ async function folderForZipDir(dir, root, cache) {
   return parent;
 }
 
-async function importOne({ id, title, body, attachments }, targetFolderId, ctx) {
+function importedTimestamp(value) {
+  if (value == null || value === '') return null;
+  const timestamp = typeof value === 'number' ? value : Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+async function importOne({ id, title, body, attachments, created, updated }, targetFolderId, ctx) {
   const { idMap, tally } = ctx;
   // Imported ids are untrusted. Strip angle brackets so a crafted id can never forge
   // the <<<NOTE c:...>>> sentinel the Ask prompt wraps chunks in — the chunk id
@@ -1581,7 +1588,19 @@ async function importOne({ id, title, body, attachments }, targetFolderId, ctx) 
   // choke point for every import format), not in the prompt where it can't be altered.
   const safeId = typeof id === 'string' ? id.replace(/[<>]/g, '') : id;
   const existing = safeId ? idMap.get(safeId) : undefined;
-  const note = { id: safeId || crypto.randomUUID(), title, body, attachments: attachments || [], version: 1, hash: contentHash(body) };
+  const now = Date.now();
+  const createdAt = importedTimestamp(created) ?? now;
+  const updatedAt = importedTimestamp(updated) ?? createdAt;
+  const note = {
+    id: safeId || crypto.randomUUID(),
+    title,
+    body,
+    attachments: attachments || [],
+    created: createdAt,
+    updated: updatedAt,
+    version: 1,
+    hash: contentHash(body),
+  };
   const res = await saveNote(note, targetFolderId, existing ? existing.bookmarkId : undefined);
   ctx.touched.add(targetFolderId); // remember where notes landed, to reveal it after import
   if (existing) tally.updated += 1;
@@ -1671,7 +1690,14 @@ export async function importFiles(files, onProgress) {
         for (const n of notes) {
           if (!n || typeof n.id !== 'string') { step(); continue; }
           const prepared = await prepareImport(n.body || '', n.attachments || []);
-          await importOne({ id: n.id, title: n.title || extractTitle(prepared.body), body: prepared.body, attachments: prepared.attachments }, root, ctx);
+          await importOne({
+            id: n.id,
+            title: n.title || extractTitle(prepared.body),
+            body: prepared.body,
+            attachments: prepared.attachments,
+            created: n.created,
+            updated: n.updated,
+          }, root, ctx);
           step();
         }
       } else {
