@@ -587,6 +587,43 @@ body.resizing { user-select: none; cursor: col-resize; }
   .share-link-dialog footer { align-items: flex-end; }
 }
 
+/* Draw panel — the sketchpad modal (src/app/draw-panel.js). Reuses the
+   share-link backdrop/dialog shell and only adds the surface and its tools. */
+.draw-dialog { width: min(1040px, 100%); }
+.draw-dialog header { margin-bottom: 12px; }
+.draw-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.draw-divider { width: 1px; height: 22px; margin: 0 6px; background: #dadce0; }
+.draw-tool, .draw-undo, .draw-redo, .draw-clear {
+  min-width: 34px; height: 34px; padding: 0 9px;
+  border: 1px solid #dadce0; border-radius: 8px; background: #fff;
+  color: var(--text); font-size: 14px; line-height: 1; cursor: pointer;
+}
+.draw-tool:hover, .draw-undo:hover, .draw-redo:hover, .draw-clear:hover { background: #f1f3f4; }
+.draw-tool.active { border-color: #1a73e8; background: #e8f0fe; }
+.draw-undo:disabled, .draw-redo:disabled, .draw-clear:disabled { opacity: 0.4; cursor: default; }
+.draw-color {
+  width: 26px; height: 26px; padding: 0; border: 2px solid transparent;
+  border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(32, 33, 36, 0.16); cursor: pointer;
+}
+.draw-color.active { border-color: #1a73e8; }
+.draw-width {
+  display: grid; place-items: center; width: 34px; height: 34px; padding: 0;
+  border: 1px solid #dadce0; border-radius: 8px; background: #fff;
+  color: var(--text); line-height: 1; cursor: pointer;
+}
+.draw-width.active { border-color: #1a73e8; background: #e8f0fe; }
+.draw-canvas {
+  display: block; width: 100%; height: min(58vh, 560px);
+  border: 1px solid #dadce0; border-radius: 12px; background: #fff;
+  cursor: crosshair; touch-action: none; /* the canvas consumes the gesture, not the scroller */
+}
+.draw-status { min-height: 20px; margin-top: 8px; color: #b35900; font-size: 12px; }
+.draw-dialog footer { justify-content: flex-end; margin-top: 12px; padding-top: 12px; }
+.draw-confirm { align-items: center; }
+.draw-confirm span { margin-right: auto; color: #3c4043; font-size: 13px; }
+.draw-discard { border-color: #d93025; background: #d93025; }
+.draw-discard:hover { background: #b3261e; }
+
 /* Toast */
 #toast {
   position: fixed; bottom: 18px; right: 18px; background: #1d2125; color: #fff;
