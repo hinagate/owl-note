@@ -3,9 +3,9 @@ import {
   createSketch, beginStroke, extendStroke, straightenStroke, endStroke,
   beginShape, updateShape, endShape, visibleItems,
   addImage, imageAt, beginTransform, applyTransform, endTransform, removeItem,
-  squareBox, snapAngle, polygonPoints, boxOf, isShapeTool,
+  squareBox, snapAngle, arrowHead, compositeFor, boxOf, isShapeTool, isFreehandTool,
   undo, redo, clear, isEmpty, canUndo, canRedo, replay,
-  PEN, ERASE, LINE, RECT, ROUND_RECT, ELLIPSE, POLYGON, IMAGE,
+  PEN, HIGHLIGHT, ERASE, LINE, ARROW, RECT, ROUND_RECT, ELLIPSE, IMAGE,
 } from '../src/lib/drawing.js';
 
 function stroke(state, points, opts = {}) {
@@ -155,8 +155,10 @@ function shape(state, tool, [x0, y0], [x1, y1], opts = {}) {
 
 describe('shape tools', () => {
   it('recognises exactly the drag-drawn tools', () => {
-    for (const t of [LINE, RECT, ROUND_RECT, ELLIPSE, POLYGON]) expect(isShapeTool(t)).toBe(true);
-    for (const t of [PEN, ERASE, 'select']) expect(isShapeTool(t)).toBe(false);
+    for (const t of [LINE, ARROW, RECT, ROUND_RECT, ELLIPSE]) expect(isShapeTool(t)).toBe(true);
+    for (const t of [PEN, HIGHLIGHT, ERASE, 'select']) expect(isShapeTool(t)).toBe(false);
+    for (const t of [PEN, HIGHLIGHT, ERASE]) expect(isFreehandTool(t)).toBe(true);
+    for (const t of [LINE, ARROW, RECT, 'select']) expect(isFreehandTool(t)).toBe(false);
   });
 
   it('keeps a dragged shape out of history until the drag ends', () => {
@@ -186,12 +188,6 @@ describe('shape tools', () => {
     expect(s.items).toHaveLength(0);
   });
 
-  it('carries the polygon side count onto the item', () => {
-    const s = createSketch();
-    shape(s, POLYGON, [0, 0], [60, 60], { sides: 7 });
-    expect(s.items[0].sides).toBe(7);
-  });
-
   it('normalises a right-to-left drag into a positive box', () => {
     const s = createSketch();
     shape(s, RECT, [80, 60], [20, 10]);
@@ -204,7 +200,7 @@ describe('shape tools', () => {
       [RECT, 'rect'],
       [ROUND_RECT, 'arcTo'],
       [ELLIPSE, 'ellipse'],
-      [POLYGON, 'closePath'],
+      [ARROW, 'lineTo'],
     ];
     for (const [tool, expectedCall] of cases) {
       const s = createSketch();
@@ -255,16 +251,62 @@ describe('shift constraints', () => {
     expect(points[1].y).toBeCloseTo(0, 5); // snapped to horizontal
   });
 
-  it('builds a regular polygon with the first vertex at the top', () => {
-    const points = polygonPoints(0, 0, 10, 10, 4);
-    expect(points).toHaveLength(4);
-    expect(points[0].x).toBeCloseTo(0, 5);
-    expect(points[0].y).toBeCloseTo(-10, 5);
+  it('snaps an arrow like a line, since both are directional', () => {
+    const s = createSketch();
+    shape(s, ARROW, [0, 0], [70, 6], { constrain: true });
+    expect(s.items[0].y1).toBeCloseTo(0, 5);
+  });
+});
+
+describe('arrow and highlighter', () => {
+  it('puts two barbs behind the arrow tip, angled back along the shaft', () => {
+    const barbs = arrowHead(0, 0, 100, 0, 4);
+    expect(barbs).toHaveLength(2);
+    for (const barb of barbs) expect(barb.x).toBeLessThan(100); // behind the tip
+    expect(barbs[0].y).toBeCloseTo(-barbs[1].y, 5);             // symmetric
   });
 
-  it('never builds a polygon with fewer than three sides', () => {
-    expect(polygonPoints(0, 0, 5, 5, 1)).toHaveLength(3);
-    expect(polygonPoints(0, 0, 5, 5, 0)).toHaveLength(3);
+  it('never lets the arrowhead outgrow a short arrow', () => {
+    const short = arrowHead(0, 0, 6, 0, 8);
+    for (const barb of short) expect(barb.x).toBeGreaterThanOrEqual(-0.001);
+  });
+
+  it('draws the arrow shaft plus its head in one path', () => {
+    const s = createSketch();
+    shape(s, ARROW, [0, 0], [60, 0]);
+    const ctx = fakeCtx();
+    replay(ctx, s.items);
+    const lineTos = ctx.calls.filter((c) => c[0] === 'lineTo');
+    expect(lineTos).toHaveLength(3); // shaft + two barbs
+  });
+
+  it('picks a compositing mode per ink type', () => {
+    expect(compositeFor(ERASE)).toBe('destination-out');
+    expect(compositeFor(HIGHLIGHT)).toBe('multiply');
+    expect(compositeFor(PEN)).toBe('source-over');
+  });
+
+  it('draws highlighter ink translucent, multiplied, with a flat tip', () => {
+    const ctx = fakeCtx();
+    const s = createSketch();
+    stroke(s, [[0, 0], [50, 0]], { mode: HIGHLIGHT });
+    replay(ctx, s.items);
+    expect(ctx.calls).toContainEqual(['set:globalCompositeOperation', 'multiply']);
+    expect(ctx.props.globalAlpha).toBeLessThan(1);
+    expect(ctx.props.lineCap).toBe('butt');
+  });
+
+  it('does not leak highlighter alpha or cap onto the next stroke', () => {
+    const s = createSketch();
+    stroke(s, [[0, 0], [10, 0]], { mode: HIGHLIGHT });
+    stroke(s, [[0, 10], [10, 10]], { mode: PEN });
+    const ctx = fakeCtx();
+    replay(ctx, s.items);
+    // Every item is wrapped in its own save/restore, so state cannot carry over.
+    const saves = ctx.calls.filter((c) => c[0] === 'save').length;
+    const restores = ctx.calls.filter((c) => c[0] === 'restore').length;
+    expect(saves).toBe(2);
+    expect(restores).toBe(2);
   });
 });
 

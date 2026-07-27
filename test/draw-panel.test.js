@@ -223,7 +223,7 @@ describe('draw panel', () => {
 describe('draw panel shape tools', () => {
   it('offers every shape tool in the toolbar', () => {
     showDrawPanel({});
-    for (const id of ['select', 'pen', 'erase', 'line', 'rect', 'round-rect', 'ellipse', 'polygon']) {
+    for (const id of ['select', 'pen', 'highlight', 'erase', 'line', 'arrow', 'rect', 'round-rect', 'ellipse']) {
       expect(document.querySelector(`.draw-tool[data-tool="${id}"]`)).toBeTruthy();
     }
   });
@@ -268,24 +268,85 @@ describe('draw panel shape tools', () => {
     expect(state.items[0].points).toHaveLength(2);
   });
 
-  it('shows the sides control only for the polygon tool', () => {
+  it('has no polygon tool', () => {
     showDrawPanel({});
-    const sides = document.querySelector('.draw-sides');
-    expect(sides.hidden).toBe(true);
-    pickTool('polygon');
-    expect(sides.hidden).toBe(false);
-    pickTool('rect');
-    expect(sides.hidden).toBe(true);
+    expect(document.querySelector('.draw-tool[data-tool="polygon"]')).toBeNull();
+    expect(document.querySelector('.draw-sides')).toBeNull();
   });
 
-  it('uses the chosen number of polygon sides, clamped to a drawable range', () => {
+  it('drags out an arrow, snapping its angle with Shift', () => {
     const { canvas, state } = showDrawPanel({});
-    pickTool('polygon');
-    const input = document.querySelector('.draw-sides-input');
-    input.value = '99';
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    draw(canvas, [[0, 0], [50, 50]]);
-    expect(state.items[0].sides).toBe(12);
+    pickTool('arrow');
+    draw(canvas, [[0, 0], [80, 6]], { shift: true });
+    expect(state.items[0].kind).toBe('arrow');
+    expect(state.items[0].y1).toBeCloseTo(0, 5);
+  });
+});
+
+describe('draw panel brush sizing', () => {
+  it('lays down the selected width', () => {
+    const { canvas, state } = showDrawPanel({});
+    click(document.querySelector('.draw-width[data-width="8"]'));
+    draw(canvas, [[0, 0], [10, 10]]);
+    expect(state.items[0].width).toBe(8);
+  });
+
+  it('scales the eraser and the highlighter past the nominal width', () => {
+    const eraser = showDrawPanel({});
+    pickTool('erase');
+    click(document.querySelector('.draw-width[data-width="4"]'));
+    draw(eraser.canvas, [[0, 0], [10, 10]]);
+    expect(eraser.state.items[0].width).toBe(12); // 4 x 3
+
+    const marker = showDrawPanel({});
+    pickTool('highlight');
+    click(document.querySelector('.draw-width[data-width="4"]'));
+    draw(marker.canvas, [[0, 0], [10, 10]]);
+    expect(marker.state.items[0].width).toBe(20); // 4 x 5
+    expect(marker.state.items[0].mode).toBe('highlight');
+  });
+
+  it('shows the width swatch at the real stroke size', () => {
+    showDrawPanel({});
+    for (const value of ['2', '4', '8']) {
+      const dot = document.querySelector(`.draw-width[data-width="${value}"] .draw-width-dot`);
+      expect(dot.style.width).toBe(`${value}px`);
+    }
+  });
+
+  // The reported bug: changing the size gave no feedback at the pointer. The
+  // panel hides the OS cursor for brush tools and paints its own ring instead.
+  it('hides the OS cursor only for brush tools, so the ring can stand in', () => {
+    const { canvas } = showDrawPanel({});
+    expect(canvas.classList.contains('brush')).toBe(true); // pen is the default
+    pickTool('highlight');
+    expect(canvas.classList.contains('brush')).toBe(true);
+    pickTool('erase');
+    expect(canvas.classList.contains('brush')).toBe(true);
+    pickTool('rect');
+    expect(canvas.classList.contains('brush')).toBe(false);
+    pickTool('select');
+    expect(canvas.classList.contains('brush')).toBe(false);
+  });
+
+  it('tracks the pointer without a button held, so the ring can follow it', () => {
+    const { canvas, state } = showDrawPanel({});
+    pointer(canvas, 'pointermove', 40, 40);
+    pointer(canvas, 'pointermove', 90, 70);
+    expect(state.items).toHaveLength(0); // hovering must never draw
+  });
+
+  it('keeps the size ring out of the exported image', async () => {
+    let exported = null;
+    const { canvas, saveButton } = showDrawPanel({
+      exportBlob: async (items) => { exported = items; return new Blob(['png'], { type: 'image/png' }); },
+    });
+    draw(canvas, [[0, 0], [10, 10]]);
+    pointer(canvas, 'pointermove', 55, 55); // ring is showing
+    click(saveButton);
+    await vi.waitFor(() => expect(exported).not.toBeNull());
+    expect(exported).toHaveLength(1);          // just the stroke
+    expect(exported[0].kind).toBe('stroke');
   });
 });
 

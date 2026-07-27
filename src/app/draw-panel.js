@@ -8,19 +8,21 @@ import {
   createSketch, beginStroke, extendStroke, straightenStroke, endStroke,
   beginShape, updateShape, endShape,
   addImage, imageAt, beginTransform, applyTransform, endTransform, removeItem,
-  undo, redo, clear, isEmpty, canUndo, canRedo, replay, visibleItems, boxOf, isShapeTool,
-  PEN, ERASE, SELECT, LINE, RECT, ROUND_RECT, ELLIPSE, POLYGON,
+  undo, redo, clear, isEmpty, canUndo, canRedo, replay, visibleItems, boxOf,
+  isShapeTool, isFreehandTool,
+  PEN, HIGHLIGHT, ERASE, SELECT, LINE, ARROW, RECT, ROUND_RECT, ELLIPSE,
 } from '../lib/drawing.js';
 
 const TOOLS = [
   { id: SELECT, className: 'draw-tool-select', glyph: '↖', label: 'Select — move or resize a pasted photo' },
   { id: PEN, className: 'draw-tool-pen', glyph: '✏️', label: 'Pen — hold Shift for a straight line' },
+  { id: HIGHLIGHT, className: 'draw-tool-highlight', glyph: '🖍', label: 'Highlighter — hold Shift for a straight line' },
   { id: ERASE, className: 'draw-tool-erase', glyph: '◻️', label: 'Eraser' },
   { id: LINE, className: 'draw-tool-line', glyph: '╱', label: 'Line — hold Shift to snap to 45°' },
+  { id: ARROW, className: 'draw-tool-arrow', glyph: '↗', label: 'Arrow — hold Shift to snap to 45°' },
   { id: RECT, className: 'draw-tool-rect', glyph: '▭', label: 'Rectangle — hold Shift for a square' },
   { id: ROUND_RECT, className: 'draw-tool-round-rect', glyph: '▢', label: 'Rounded rectangle — hold Shift for a square' },
   { id: ELLIPSE, className: 'draw-tool-ellipse', glyph: '◯', label: 'Ellipse — hold Shift for a circle' },
-  { id: POLYGON, className: 'draw-tool-polygon', glyph: '⬠', label: 'Polygon — hold Shift for equal width and height' },
 ];
 
 const COLORS = [
@@ -37,6 +39,16 @@ const WIDTHS = [
 ];
 // An eraser you can barely see is useless — it tracks the pen's width but wider.
 const ERASER_SCALE = 3;
+// A highlighter lays down a broad band, not a line.
+const HIGHLIGHT_SCALE = 5;
+
+// The width actually laid down, which is what the cursor ring must preview —
+// otherwise the ring lies about the eraser and the highlighter.
+export function effectiveWidth(tool, width) {
+  if (tool === ERASE) return width * ERASER_SCALE;
+  if (tool === HIGHLIGHT) return width * HIGHLIGHT_SCALE;
+  return width;
+}
 // Used when the layout reports nothing (jsdom, or a panel measured before paint).
 const FALLBACK_SIZE = { width: 960, height: 560 };
 const HANDLE = 8;          // corner handle size, in CSS pixels
@@ -157,10 +169,10 @@ export function showDrawPanel({
   let tool = PEN;
   let color = COLORS[0].value;
   let width = WIDTHS[1].value;
-  let sides = 5;
   let selected = null;      // index into state.items; images only
   let drag = null;          // { mode: 'draw' | 'move' | 'resize', ... }
   let shiftHeld = false;
+  let cursor = null;        // last pointer position, for the brush-size ring
   let frame = 0;
 
   const backdrop = document.createElement('div');
@@ -188,20 +200,6 @@ export function showDrawPanel({
     return el;
   });
 
-  // Sides only means something for the polygon tool, so it appears with it.
-  const sidesWrap = document.createElement('label');
-  sidesWrap.className = 'draw-sides';
-  sidesWrap.hidden = true;
-  const sidesInput = document.createElement('input');
-  sidesInput.type = 'number';
-  sidesInput.min = '3';
-  sidesInput.max = '12';
-  sidesInput.value = String(sides);
-  sidesInput.className = 'draw-sides-input';
-  sidesInput.setAttribute('aria-label', 'Polygon sides');
-  sidesWrap.append(document.createTextNode('Sides'), sidesInput);
-  tools.appendChild(sidesWrap);
-
   const colorDivider = document.createElement('span');
   colorDivider.className = 'draw-divider';
   tools.appendChild(colorDivider);
@@ -216,10 +214,16 @@ export function showDrawPanel({
   const widthDivider = document.createElement('span');
   widthDivider.className = 'draw-divider';
   tools.appendChild(widthDivider);
+  // The swatch is a dot drawn at the ACTUAL stroke width, so the toolbar shows
+  // the size rather than describing it.
   const widthButtons = WIDTHS.map((w) => {
-    const el = button(`draw-width${w.value === width ? ' active' : ''}`, '●', `${w.label} stroke`);
+    const el = button(`draw-width${w.value === width ? ' active' : ''}`, '', `${w.label} stroke`);
     el.dataset.width = String(w.value);
-    el.style.fontSize = `${8 + w.value}px`;
+    const dot = document.createElement('span');
+    dot.className = 'draw-width-dot';
+    dot.style.width = `${w.value}px`;
+    dot.style.height = `${w.value}px`;
+    el.appendChild(dot);
     tools.appendChild(el);
     return el;
   });
@@ -295,12 +299,36 @@ export function showDrawPanel({
     ctx.restore();
   }
 
+  // A ring at the pointer, drawn at the exact width the tool will lay down.
+  // Without it, changing the stroke size gives no feedback until after a stroke
+  // is already committed — which is the whole point of this preview.
+  function paintCursor() {
+    if (!cursor || !isFreehandTool(tool)) return;
+    const radius = Math.max(1.5, effectiveWidth(tool, width) / 2);
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.lineWidth = 1;
+    // Two rings, dark over light, so the preview stays visible on white paper
+    // and on top of a dark photo alike.
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.beginPath();
+    ctx.arc(cursor.x, cursor.y, radius + 1, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = tool === ERASE ? 'rgba(32,33,36,0.75)' : color;
+    ctx.beginPath();
+    ctx.arc(cursor.x, cursor.y, radius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function paint() {
     frame = 0;
     if (!ctx) return;
     ctx.clearRect(0, 0, cssWidth, cssHeight);
     replay(ctx, visibleItems(state));
-    paintSelection(); // chrome only — drawn after replay so it never exports
+    // Chrome only — both are drawn after replay, so neither ever exports.
+    paintSelection();
+    paintCursor();
   }
 
   function syncControls() {
@@ -308,7 +336,9 @@ export function showDrawPanel({
     undoButton.disabled = !canUndo(state);
     redoButton.disabled = !canRedo(state);
     clearButton.disabled = isEmpty(state);
-    sidesWrap.hidden = tool !== POLYGON;
+    // Hide the OS cursor for brush tools: the ring is the cursor, and showing
+    // both reads as two pointers.
+    canvas.classList.toggle('brush', isFreehandTool(tool));
   }
 
   function invalidate() {
@@ -361,28 +391,23 @@ export function showDrawPanel({
     }
 
     selected = null;
-    if (tool === PEN || tool === ERASE) {
-      beginStroke(state, {
-        x,
-        y,
-        color,
-        width: tool === ERASE ? width * ERASER_SCALE : width,
-        mode: tool,
-      });
+    if (isFreehandTool(tool)) {
+      beginStroke(state, { x, y, color, width: effectiveWidth(tool, width), mode: tool });
     } else if (isShapeTool(tool)) {
-      beginShape(state, { tool, x, y, color, width, sides });
+      beginShape(state, { tool, x, y, color, width });
     }
     drag = { mode: 'draw' };
     invalidate();
   });
 
   canvas.addEventListener('pointermove', (event) => {
-    if (!drag) return;
     shiftHeld = !!event.shiftKey;
     const { x, y } = pointAt(event);
+    cursor = { x, y };
+    if (!drag) { invalidate(); return; } // still repaint, so the ring follows
 
     if (drag.mode === 'draw') {
-      if (tool === PEN || tool === ERASE) {
+      if (isFreehandTool(tool)) {
         if (shiftHeld) straightenStroke(state, { x, y, constrain: true });
         else extendStroke(state, { x, y });
       } else {
@@ -402,7 +427,7 @@ export function showDrawPanel({
       canvas.releasePointerCapture(event.pointerId);
     }
     if (drag.mode === 'draw') {
-      if (tool === PEN || tool === ERASE) endStroke(state);
+      if (isFreehandTool(tool)) endStroke(state);
       else endShape(state);
     } else {
       endTransform(state);
@@ -412,6 +437,7 @@ export function showDrawPanel({
   }
   canvas.addEventListener('pointerup', finishDrag);
   canvas.addEventListener('pointercancel', finishDrag);
+  canvas.addEventListener('pointerleave', () => { cursor = null; invalidate(); });
 
   /* --------------------------------------------------------------- paste */
 
@@ -461,11 +487,6 @@ export function showDrawPanel({
     invalidate();
   }
   for (const el of toolButtons) el.addEventListener('click', () => setTool(el.dataset.tool));
-
-  sidesInput.addEventListener('input', () => {
-    const value = Number(sidesInput.value);
-    if (Number.isFinite(value)) sides = Math.max(3, Math.min(12, Math.round(value)));
-  });
 
   for (const el of colorButtons) {
     el.addEventListener('click', () => {

@@ -13,20 +13,26 @@
 // canvas cannot draw bytes — only a decoded image.
 
 export const PEN = 'pen';
+export const HIGHLIGHT = 'highlight';
 export const ERASE = 'erase';
 export const LINE = 'line';
+export const ARROW = 'arrow';
 export const RECT = 'rect';
 export const ROUND_RECT = 'round-rect';
 export const ELLIPSE = 'ellipse';
-export const POLYGON = 'polygon';
 export const SELECT = 'select';
 export const IMAGE = 'image';
 
 // Tools that are drawn by dragging a bounding box from an anchor.
-export const SHAPE_TOOLS = [LINE, RECT, ROUND_RECT, ELLIPSE, POLYGON];
+export const SHAPE_TOOLS = [LINE, ARROW, RECT, ROUND_RECT, ELLIPSE];
 export function isShapeTool(tool) { return SHAPE_TOOLS.includes(tool); }
+// Freehand tools: they record points rather than a box.
+export function isFreehandTool(tool) { return tool === PEN || tool === HIGHLIGHT || tool === ERASE; }
 
 const ROUND_RECT_RADIUS = 22;
+// Highlighter ink is translucent so text and photos read through it, and it
+// multiplies so overlapping passes deepen the way a real marker does.
+export const HIGHLIGHT_ALPHA = 0.32;
 
 export function createSketch() {
   // `items` is replaced, never mutated in place, except for the points of the
@@ -93,8 +99,8 @@ export function endStroke(state) {
 
 // Shapes live in `state.draft` until the drag ends, so a click that produces a
 // zero-size shape leaves neither an item nor an undo step.
-export function beginShape(state, { tool, x, y, color = '#202124', width = 4, sides = 5 } = {}) {
-  state.draft = { kind: tool, color, width, sides, x0: x, y0: y, x1: x, y1: y };
+export function beginShape(state, { tool, x, y, color = '#202124', width = 4 } = {}) {
+  state.draft = { kind: tool, color, width, x0: x, y0: y, x1: x, y1: y };
   state.open = true;
   return state;
 }
@@ -102,8 +108,11 @@ export function beginShape(state, { tool, x, y, color = '#202124', width = 4, si
 export function updateShape(state, { x, y, constrain = false } = {}) {
   const draft = state.draft;
   if (!draft) return state;
+  // Line and arrow are directional, so Shift snaps their angle; the box tools
+  // have no direction, so Shift makes them square instead.
+  const directional = draft.kind === LINE || draft.kind === ARROW;
   const box = constrain
-    ? (draft.kind === LINE ? snapAngle(draft.x0, draft.y0, x, y) : squareBox(draft.x0, draft.y0, x, y))
+    ? (directional ? snapAngle(draft.x0, draft.y0, x, y) : squareBox(draft.x0, draft.y0, x, y))
     : { x1: x, y1: y };
   draft.x1 = box.x1;
   draft.y1 = box.y1;
@@ -139,18 +148,6 @@ export function snapAngle(x0, y0, x1, y1) {
   const step = Math.PI / 4;
   const angle = Math.round(Math.atan2(dy, dx) / step) * step;
   return { x0, y0, x1: x0 + length * Math.cos(angle), y1: y0 + length * Math.sin(angle) };
-}
-
-// Vertices of a regular polygon inscribed in the box, first vertex at the top
-// so a triangle points up and a pentagon reads the way people draw one.
-export function polygonPoints(cx, cy, rx, ry, sides) {
-  const n = Math.max(3, Math.round(sides) || 3);
-  const points = [];
-  for (let i = 0; i < n; i++) {
-    const angle = -Math.PI / 2 + (i * 2 * Math.PI) / n;
-    points.push({ x: cx + rx * Math.cos(angle), y: cy + ry * Math.sin(angle) });
-  }
-  return points;
 }
 
 // Normalized bounding box of a shape item, since a drag may run right-to-left.
@@ -274,6 +271,19 @@ function drawStroke(ctx, item) {
   ctx.stroke();
 }
 
+// The two barbs of an arrowhead at (x1,y1), pointing back along the shaft. The
+// head grows with the stroke but never outruns a short arrow, so a tiny drag
+// still looks like an arrow rather than a blot.
+export function arrowHead(x0, y0, x1, y1, width) {
+  const angle = Math.atan2(y1 - y0, x1 - x0);
+  const spread = Math.PI / 7;
+  const length = Math.min(Math.hypot(x1 - x0, y1 - y0), 10 + width * 3);
+  return [
+    { x: x1 - length * Math.cos(angle - spread), y: y1 - length * Math.sin(angle - spread) },
+    { x: x1 - length * Math.cos(angle + spread), y: y1 - length * Math.sin(angle + spread) },
+  ];
+}
+
 function drawShape(ctx, item) {
   const { x, y, width: w, height: h } = boxOf(item);
   ctx.beginPath();
@@ -282,19 +292,28 @@ function drawShape(ctx, item) {
   if (item.kind === LINE) {
     ctx.moveTo(item.x0, item.y0);
     ctx.lineTo(item.x1, item.y1);
+  } else if (item.kind === ARROW) {
+    ctx.moveTo(item.x0, item.y0);
+    ctx.lineTo(item.x1, item.y1);
+    for (const barb of arrowHead(item.x0, item.y0, item.x1, item.y1, item.width)) {
+      ctx.moveTo(item.x1, item.y1);
+      ctx.lineTo(barb.x, barb.y);
+    }
   } else if (item.kind === RECT) {
     ctx.rect(x, y, w, h);
   } else if (item.kind === ROUND_RECT) {
     roundRectPath(ctx, x, y, w, h, ROUND_RECT_RADIUS);
   } else if (item.kind === ELLIPSE) {
     ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
-  } else if (item.kind === POLYGON) {
-    const points = polygonPoints(x + w / 2, y + h / 2, w / 2, h / 2, item.sides);
-    ctx.moveTo(points[0].x, points[0].y);
-    for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
-    ctx.closePath();
   }
   ctx.stroke();
+}
+
+// How an item's ink combines with what is already on the layer.
+export function compositeFor(mode) {
+  if (mode === ERASE) return 'destination-out'; // cut back to transparency
+  if (mode === HIGHLIGHT) return 'multiply';    // deepen where passes overlap
+  return 'source-over';
 }
 
 // Paint items onto a 2D context, in order. Eraser strokes composite with
@@ -307,12 +326,18 @@ function drawShape(ctx, item) {
 // the panel paints its own chrome on top afterwards.
 export function replay(ctx, items) {
   if (!ctx) return; // no 2D context (jsdom) — recording items still works
-  ctx.save();
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
   for (const item of items || []) {
     if (!item) continue;
-    ctx.globalCompositeOperation = item.mode === ERASE ? 'destination-out' : 'source-over';
+    // save/restore per item, so one highlighter stroke's alpha and flat cap
+    // cannot leak onto whatever is drawn after it.
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.globalCompositeOperation = compositeFor(item.mode);
+    if (item.mode === HIGHLIGHT) {
+      ctx.globalAlpha = HIGHLIGHT_ALPHA;
+      ctx.lineCap = 'butt'; // a real highlighter has a flat chisel tip
+    }
     if (item.kind === IMAGE) {
       if (item.el) ctx.drawImage(item.el, item.x, item.y, item.width, item.height);
     } else if (item.kind === 'stroke') {
@@ -320,6 +345,6 @@ export function replay(ctx, items) {
     } else {
       drawShape(ctx, item);
     }
+    ctx.restore();
   }
-  ctx.restore();
 }
