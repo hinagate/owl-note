@@ -293,7 +293,7 @@ describe('insertTable', () => {
     const body = '/i/ /i:/  咧嘴  \n ![drawing-20260727-103612.png](owl-img:b28d96c7deba9)';
     const edit = insertTable(body, 0, body.length);
     expect(applyEdit(body, edit)).toBe([
-      '| Step | Sketch |',
+      '| title 1 | title 2 |',
       '| --- | --- |',
       '| /i/ /i:/ 咧嘴 | ![drawing-20260727-103612.png](owl-img:b28d96c7deba9) |',
     ].join('\n'));
@@ -310,7 +310,7 @@ describe('insertTable', () => {
   it('pads a short row so every row has the same column count', () => {
     const body = 'a\nb\nc\n\nd';
     const rows = applyEdit(body, insertTable(body, 0, body.length)).split('\n');
-    expect(rows[0]).toBe('| Column 1 | Column 2 | Column 3 |');
+    expect(rows[0]).toBe('| title 1 | title 2 | title 3 |');
     expect(rows[2]).toBe('| a | b | c |');
     expect(rows[3]).toBe('| d |  |  |');
   });
@@ -329,16 +329,16 @@ describe('insertTable', () => {
   it('inserts a starter table when nothing is selected, selecting the first heading', () => {
     const body = 'prose\n';
     const edit = insertTable(body, body.length, body.length);
-    expect(applyEdit(body, edit)).toBe('prose\n| Step | Sketch |\n| --- | --- |\n|  |  |\n');
+    expect(applyEdit(body, edit)).toBe('prose\n| title 1 | title 2 |\n| --- | --- |\n|  |  |\n');
     // selStart/selEnd are positions in the RESULTING body, so the user can type
     // straight over the placeholder heading.
-    expect(applyEdit(body, edit).slice(edit.selStart, edit.selEnd)).toBe('Step');
+    expect(applyEdit(body, edit).slice(edit.selStart, edit.selEnd)).toBe('title 1');
   });
 
   it('opens a line before a starter table dropped mid-paragraph', () => {
     const body = 'prose';
     expect(applyEdit(body, insertTable(body, 5, 5)))
-      .toBe('prose\n| Step | Sketch |\n| --- | --- |\n|  |  |\n');
+      .toBe('prose\n| title 1 | title 2 |\n| --- | --- |\n|  |  |\n');
   });
 
   it('is a no-op on an all-blank selection', () => {
@@ -347,7 +347,7 @@ describe('insertTable', () => {
 });
 
 const TABLE = [
-  '| Step | Sketch |',
+  '| title 1 | title 2 |',
   '| --- | --- |',
   '| walk | ![a](owl-img:x) |',
 ].join('\n');
@@ -406,26 +406,26 @@ describe('nextTableRow (Enter inside a table)', () => {
 
 describe('insertTable adds a column when the caret is already in a table', () => {
   it('inserts the new column after the caret\'s column, in every row', () => {
-    const caret = TABLE.indexOf('Step') + 1; // inside column 1
+    const caret = TABLE.indexOf('title 1') + 1; // inside column 1
     expect(applyEdit(TABLE, insertTable(TABLE, caret, caret)).split('\n')).toEqual([
-      '| Step |  | Sketch |',
+      '| title 1 |  | title 2 |',
       '| --- | --- | --- |',
       '| walk |  | ![a](owl-img:x) |',
     ]);
   });
 
   it('keeps the separator row a separator', () => {
-    const caret = TABLE.indexOf('Sketch');
+    const caret = TABLE.indexOf('title 2');
     const rows = applyEdit(TABLE, insertTable(TABLE, caret, caret)).split('\n');
     expect(rows[1]).toBe('| --- | --- | --- |');
   });
 
   it('appends when the caret is in the last column', () => {
-    const caret = TABLE.indexOf('Sketch');
-    expect(applyEdit(TABLE, insertTable(TABLE, caret, caret)).split('\n')[0]).toBe('| Step | Sketch |  |');
+    const caret = TABLE.indexOf('title 2');
+    expect(applyEdit(TABLE, insertTable(TABLE, caret, caret)).split('\n')[0]).toBe('| title 1 | title 2 |  |');
   });
 
   it('still inserts a fresh table when the caret is not in one', () => {
-    expect(applyEdit('', insertTable('', 0, 0))).toContain('| Step | Sketch |');
+    expect(applyEdit('', insertTable('', 0, 0))).toContain('| title 1 | title 2 |');
   });
 });

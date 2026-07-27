@@ -246,13 +246,14 @@ function tableRow(cells) {
   return `| ${cells.join(' | ')} |`;
 }
 
-// Placeholder headings, meant to be typed over. Two columns is the common case
-// (a note beside its sketch), so it gets names rather than 'Column 1'.
-const PAIR_HEADERS = ['Step', 'Sketch'];
+// A GFM table cannot exist without a header row — without one it parses as a
+// plain paragraph, not a table. So the header is structural, and these are
+// deliberately meaningless placeholders to be typed over rather than words that
+// look like they mean something.
+const HEADER_PLACEHOLDER = (i) => `title ${i + 1}`;
 
 function tableHeader(columns) {
-  if (columns === 2) return PAIR_HEADERS.slice();
-  return Array.from({ length: columns }, (_, i) => `Column ${i + 1}`);
+  return Array.from({ length: columns }, (_, i) => HEADER_PLACEHOLDER(i));
 }
 
 // A table row: starts and ends with a pipe. Good enough to find the block the
@@ -378,10 +379,11 @@ export function insertTable(body, start, end) {
     // with newlines only where the surrounding text does not already supply them.
     const before = s === 0 || body[s - 1] === '\n' ? '' : '\n';
     const after = s === body.length || body[s] === '\n' ? '' : '\n';
-    const rows = [tableRow(PAIR_HEADERS), tableRow(['---', '---']), tableRow(['', ''])];
+    const header = tableHeader(2); // a starter table is two columns
+    const rows = [tableRow(header), tableRow(['---', '---']), tableRow(['', ''])];
     const insert = `${before}${rows.join('\n')}\n${after}`;
     const caret = s + before.length + 2; // just past the opening '| '
-    return { replaceStart: s, replaceEnd: e, insert, selStart: caret, selEnd: caret + PAIR_HEADERS[0].length };
+    return { replaceStart: s, replaceEnd: e, insert, selStart: caret, selEnd: caret + header[0].length };
   }
 
   const [blockStart, blockEnd] = lineBlock(body, s, e);

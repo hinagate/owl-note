@@ -27,7 +27,7 @@ describe('format bar', () => {
     const table = formatActions().find((a) => a.id === 'table');
     const body = 'note\n![x](owl-img:abc)';
     const edit = table.run(body, 0, body.length);
-    expect(edit.insert).toBe('| Step | Sketch |\n| --- | --- |\n| note | ![x](owl-img:abc) |');
+    expect(edit.insert).toBe('| title 1 | title 2 |\n| --- | --- |\n| note | ![x](owl-img:abc) |');
   });
 
   it('fires apply(run) on mousedown and prevents the focus steal', () => {
