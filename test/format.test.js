@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toggleInline, cycleHeading, toggleLinePrefix, toggleOrderedList, insertLink } from '../src/lib/format.js';
+import { toggleInline, cycleHeading, toggleLinePrefix, toggleOrderedList, insertLink, insertTable } from '../src/lib/format.js';
 
 // Apply an edit object to a body string — the same splice editor.js performs.
 export function applyEdit(body, edit) {
@@ -283,5 +283,65 @@ describe('heading button composes with structure prefixes', () => {
 
   it('indent is preserved outside the heading marker', () => {
     expect(applyEdit('  x', cycleHeading('  x', 0))).toBe('  # x');
+  });
+});
+
+describe('insertTable', () => {
+  // The case this button was asked for: a line of text and its sketch, selected
+  // together, become ONE row of two columns.
+  it('turns a text line and its sketch into a single two-column row', () => {
+    const body = '/i/ /i:/  咧嘴  \n ![drawing-20260727-103612.png](owl-img:b28d96c7deba9)';
+    const edit = insertTable(body, 0, body.length);
+    expect(applyEdit(body, edit)).toBe([
+      '| Step | Sketch |',
+      '| --- | --- |',
+      '| /i/ /i:/ 咧嘴 | ![drawing-20260727-103612.png](owl-img:b28d96c7deba9) |',
+    ].join('\n'));
+  });
+
+  it('starts a new row at each blank line', () => {
+    const body = 'one\ntwo\n\nthree\nfour';
+    const rows = applyEdit(body, insertTable(body, 0, body.length)).split('\n');
+    expect(rows).toHaveLength(4); // header + separator + 2 rows
+    expect(rows[2]).toBe('| one | two |');
+    expect(rows[3]).toBe('| three | four |');
+  });
+
+  it('pads a short row so every row has the same column count', () => {
+    const body = 'a\nb\nc\n\nd';
+    const rows = applyEdit(body, insertTable(body, 0, body.length)).split('\n');
+    expect(rows[0]).toBe('| Column 1 | Column 2 | Column 3 |');
+    expect(rows[2]).toBe('| a | b | c |');
+    expect(rows[3]).toBe('| d |  |  |');
+  });
+
+  it('escapes a pipe so it cannot open an accidental column', () => {
+    const body = 'cost | tax';
+    expect(applyEdit(body, insertTable(body, 0, body.length))).toContain('| cost \\| tax |');
+  });
+
+  it('expands a partial selection to whole lines', () => {
+    const body = 'alpha\nbeta';
+    const edit = insertTable(body, 2, 8); // mid-word to mid-word
+    expect(applyEdit(body, edit)).toContain('| alpha | beta |');
+  });
+
+  it('inserts a starter table when nothing is selected, selecting the first heading', () => {
+    const body = 'prose\n';
+    const edit = insertTable(body, body.length, body.length);
+    expect(applyEdit(body, edit)).toBe('prose\n| Step | Sketch |\n| --- | --- |\n|  |  |\n');
+    // selStart/selEnd are positions in the RESULTING body, so the user can type
+    // straight over the placeholder heading.
+    expect(applyEdit(body, edit).slice(edit.selStart, edit.selEnd)).toBe('Step');
+  });
+
+  it('opens a line before a starter table dropped mid-paragraph', () => {
+    const body = 'prose';
+    expect(applyEdit(body, insertTable(body, 5, 5)))
+      .toBe('prose\n| Step | Sketch |\n| --- | --- |\n|  |  |\n');
+  });
+
+  it('is a no-op on an all-blank selection', () => {
+    expect(insertTable('\n\n', 0, 2)).toBeNull();
   });
 });

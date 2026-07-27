@@ -232,6 +232,74 @@ export function toggleOrderedList(body, start, end) {
   return toggleListMarker(body, start, end, 'ordered');
 }
 
+/* ------------------------------------------------------------------ tables */
+
+// A GFM cell cannot contain a raw '|' (it would open a new column) and cannot
+// span lines, so every cell is flattened: whitespace runs collapse to one space
+// and pipes are escaped. This is also why a multi-line note block has to become
+// SEPARATE cells rather than one cell with line breaks.
+function tableCell(text) {
+  return String(text).trim().replace(/\s+/g, ' ').replace(/\|/g, '\\|');
+}
+
+function tableRow(cells) {
+  return `| ${cells.join(' | ')} |`;
+}
+
+// Placeholder headings, meant to be typed over. Two columns is the common case
+// (a note beside its sketch), so it gets names rather than 'Column 1'.
+const PAIR_HEADERS = ['Step', 'Sketch'];
+
+function tableHeader(columns) {
+  if (columns === 2) return PAIR_HEADERS.slice();
+  return Array.from({ length: columns }, (_, i) => `Column ${i + 1}`);
+}
+
+// Turn the selected lines into a GFM table, or drop in a starter table when
+// nothing is selected.
+//
+// The grouping rule: consecutive non-blank lines are the CELLS OF ONE ROW, and
+// a blank line starts the next row. That matches how these notes are actually
+// written — a line of text followed by its sketch is one logical entry — and it
+// scales: text/image, blank, text/image gives two rows without any extra markup.
+// Returns null when the selection holds nothing to tabulate.
+export function insertTable(body, start, end) {
+  const [s, e] = clamp(body, start, end);
+
+  if (s === e) {
+    // A table must begin at the start of a line and be its own block, so pad
+    // with newlines only where the surrounding text does not already supply them.
+    const before = s === 0 || body[s - 1] === '\n' ? '' : '\n';
+    const after = s === body.length || body[s] === '\n' ? '' : '\n';
+    const rows = [tableRow(PAIR_HEADERS), tableRow(['---', '---']), tableRow(['', ''])];
+    const insert = `${before}${rows.join('\n')}\n${after}`;
+    const caret = s + before.length + 2; // just past the opening '| '
+    return { replaceStart: s, replaceEnd: e, insert, selStart: caret, selEnd: caret + PAIR_HEADERS[0].length };
+  }
+
+  const [blockStart, blockEnd] = lineBlock(body, s, e);
+  const rows = [];
+  let row = [];
+  for (const line of body.slice(blockStart, blockEnd).split('\n')) {
+    if (line.trim() === '') {
+      if (row.length) rows.push(row);
+      row = [];
+      continue;
+    }
+    row.push(tableCell(line));
+  }
+  if (row.length) rows.push(row);
+  if (!rows.length) return null; // selection was entirely blank
+
+  const columns = Math.max(...rows.map((r) => r.length));
+  const insert = [
+    tableRow(tableHeader(columns)),
+    tableRow(Array(columns).fill('---')),
+    ...rows.map((r) => tableRow(r.concat(Array(columns - r.length).fill('')))),
+  ].join('\n');
+  return { replaceStart: blockStart, replaceEnd: blockEnd, insert, selStart: blockStart, selEnd: blockStart + insert.length };
+}
+
 // A markdown link (or image) on one line: [text](target) with optional
 // leading '!'. Bounded to one line — link syntax never spans lines here.
 const MD_LINK_RE = /(!?)\[([^\]\n]*)\]\(([^)\n]*)\)/g;

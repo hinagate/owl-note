@@ -4,7 +4,7 @@
 // Adding a button = appending a descriptor. The bar knows nothing about the
 // textarea — the host supplies apply(run), which routes the pure edit from
 // src/lib/format.js through the editor's undo-preserving insertText.
-import { toggleInline, cycleHeading, toggleLinePrefix, toggleOrderedList, insertLink } from '../lib/format.js';
+import { toggleInline, cycleHeading, toggleLinePrefix, toggleOrderedList, insertLink, insertTable } from '../lib/format.js';
 
 export function formatActions() {
   return [
@@ -19,6 +19,7 @@ export function formatActions() {
     { id: 'ordered-list', label: '1.', title: 'Numbered list', run: (b, s, e) => toggleOrderedList(b, s, e) },
     { id: 'quote', label: '❝', title: 'Quote', run: (b, s, e) => toggleLinePrefix(b, s, e, 'quote') },
     { id: 'link', label: '🔗', title: 'Link (Ctrl+K)', shortcut: 'k', run: (b, s, e) => insertLink(b, s, e) },
+    { id: 'table', label: '▦', title: 'Table — turn the selected lines into a table, or insert an empty one', run: (b, s, e) => insertTable(b, s, e) },
   ];
 }
 

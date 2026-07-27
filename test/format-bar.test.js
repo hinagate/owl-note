@@ -7,16 +7,27 @@ function mount() {
 }
 
 describe('format bar', () => {
-  it('renders ten type="button" buttons and a group divider, in order', () => {
+  it('renders eleven type="button" buttons and a group divider, in order', () => {
     const c = mount();
     renderFormatBar(c, { apply: () => {} });
     const buttons = [...c.querySelectorAll('button.format-btn')];
-    expect(buttons).toHaveLength(10);
+    expect(buttons).toHaveLength(11);
     expect(buttons.every((b) => b.type === 'button')).toBe(true); // never submits
     expect(c.querySelector('.format-divider')).not.toBeNull();
     const kids = [...c.children];
     expect(kids.indexOf(c.querySelector('.format-divider')))
       .toBeGreaterThan(kids.indexOf(c.querySelector('.format-highlight'))); // divider splits inline | block
+  });
+
+  it('offers a table button whose action tabulates the selected lines', () => {
+    const c = mount();
+    renderFormatBar(c, { apply: () => {} });
+    expect(c.querySelector('.format-table')).not.toBeNull();
+
+    const table = formatActions().find((a) => a.id === 'table');
+    const body = 'note\n![x](owl-img:abc)';
+    const edit = table.run(body, 0, body.length);
+    expect(edit.insert).toBe('| Step | Sketch |\n| --- | --- |\n| note | ![x](owl-img:abc) |');
   });
 
   it('fires apply(run) on mousedown and prevents the focus steal', () => {
