@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
-  createSketch, beginStroke, extendStroke, endStroke,
-  undo, redo, clear, isEmpty, canUndo, canRedo, replay, PEN, ERASE,
+  createSketch, beginStroke, extendStroke, straightenStroke, endStroke,
+  beginShape, updateShape, endShape, visibleItems,
+  addImage, imageAt, beginTransform, applyTransform, endTransform, removeItem,
+  squareBox, snapAngle, polygonPoints, boxOf, isShapeTool,
+  undo, redo, clear, isEmpty, canUndo, canRedo, replay,
+  PEN, ERASE, LINE, RECT, ROUND_RECT, ELLIPSE, POLYGON, IMAGE,
 } from '../src/lib/drawing.js';
 
 function stroke(state, points, opts = {}) {
@@ -39,16 +43,16 @@ describe('drawing model', () => {
   it('records a stroke with its points and style', () => {
     const s = createSketch();
     stroke(s, [[1, 2], [3, 4]], { color: '#d93025', width: 8, mode: PEN });
-    expect(s.strokes).toHaveLength(1);
-    expect(s.strokes[0]).toMatchObject({ color: '#d93025', width: 8, mode: PEN });
-    expect(s.strokes[0].points).toEqual([{ x: 1, y: 2 }, { x: 3, y: 4 }]);
+    expect(s.items).toHaveLength(1);
+    expect(s.items[0]).toMatchObject({ color: '#d93025', width: 8, mode: PEN });
+    expect(s.items[0].points).toEqual([{ x: 1, y: 2 }, { x: 3, y: 4 }]);
     expect(isEmpty(s)).toBe(false);
   });
 
   it('keeps a single-point stroke, so a click leaves a dot', () => {
     const s = createSketch();
     stroke(s, [[5, 5]]);
-    expect(s.strokes[0].points).toHaveLength(1);
+    expect(s.items[0].points).toHaveLength(1);
   });
 
   it('ignores duplicate samples and points after the stroke ends', () => {
@@ -58,7 +62,7 @@ describe('drawing model', () => {
     extendStroke(s, { x: 1, y: 1 });
     endStroke(s);
     extendStroke(s, { x: 9, y: 9 });
-    expect(s.strokes[0].points).toEqual([{ x: 0, y: 0 }, { x: 1, y: 1 }]);
+    expect(s.items[0].points).toEqual([{ x: 0, y: 0 }, { x: 1, y: 1 }]);
   });
 
   it('undoes and redoes one stroke at a time', () => {
@@ -66,16 +70,16 @@ describe('drawing model', () => {
     stroke(s, [[0, 0]]);
     stroke(s, [[1, 1]]);
     undo(s);
-    expect(s.strokes).toHaveLength(1);
+    expect(s.items).toHaveLength(1);
     redo(s);
-    expect(s.strokes).toHaveLength(2);
+    expect(s.items).toHaveLength(2);
   });
 
   it('undo and redo are no-ops at the ends of history', () => {
     const s = createSketch();
-    expect(undo(s).strokes).toHaveLength(0);
+    expect(undo(s).items).toHaveLength(0);
     stroke(s, [[0, 0]]);
-    expect(redo(s).strokes).toHaveLength(1);
+    expect(redo(s).items).toHaveLength(1);
   });
 
   it('discards the redo stack when a new stroke branches off an undo', () => {
@@ -84,8 +88,8 @@ describe('drawing model', () => {
     undo(s);
     stroke(s, [[2, 2]]);
     expect(canRedo(s)).toBe(false);
-    expect(s.strokes).toHaveLength(1);
-    expect(s.strokes[0].points[0]).toEqual({ x: 2, y: 2 });
+    expect(s.items).toHaveLength(1);
+    expect(s.items[0].points[0]).toEqual({ x: 2, y: 2 });
   });
 
   it('restores everything cleared in a single undo', () => {
@@ -95,7 +99,7 @@ describe('drawing model', () => {
     clear(s);
     expect(isEmpty(s)).toBe(true);
     undo(s);
-    expect(s.strokes).toHaveLength(2);
+    expect(s.items).toHaveLength(2);
   });
 
   it('does not record history for clearing an empty sketch', () => {
@@ -108,7 +112,7 @@ describe('drawing model', () => {
     const ctx = fakeCtx();
     const s = createSketch();
     stroke(s, [[0, 0], [10, 10]], { color: '#1a73e8', width: 4 });
-    replay(ctx, s.strokes);
+    replay(ctx, visibleItems(s));
     const names = ctx.calls.map((c) => c[0]);
     expect(names).toContain('beginPath');
     expect(ctx.calls).toContainEqual(['moveTo', 0, 0]);
@@ -123,7 +127,7 @@ describe('drawing model', () => {
     const ctx = fakeCtx();
     const s = createSketch();
     stroke(s, [[7, 8]], { width: 6 });
-    replay(ctx, s.strokes);
+    replay(ctx, visibleItems(s));
     expect(ctx.calls).toContainEqual(['arc', 7, 8, 3, 0, Math.PI * 2]);
     expect(ctx.calls.map((c) => c[0])).toContain('fill');
   });
@@ -132,13 +136,210 @@ describe('drawing model', () => {
     const ctx = fakeCtx();
     const s = createSketch();
     stroke(s, [[0, 0], [5, 5]], { mode: ERASE });
-    replay(ctx, s.strokes);
+    replay(ctx, visibleItems(s));
     expect(ctx.calls).toContainEqual(['set:globalCompositeOperation', 'destination-out']);
   });
 
   it('replay tolerates a missing context', () => {
     const s = createSketch();
     stroke(s, [[0, 0], [1, 1]]);
-    expect(() => replay(null, s.strokes)).not.toThrow();
+    expect(() => replay(null, s.items)).not.toThrow();
+  });
+});
+
+function shape(state, tool, [x0, y0], [x1, y1], opts = {}) {
+  beginShape(state, { tool, x: x0, y: y0, ...opts });
+  updateShape(state, { x: x1, y: y1, constrain: opts.constrain });
+  return endShape(state);
+}
+
+describe('shape tools', () => {
+  it('recognises exactly the drag-drawn tools', () => {
+    for (const t of [LINE, RECT, ROUND_RECT, ELLIPSE, POLYGON]) expect(isShapeTool(t)).toBe(true);
+    for (const t of [PEN, ERASE, 'select']) expect(isShapeTool(t)).toBe(false);
+  });
+
+  it('keeps a dragged shape out of history until the drag ends', () => {
+    const s = createSketch();
+    beginShape(s, { tool: RECT, x: 0, y: 0 });
+    updateShape(s, { x: 40, y: 30 });
+    expect(s.items).toHaveLength(0);          // nothing committed yet
+    expect(visibleItems(s)).toHaveLength(1);  // but it is on screen
+    endShape(s);
+    expect(s.items).toHaveLength(1);
+    expect(s.items[0]).toMatchObject({ kind: RECT, x0: 0, y0: 0, x1: 40, y1: 30 });
+  });
+
+  it('drops a click that never became a shape, leaving no undo step', () => {
+    const s = createSketch();
+    shape(s, ELLIPSE, [10, 10], [11, 10]); // under the 2px threshold
+    expect(s.items).toHaveLength(0);
+    expect(canUndo(s)).toBe(false);
+    expect(visibleItems(s)).toHaveLength(0); // draft cleared too
+  });
+
+  it('undoes a finished shape in one step', () => {
+    const s = createSketch();
+    shape(s, LINE, [0, 0], [50, 50]);
+    expect(s.items).toHaveLength(1);
+    undo(s);
+    expect(s.items).toHaveLength(0);
+  });
+
+  it('carries the polygon side count onto the item', () => {
+    const s = createSketch();
+    shape(s, POLYGON, [0, 0], [60, 60], { sides: 7 });
+    expect(s.items[0].sides).toBe(7);
+  });
+
+  it('normalises a right-to-left drag into a positive box', () => {
+    const s = createSketch();
+    shape(s, RECT, [80, 60], [20, 10]);
+    expect(boxOf(s.items[0])).toEqual({ x: 20, y: 10, width: 60, height: 50 });
+  });
+
+  it('draws each shape kind with its own canvas path', () => {
+    const cases = [
+      [LINE, 'lineTo'],
+      [RECT, 'rect'],
+      [ROUND_RECT, 'arcTo'],
+      [ELLIPSE, 'ellipse'],
+      [POLYGON, 'closePath'],
+    ];
+    for (const [tool, expectedCall] of cases) {
+      const s = createSketch();
+      shape(s, tool, [0, 0], [40, 40]);
+      const ctx = fakeCtx();
+      replay(ctx, s.items);
+      expect(ctx.calls.map((c) => c[0])).toContain(expectedCall);
+    }
+  });
+});
+
+describe('shift constraints', () => {
+  it('squares a box, keeping the drag direction', () => {
+    expect(squareBox(0, 0, 40, 10)).toEqual({ x0: 0, y0: 0, x1: 40, y1: 40 });
+    expect(squareBox(0, 0, -40, 10)).toEqual({ x0: 0, y0: 0, x1: -40, y1: 40 });
+    expect(squareBox(0, 0, 5, -50)).toEqual({ x0: 0, y0: 0, x1: 50, y1: -50 });
+  });
+
+  it('snaps a line to the nearest 45 degrees at the drag length', () => {
+    const flat = snapAngle(0, 0, 100, 8); // nearly horizontal
+    expect(flat.x1).toBeCloseTo(Math.hypot(100, 8), 5);
+    expect(flat.y1).toBeCloseTo(0, 5);
+
+    const diagonal = snapAngle(0, 0, 50, 44); // nearly 45°
+    expect(diagonal.x1).toBeCloseTo(diagonal.y1, 5);
+  });
+
+  it('applies the square constraint to a box tool but the angle snap to a line', () => {
+    const box = createSketch();
+    shape(box, RECT, [0, 0], [60, 12], { constrain: true });
+    expect(boxOf(box.items[0])).toMatchObject({ width: 60, height: 60 });
+
+    const line = createSketch();
+    shape(line, LINE, [0, 0], [60, 4], { constrain: true });
+    expect(line.items[0].y1).toBeCloseTo(0, 5);
+  });
+
+  it('collapses a freehand stroke to a straight line while Shift is held', () => {
+    const s = createSketch();
+    beginStroke(s, { x: 0, y: 0 });
+    extendStroke(s, { x: 5, y: 30 });
+    extendStroke(s, { x: 9, y: 44 });
+    expect(s.items[0].points).toHaveLength(3);
+    straightenStroke(s, { x: 80, y: 6, constrain: true });
+    const points = s.items[0].points;
+    expect(points).toHaveLength(2);
+    expect(points[0]).toEqual({ x: 0, y: 0 });
+    expect(points[1].y).toBeCloseTo(0, 5); // snapped to horizontal
+  });
+
+  it('builds a regular polygon with the first vertex at the top', () => {
+    const points = polygonPoints(0, 0, 10, 10, 4);
+    expect(points).toHaveLength(4);
+    expect(points[0].x).toBeCloseTo(0, 5);
+    expect(points[0].y).toBeCloseTo(-10, 5);
+  });
+
+  it('never builds a polygon with fewer than three sides', () => {
+    expect(polygonPoints(0, 0, 5, 5, 1)).toHaveLength(3);
+    expect(polygonPoints(0, 0, 5, 5, 0)).toHaveLength(3);
+  });
+});
+
+describe('pasted images', () => {
+  const fakeImg = { width: 100, height: 50 };
+
+  function withImage() {
+    const s = createSketch();
+    const index = addImage(s, { src: 'data:image/png;base64,AA', el: fakeImg, x: 10, y: 20, width: 100, height: 50 });
+    return { s, index };
+  }
+
+  it('adds an image as an item and reports its index', () => {
+    const { s, index } = withImage();
+    expect(index).toBe(0);
+    expect(s.items[0]).toMatchObject({ kind: IMAGE, x: 10, y: 20, width: 100, height: 50 });
+    expect(isEmpty(s)).toBe(false);
+  });
+
+  it('hit-tests only inside the image, topmost first', () => {
+    const { s } = withImage();
+    expect(imageAt(s, 50, 40)).toBe(0);
+    expect(imageAt(s, 5, 40)).toBe(-1);   // left of it
+    expect(imageAt(s, 50, 200)).toBe(-1); // below it
+    addImage(s, { src: 'x', el: fakeImg, x: 0, y: 0, width: 200, height: 200 });
+    expect(imageAt(s, 50, 40)).toBe(1);   // the newer image wins
+  });
+
+  it('takes one history step for a whole move, and undo restores the original box', () => {
+    const { s, index } = withImage();
+    const before = s.past.length;
+    beginTransform(s, index);
+    applyTransform(s, { x: 60, y: 70 });
+    applyTransform(s, { x: 90, y: 95 });
+    endTransform(s);
+    expect(s.past.length).toBe(before + 1); // ONE step, not one per move
+    expect(s.items[0]).toMatchObject({ x: 90, y: 95 });
+    undo(s);
+    expect(s.items[0]).toMatchObject({ x: 10, y: 20 });
+  });
+
+  it('resizes without letting an image collapse to nothing', () => {
+    const { s, index } = withImage();
+    beginTransform(s, index);
+    applyTransform(s, { width: 1, height: 1 });
+    expect(s.items[0].width).toBeGreaterThanOrEqual(8);
+    expect(s.items[0].height).toBeGreaterThanOrEqual(8);
+  });
+
+  it('ignores a transform when nothing is being transformed', () => {
+    const { s } = withImage();
+    applyTransform(s, { x: 999 });
+    expect(s.items[0].x).toBe(10);
+  });
+
+  it('removes a selected image, undoably', () => {
+    const { s, index } = withImage();
+    removeItem(s, index);
+    expect(s.items).toHaveLength(0);
+    undo(s);
+    expect(s.items).toHaveLength(1);
+  });
+
+  it('draws the image at its box', () => {
+    const { s } = withImage();
+    const ctx = fakeCtx();
+    replay(ctx, s.items);
+    expect(ctx.calls).toContainEqual(['drawImage', fakeImg, 10, 20, 100, 50]);
+  });
+
+  it('skips an image whose bytes never decoded', () => {
+    const s = createSketch();
+    addImage(s, { src: 'broken', el: null, x: 0, y: 0, width: 10, height: 10 });
+    const ctx = fakeCtx();
+    expect(() => replay(ctx, s.items)).not.toThrow();
+    expect(ctx.calls.map((c) => c[0])).not.toContain('drawImage');
   });
 });
