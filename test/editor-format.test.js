@@ -233,3 +233,34 @@ describe('typing a new header cell widens the rows below', () => {
     expect(ta.value).toBe(settled);
   });
 });
+
+describe('deleting a table column', () => {
+  // Regression: sizing every row to the WIDEST meant the body rows instantly
+  // re-widened the header, so deleting a column undid itself and a table could
+  // never go back to fewer columns.
+  const WIDE = '| title 1 | title 2 | xxx |\n| --- | --- | --- |\n|  |  |  |';
+
+  function typeBody(ta, value, caret) {
+    ta.value = value;
+    ta.selectionStart = ta.selectionEnd = caret ?? value.length;
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  it('narrows the whole table when the header cell is deleted', () => {
+    render({ body: WIDE });
+    const ta = document.querySelector('.note-body');
+    typeBody(ta, WIDE.replace('| title 1 | title 2 | xxx |', '| title 1 | title 2 |'), 5);
+    expect(ta.value.split('\n')).toEqual([
+      '| title 1 | title 2 |',
+      '| --- | --- |',
+      '|  |  |',
+    ]);
+  });
+
+  it('keeps a cell that still has content in it', () => {
+    render({ body: '' });
+    const ta = document.querySelector('.note-body');
+    typeBody(ta, '| a | b |\n| --- | --- | --- |\n| 1 | 2 | keep |', 3);
+    expect(ta.value.split('\n')[2]).toBe('| 1 | 2 | keep |');
+  });
+});

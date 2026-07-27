@@ -141,14 +141,15 @@ export function tableBlockAt(body, pos) {
   return { blockStart, blockEnd, lineStart, lineEnd };
 }
 
-// Widen the table the caret is in so every row matches the widest, rewriting the
-// note's own text. Used while typing: adding a header cell should fill the empty
-// cells into the rows below for you, rather than leaving them to be typed.
+// Bring the table the caret is in into line with its HEADER, rewriting the
+// note's own text. Used while typing: adding a header cell fills the new cells
+// into the rows below, and REMOVING one takes them away again, so a column can
+// actually be deleted.
 //
-// Only ever APPENDS cells at the end of a line, which is what makes the caret
-// remap below exact — no character before the caret on its own line ever moves.
-// Returns null when nothing needs widening.
-export function autoWidenTableAt(body, pos) {
+// Only whole trailing cells are added or removed, so nothing before the caret on
+// its own line ever moves and the caret remap below stays exact.
+// Returns null when the table already matches its header.
+export function alignTableAt(body, pos) {
   const found = tableBlockAt(body, pos);
   if (!found) return null;
   const { blockStart, blockEnd } = found;
@@ -156,14 +157,9 @@ export function autoWidenTableAt(body, pos) {
   // Same conservative rule as normalizeTables: a delimiter row in second
   // position is what marks this block as a table someone is building.
   if (lines.length < 2 || !isSeparatorRow(lines[1])) return null;
-  const rows = lines.map(splitTableRow);
-  const columns = Math.max(...rows.map((r) => r.length));
-  if (rows.every((r) => r.length === columns)) return null;
-
-  const widened = rows.map((cells, row) => tableRow(
-    cells.concat(Array(columns - cells.length).fill(row === 1 ? '---' : '')),
-  ));
+  const widened = alignTableLines(lines);
   const insert = widened.join('\n');
+  if (insert === lines.join('\n')) return null;
 
   // Remap the caret: it keeps its offset within its own line, shifted by the
   // growth of every line above it.
@@ -180,6 +176,31 @@ export function autoWidenTableAt(body, pos) {
     consumed += lines[i].length + 1;
   }
   return { replaceStart: blockStart, replaceEnd: blockEnd, insert, selStart: caret, selEnd: caret };
+}
+
+// GFM's actual constraint, verified against the parser: ONLY the delimiter row
+// has to match the header. Body rows may be ragged — short ones get padded and
+// extra cells are ignored. So the HEADER defines the column count.
+//
+// Body rows are still filled out, because seeing the new empty cells is what
+// people expect after adding a column. But trailing EMPTY cells beyond the
+// header are TRIMMED, and that is what makes DELETING a column possible: sizing
+// to max() across all rows meant the body instantly re-widened the header, so a
+// deletion undid itself. Cells holding content are never dropped.
+export function alignTableLines(lines) {
+  const rows = lines.map(splitTableRow);
+  const columns = rows[0].length;
+  return rows.map((cells, i) => {
+    if (i === 1) {
+      const delimiter = cells.slice(0, columns); // :--- / ---: alignment survives
+      while (delimiter.length < columns) delimiter.push('---');
+      return tableRow(delimiter);
+    }
+    const out = cells.slice();
+    while (out.length > columns && out[out.length - 1] === '') out.pop();
+    while (out.length < columns) out.push('');
+    return tableRow(out);
+  });
 }
 
 // ``` fence lines toggle a protected region. Content inside a fence is left
@@ -208,13 +229,7 @@ export function normalizeTables(markdown) {
     // A table needs its delimiter on the SECOND line; anything else is not a
     // table trying to be one, so it passes through untouched.
     if (block.length < 2 || !isSeparatorRow(block[1])) { out.push(...block); i = end; continue; }
-
-    const rows = block.map(splitTableRow);
-    const columns = Math.max(...rows.map((r) => r.length));
-    if (rows.every((r) => r.length === columns)) { out.push(...block); i = end; continue; }
-    out.push(...rows.map((cells, row) => tableRow(
-      cells.concat(Array(columns - cells.length).fill(row === 1 ? '---' : '')),
-    )));
+    out.push(...alignTableLines(block));
     i = end;
   }
   return out.join('\n');

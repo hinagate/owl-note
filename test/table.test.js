@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   splitTableRow, tableRow, isSeparatorRow, isTableRowLine,
-  tableCellSpans, tableCellTarget, normalizeTables, autoWidenTableAt,
+  tableCellSpans, tableCellTarget, normalizeTables, alignTableAt,
 } from '../src/lib/table.js';
 import { renderMarkdown } from '../src/lib/markdown.js';
 
@@ -101,7 +101,7 @@ describe('normalizeTables (forgiving render)', () => {
   });
 });
 
-describe('autoWidenTableAt (rewrites the note while typing)', () => {
+describe('alignTableAt (rewrites the note while typing)', () => {
   // The reported case: a third header cell typed by hand, with the rows below
   // left two wide. They should gain their empty cells without any button press.
   const TYPED = [
@@ -113,7 +113,7 @@ describe('autoWidenTableAt (rewrites the note while typing)', () => {
 
   it('fills every row out to the new header width', () => {
     const caret = TYPED.indexOf('xxx') + 3; // caret right where the user is typing
-    const edit = autoWidenTableAt(TYPED, caret);
+    const edit = alignTableAt(TYPED, caret);
     const out = TYPED.slice(0, edit.replaceStart) + edit.insert + TYPED.slice(edit.replaceEnd);
     expect(out.split('\n')).toEqual([
       '| title 1 | title 2 | xxx |',
@@ -125,7 +125,7 @@ describe('autoWidenTableAt (rewrites the note while typing)', () => {
 
   it('leaves the caret exactly where the user was typing', () => {
     const caret = TYPED.indexOf('xxx') + 3;
-    const edit = autoWidenTableAt(TYPED, caret);
+    const edit = alignTableAt(TYPED, caret);
     const out = TYPED.slice(0, edit.replaceStart) + edit.insert + TYPED.slice(edit.replaceEnd);
     expect(out.slice(0, edit.selStart)).toBe('| title 1 | title 2 | xxx');
   });
@@ -133,21 +133,67 @@ describe('autoWidenTableAt (rewrites the note while typing)', () => {
   it('remaps the caret when rows ABOVE it grow', () => {
     const body = '| a | b | c |\n| --- | --- |\n| 1 | 2 |';
     const caret = body.indexOf('2');
-    const edit = autoWidenTableAt(body, caret);
+    const edit = alignTableAt(body, caret);
     const out = body.slice(0, edit.replaceStart) + edit.insert + body.slice(edit.replaceEnd);
     expect(out[edit.selStart]).toBe('2'); // still sitting on the same character
   });
 
+  // The reported bug: deleting the third header cell used to be undone
+  // instantly, because sizing to max() let the body rows re-widen the header.
+  const WIDENED = [
+    '| title 1 | title 2 | xxx |',
+    '| --- | --- | --- |',
+    '|  |  |  |',
+  ].join('\n');
+
+  it('narrows the whole table when a header cell is deleted', () => {
+    const narrowed = WIDENED.replace('| title 1 | title 2 | xxx |', '| title 1 | title 2 |');
+    const edit = alignTableAt(narrowed, 5);
+    const out = narrowed.slice(0, edit.replaceStart) + edit.insert + narrowed.slice(edit.replaceEnd);
+    expect(out.split('\n')).toEqual([
+      '| title 1 | title 2 |',
+      '| --- | --- |',
+      '|  |  |',
+    ]);
+  });
+
+  it('never drops a cell that still holds content', () => {
+    const body = '| a | b |\n| --- | --- | --- |\n| 1 | 2 | keep |';
+    const edit = alignTableAt(body, 3);
+    const out = body.slice(0, edit.replaceStart) + edit.insert + body.slice(edit.replaceEnd);
+    expect(out.split('\n')[1]).toBe('| --- | --- |'); // delimiter follows the header
+    expect(out.split('\n')[2]).toBe('| 1 | 2 | keep |'); // content survives untouched
+  });
+
+  it('adding then deleting a column round-trips exactly', () => {
+    const apply = (body) => {
+      const edit = alignTableAt(body, 3);
+      return edit ? body.slice(0, edit.replaceStart) + edit.insert + body.slice(edit.replaceEnd) : body;
+    };
+    const start = '| a | b |\n| --- | --- |\n|  |  |';
+    // Type ' c |' onto the header, then delete it again.
+    const grown = apply('| a | b | c |\n| --- | --- |\n|  |  |');
+    expect(grown).toBe('| a | b | c |\n| --- | --- | --- |\n|  |  |  |');
+    expect(apply(grown.replace('| a | b | c |', '| a | b |'))).toBe(start);
+  });
+
+  it('preserves alignment markers when the delimiter is rebuilt', () => {
+    const body = '| a | b | c |\n| :-- | --: |\n| 1 | 2 | 3 |';
+    const edit = alignTableAt(body, 3);
+    const out = body.slice(0, edit.replaceStart) + edit.insert + body.slice(edit.replaceEnd);
+    expect(out.split('\n')[1]).toBe('| :-- | --: | --- |');
+  });
+
   it('is null once every row already matches', () => {
-    expect(autoWidenTableAt('| a | b |\n| --- | --- |\n| 1 | 2 |', 3)).toBeNull();
+    expect(alignTableAt('| a | b |\n| --- | --- |\n| 1 | 2 |', 3)).toBeNull();
   });
 
   it('is null outside a table', () => {
-    expect(autoWidenTableAt('plain prose', 4)).toBeNull();
+    expect(alignTableAt('plain prose', 4)).toBeNull();
   });
 
   it('will not touch a block with no delimiter row', () => {
-    expect(autoWidenTableAt('| a | b | c |\n| 1 | 2 |', 3)).toBeNull();
+    expect(alignTableAt('| a | b | c |\n| 1 | 2 |', 3)).toBeNull();
   });
 });
 

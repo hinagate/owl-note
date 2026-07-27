@@ -12,7 +12,7 @@
 // may also return null: pressing it inside an image/attachment ref
 // (![name](owl-img:…)) is a deliberate no-op, not an unwrap.
 
-import { splitTableRow, tableRow, isSeparatorRow, isTableRowLine, tableBlockAt } from './table.js';
+import { splitTableRow, tableRow, isSeparatorRow, isTableRowLine, tableBlockAt, alignTableLines } from './table.js';
 
 // Clamp a selection into [0, body.length] and normalize start <= end.
 function clamp(body, start, end) {
@@ -283,19 +283,14 @@ function repairTable(body, pos) {
   if (!found) return null;
   const [blockStart, blockEnd] = found;
   const lines = body.slice(blockStart, blockEnd).split('\n');
-  const rows = lines.map(splitTableRow);
-  const separatorAt = lines.findIndex(isSeparatorRow);
-  const columns = Math.max(...rows.map((r) => r.length));
-  if (separatorAt === 1 && rows.every((r) => r.length === columns)) return null;
-
-  const padded = rows.map((cells, i) => {
-    const filler = i === separatorAt ? '---' : '';
-    return cells.concat(Array(columns - cells.length).fill(filler));
-  });
   // A block of pipe rows with no delimiter at all isn't a table yet: the first
   // row becomes the header and the delimiter it was missing is inserted.
-  if (separatorAt === -1) padded.splice(1, 0, Array(columns).fill('---'));
-  const insert = padded.map(tableRow).join('\n');
+  const withDelimiter = isSeparatorRow(lines[1] ?? '')
+    ? lines
+    : [lines[0], tableRow(Array(splitTableRow(lines[0]).length).fill('---')), ...lines.slice(1)];
+  const aligned = alignTableLines(withDelimiter);
+  const insert = aligned.join('\n');
+  if (insert === lines.join('\n')) return null; // already agrees with its header
   return { replaceStart: blockStart, replaceEnd: blockEnd, insert, selStart: blockStart, selEnd: blockStart + insert.length };
 }
 
