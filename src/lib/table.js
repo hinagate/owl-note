@@ -89,24 +89,97 @@ export function tableCellTarget(body, start, end, forward = true) {
 
   if (forward) {
     if (index + 1 < spans.length) return select(lineStart, spans[index + 1]);
-    // Past the last cell: drop into the row below, or open a new one.
-    const [nextStart, nextEnd] = lineBoundsAt(body, lineEnd + 1);
-    if (lineEnd < body.length && isTableRowLine(body.slice(nextStart, nextEnd))) {
-      const nextSpans = tableCellSpans(body.slice(nextStart, nextEnd));
+    // Off the end of the row: fall into the row below. The delimiter row is
+    // structure, not data — nobody wants to Tab into '---', so it is skipped.
+    let tail = lineEnd;
+    while (tail < body.length) {
+      const [nextStart, nextEnd] = lineBoundsAt(body, tail + 1);
+      const next = body.slice(nextStart, nextEnd);
+      if (!isTableRowLine(next)) break;
+      tail = nextEnd;
+      if (isSeparatorRow(next)) continue;
+      const nextSpans = tableCellSpans(next);
       if (nextSpans.length) return select(nextStart, nextSpans[0]);
     }
+    // Nothing below: open a fresh row after the table's LAST line.
     const insert = `\n${tableRow(Array(spans.length).fill(''))}`;
-    const caret = lineEnd + 3; // past the new row's '| '
-    return { replaceStart: lineEnd, replaceEnd: lineEnd, insert, selStart: caret, selEnd: caret };
+    const caret = tail + 3; // past the new row's '| '
+    return { replaceStart: tail, replaceEnd: tail, insert, selStart: caret, selEnd: caret };
   }
 
   if (index > 0) return select(lineStart, spans[index - 1]);
-  if (lineStart === 0) return null; // first cell of the first row — let Tab escape
-  const [prevStart, prevEnd] = lineBoundsAt(body, lineStart - 1);
-  const prevLine = body.slice(prevStart, prevEnd);
-  if (!isTableRowLine(prevLine)) return null;
-  const prevSpans = tableCellSpans(prevLine);
-  return prevSpans.length ? select(prevStart, prevSpans[prevSpans.length - 1]) : null;
+  let head = lineStart;
+  while (head > 0) {
+    const [prevStart, prevEnd] = lineBoundsAt(body, head - 1);
+    const prev = body.slice(prevStart, prevEnd);
+    if (!isTableRowLine(prev)) return null;
+    head = prevStart;
+    if (isSeparatorRow(prev)) continue; // skip back over the delimiter row
+    const prevSpans = tableCellSpans(prev);
+    if (prevSpans.length) return select(prevStart, prevSpans[prevSpans.length - 1]);
+  }
+  return null; // first cell of the first row — let Tab move focus out
+}
+
+// The run of consecutive table rows around `pos`, or null when the caret is not
+// on one.
+export function tableBlockAt(body, pos) {
+  const [lineStart, lineEnd] = lineBoundsAt(body, pos);
+  if (!isTableRowLine(body.slice(lineStart, lineEnd))) return null;
+  let blockStart = lineStart;
+  while (blockStart > 0) {
+    const [prevStart, prevEnd] = lineBoundsAt(body, blockStart - 1);
+    if (!isTableRowLine(body.slice(prevStart, prevEnd))) break;
+    blockStart = prevStart;
+  }
+  let blockEnd = lineEnd;
+  while (blockEnd < body.length) {
+    const [nextStart, nextEnd] = lineBoundsAt(body, blockEnd + 1);
+    if (!isTableRowLine(body.slice(nextStart, nextEnd))) break;
+    blockEnd = nextEnd;
+  }
+  return { blockStart, blockEnd, lineStart, lineEnd };
+}
+
+// Widen the table the caret is in so every row matches the widest, rewriting the
+// note's own text. Used while typing: adding a header cell should fill the empty
+// cells into the rows below for you, rather than leaving them to be typed.
+//
+// Only ever APPENDS cells at the end of a line, which is what makes the caret
+// remap below exact — no character before the caret on its own line ever moves.
+// Returns null when nothing needs widening.
+export function autoWidenTableAt(body, pos) {
+  const found = tableBlockAt(body, pos);
+  if (!found) return null;
+  const { blockStart, blockEnd } = found;
+  const lines = body.slice(blockStart, blockEnd).split('\n');
+  // Same conservative rule as normalizeTables: a delimiter row in second
+  // position is what marks this block as a table someone is building.
+  if (lines.length < 2 || !isSeparatorRow(lines[1])) return null;
+  const rows = lines.map(splitTableRow);
+  const columns = Math.max(...rows.map((r) => r.length));
+  if (rows.every((r) => r.length === columns)) return null;
+
+  const widened = rows.map((cells, row) => tableRow(
+    cells.concat(Array(columns - cells.length).fill(row === 1 ? '---' : '')),
+  ));
+  const insert = widened.join('\n');
+
+  // Remap the caret: it keeps its offset within its own line, shifted by the
+  // growth of every line above it.
+  const offsetInBlock = pos - blockStart;
+  let consumed = 0;
+  let caret = blockStart + insert.length;
+  for (let i = 0; i < lines.length; i++) {
+    const lineOffset = offsetInBlock - consumed;
+    if (lineOffset <= lines[i].length) {
+      const before = widened.slice(0, i).reduce((sum, l) => sum + l.length + 1, 0);
+      caret = blockStart + before + Math.min(lineOffset, widened[i].length);
+      break;
+    }
+    consumed += lines[i].length + 1;
+  }
+  return { replaceStart: blockStart, replaceEnd: blockEnd, insert, selStart: caret, selEnd: caret };
 }
 
 // ``` fence lines toggle a protected region. Content inside a fence is left

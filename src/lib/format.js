@@ -12,7 +12,7 @@
 // may also return null: pressing it inside an image/attachment ref
 // (![name](owl-img:…)) is a deliberate no-op, not an unwrap.
 
-import { splitTableRow, tableRow, isSeparatorRow, isTableRowLine } from './table.js';
+import { splitTableRow, tableRow, isSeparatorRow, isTableRowLine, tableBlockAt } from './table.js';
 
 // Clamp a selection into [0, body.length] and normalize start <= end.
 function clamp(body, start, end) {
@@ -254,31 +254,10 @@ function tableHeader(columns) {
   return Array.from({ length: columns }, (_, i) => HEADER_PLACEHOLDER(i));
 }
 
-function lineBounds(body, pos) {
-  const start = pos === 0 ? 0 : body.lastIndexOf('\n', pos - 1) + 1;
-  let end = body.indexOf('\n', start);
-  if (end === -1) end = body.length;
-  return [start, end];
-}
-
-// The run of consecutive table rows around `pos`, or null when the caret is not
-// on one. Returns [blockStart, blockEnd, lineStart, lineEnd].
+// Array-shaped view of table.js's block finder, for the destructuring below.
 function tableBlock(body, pos) {
-  const [lineStart, lineEnd] = lineBounds(body, pos);
-  if (!isTableRowLine(body.slice(lineStart, lineEnd))) return null;
-  let blockStart = lineStart;
-  while (blockStart > 0) {
-    const [prevStart, prevEnd] = lineBounds(body, blockStart - 1);
-    if (!isTableRowLine(body.slice(prevStart, prevEnd))) break;
-    blockStart = prevStart;
-  }
-  let blockEnd = lineEnd;
-  while (blockEnd < body.length) {
-    const [nextStart, nextEnd] = lineBounds(body, blockEnd + 1);
-    if (!isTableRowLine(body.slice(nextStart, nextEnd))) break;
-    blockEnd = nextEnd;
-  }
-  return [blockStart, blockEnd, lineStart, lineEnd];
+  const found = tableBlockAt(body, pos);
+  return found ? [found.blockStart, found.blockEnd, found.lineStart, found.lineEnd] : null;
 }
 
 // Which column the caret sits in: count the unescaped pipes before it, less the

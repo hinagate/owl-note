@@ -185,3 +185,51 @@ describe('Tab between table cells', () => {
     expect(pressTab(ta, TABLE.indexOf('one'), true)).toBe(false);
   });
 });
+
+describe('typing a new header cell widens the rows below', () => {
+  // The reported case: the user types a third header cell and the rows below
+  // must gain their empty cells in the NOTE TEXT, with no button press.
+  const TYPED = '| title 1 | title 2 | xxx|\n| --- | --- |\n|  |  |\n|  |  ';
+
+  it('fills the rows out on the input event', () => {
+    render({ body: '' });
+    const ta = document.querySelector('.note-body');
+    ta.value = TYPED;
+    ta.selectionStart = ta.selectionEnd = TYPED.indexOf('xxx') + 3;
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(ta.value.split('\n')).toEqual([
+      '| title 1 | title 2 | xxx |',
+      '| --- | --- | --- |',
+      '|  |  |  |',
+      '|  |  |  |',
+    ]);
+  });
+
+  it('keeps the caret where the user was typing', () => {
+    render({ body: '' });
+    const ta = document.querySelector('.note-body');
+    ta.value = TYPED;
+    ta.selectionStart = ta.selectionEnd = TYPED.indexOf('xxx') + 3;
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(ta.value.slice(0, ta.selectionStart)).toBe('| title 1 | title 2 | xxx');
+  });
+
+  it('does not fight ordinary typing outside a table', () => {
+    render({ body: 'prose' });
+    const ta = document.querySelector('.note-body');
+    ta.value = 'prose and more';
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(ta.value).toBe('prose and more');
+  });
+
+  it('settles after one pass rather than looping', () => {
+    render({ body: '' });
+    const ta = document.querySelector('.note-body');
+    ta.value = TYPED;
+    ta.selectionStart = ta.selectionEnd = TYPED.indexOf('xxx') + 3;
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    const settled = ta.value;
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(ta.value).toBe(settled);
+  });
+});

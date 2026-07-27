@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   splitTableRow, tableRow, isSeparatorRow, isTableRowLine,
-  tableCellSpans, tableCellTarget, normalizeTables,
+  tableCellSpans, tableCellTarget, normalizeTables, autoWidenTableAt,
 } from '../src/lib/table.js';
 import { renderMarkdown } from '../src/lib/markdown.js';
 
@@ -101,6 +101,56 @@ describe('normalizeTables (forgiving render)', () => {
   });
 });
 
+describe('autoWidenTableAt (rewrites the note while typing)', () => {
+  // The reported case: a third header cell typed by hand, with the rows below
+  // left two wide. They should gain their empty cells without any button press.
+  const TYPED = [
+    '| title 1 | title 2 | xxx|',
+    '| --- | --- |',
+    '|  |  |',
+    '|  |  ',
+  ].join('\n');
+
+  it('fills every row out to the new header width', () => {
+    const caret = TYPED.indexOf('xxx') + 3; // caret right where the user is typing
+    const edit = autoWidenTableAt(TYPED, caret);
+    const out = TYPED.slice(0, edit.replaceStart) + edit.insert + TYPED.slice(edit.replaceEnd);
+    expect(out.split('\n')).toEqual([
+      '| title 1 | title 2 | xxx |',
+      '| --- | --- | --- |',
+      '|  |  |  |',
+      '|  |  |  |',
+    ]);
+  });
+
+  it('leaves the caret exactly where the user was typing', () => {
+    const caret = TYPED.indexOf('xxx') + 3;
+    const edit = autoWidenTableAt(TYPED, caret);
+    const out = TYPED.slice(0, edit.replaceStart) + edit.insert + TYPED.slice(edit.replaceEnd);
+    expect(out.slice(0, edit.selStart)).toBe('| title 1 | title 2 | xxx');
+  });
+
+  it('remaps the caret when rows ABOVE it grow', () => {
+    const body = '| a | b | c |\n| --- | --- |\n| 1 | 2 |';
+    const caret = body.indexOf('2');
+    const edit = autoWidenTableAt(body, caret);
+    const out = body.slice(0, edit.replaceStart) + edit.insert + body.slice(edit.replaceEnd);
+    expect(out[edit.selStart]).toBe('2'); // still sitting on the same character
+  });
+
+  it('is null once every row already matches', () => {
+    expect(autoWidenTableAt('| a | b |\n| --- | --- |\n| 1 | 2 |', 3)).toBeNull();
+  });
+
+  it('is null outside a table', () => {
+    expect(autoWidenTableAt('plain prose', 4)).toBeNull();
+  });
+
+  it('will not touch a block with no delimiter row', () => {
+    expect(autoWidenTableAt('| a | b | c |\n| 1 | 2 |', 3)).toBeNull();
+  });
+});
+
 const TABLE = '| one | two |\n| --- | --- |\n| aa | bb |';
 
 describe('tableCellTarget (Tab between cells)', () => {
@@ -119,14 +169,26 @@ describe('tableCellTarget (Tab between cells)', () => {
     expect(sel(tableCellTarget(TABLE, at('two'), at('two'), false))).toBe('one');
   });
 
-  it('wraps forward into the row below', () => {
+  // The delimiter row is structure, not data — Tab must step straight over it.
+  it('skips the delimiter row going forward, header to first data row', () => {
     const from = at('two');
-    expect(sel(tableCellTarget(TABLE, from, from, true))).toBe('---');
+    expect(sel(tableCellTarget(TABLE, from, from, true))).toBe('aa');
   });
 
-  it('wraps backward into the row above', () => {
+  it('skips the delimiter row going backward, first data row to header', () => {
     const from = at('aa');
-    expect(sel(tableCellTarget(TABLE, from, from, false))).toBe('---');
+    expect(sel(tableCellTarget(TABLE, from, from, false))).toBe('two');
+  });
+
+  it('walks the whole table left to right, never landing on ---', () => {
+    const visited = [];
+    let pos = at('one');
+    for (let i = 0; i < 3; i++) {
+      const move = tableCellTarget(TABLE, pos, pos, true);
+      visited.push(TABLE.slice(move.selStart, move.selEnd));
+      pos = move.selStart;
+    }
+    expect(visited).toEqual(['two', 'aa', 'bb']);
   });
 
   it('opens a new row when tabbing past the last cell', () => {
@@ -134,6 +196,13 @@ describe('tableCellTarget (Tab between cells)', () => {
     const move = tableCellTarget(TABLE, from, from, true);
     expect(move.insert).toBe('\n|  |  |');
     expect(TABLE.slice(0, move.replaceStart) + move.insert).toBe(`${TABLE}\n|  |  |`);
+  });
+
+  it('opens the new row below the delimiter, not inside the table', () => {
+    const header = '| a | b |\n| --- | --- |'; // header + delimiter only
+    const from = header.indexOf('b');
+    const move = tableCellTarget(header, from, from, true);
+    expect(header.slice(0, move.replaceStart) + move.insert).toBe(`${header}\n|  |  |`);
   });
 
   // Without this, Tab would be trapped in the textarea with no keyboard escape.

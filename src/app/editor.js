@@ -6,7 +6,7 @@ import { getBytes } from '../lib/attachment-store.js';
 import * as panes from './panes.js';
 import { renderFormatBar, formatActions } from './format-bar.js';
 import { nextTableRow } from '../lib/format.js';
-import { tableCellTarget } from '../lib/table.js';
+import { tableCellTarget, autoWidenTableAt } from '../lib/table.js';
 import { showDrawPanel } from './draw-panel.js';
 
 export function renderEditor(
@@ -755,7 +755,26 @@ export function renderEditor(
     updateSize();
   };
 
+  // Typing a new header cell should fill the matching empty cells into the rows
+  // below, rather than leaving a table that no longer parses. Only ever APPENDS
+  // ` |` at the ends of lines, so nothing the user has typed moves, and the
+  // caret is remapped exactly. Guarded because insertText fires `input` again.
+  let wideningTable = false;
+  const autoWidenTable = () => {
+    if (wideningTable) return;
+    const edit = autoWidenTableAt(ta.value, ta.selectionStart ?? 0);
+    if (!edit) return;
+    wideningTable = true;
+    try {
+      insertText(edit.insert, edit.replaceStart, edit.replaceEnd); // one undo step
+      ta.setSelectionRange(edit.selStart, edit.selEnd);
+    } finally {
+      wideningTable = false;
+    }
+  };
+
   const fireChange = () => {
+    autoWidenTable();
     refresh();
     onChange({ title: titleInput.value, body: ta.value, attachments: atts });
     scheduleAutoSave();
