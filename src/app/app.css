@@ -260,7 +260,24 @@ body.resizing { user-select: none; cursor: col-resize; }
    whole preview to scroll sideways and break the reading column. */
 .preview-content { max-width: 740px; font-size: 16px; line-height: 1.72; color: var(--text); overflow-wrap: anywhere; }
 /* A wide table scrolls WITHIN itself rather than stretching the pane. */
-.preview table { display: block; max-width: 100%; overflow-x: auto; }
+.preview table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+/* The grid is drawn on the CELLS, not the table. `display: block` above (so a wide
+   table scrolls inside itself) means the table's own box is an anonymous one — but
+   border-collapse is an inherited property, so it still reaches that box and the
+   shared edges merge instead of doubling. */
+.preview th, .preview td {
+  padding: 7px 12px; border: 1px solid var(--border);
+  vertical-align: top;
+}
+/* Markdown's :--: / --: alignment markers become align="" attributes, which are
+   presentational hints — ANY author text-align here would silently outrank them.
+   Hence :not([align]): the default only applies where the author asked for none. */
+.preview th:not([align]), .preview td:not([align]) { text-align: left; }
+.preview thead th { background: var(--sidebar-bg); font-weight: 600; }
+.preview tbody tr:nth-child(even) { background: var(--list-bg); }
+/* A full-canvas sketch would otherwise dictate its column's width. Cap it so a
+   table of drawings stays readable — clicking still opens the lightbox full size. */
+.preview td img { max-height: 220px; width: auto; }
 /* Live size meter pinned to the top-right of the preview. */
 .preview-size {
   position: sticky; top: 0; z-index: 1;
