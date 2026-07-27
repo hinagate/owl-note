@@ -19,7 +19,7 @@ export function formatActions() {
     { id: 'ordered-list', label: '1.', title: 'Numbered list', run: (b, s, e) => toggleOrderedList(b, s, e) },
     { id: 'quote', label: '❝', title: 'Quote', run: (b, s, e) => toggleLinePrefix(b, s, e, 'quote') },
     { id: 'link', label: '🔗', title: 'Link (Ctrl+K)', shortcut: 'k', run: (b, s, e) => insertLink(b, s, e) },
-    { id: 'table', label: '▦', title: 'Table — turn the selected lines into a table, or insert an empty one', run: (b, s, e) => insertTable(b, s, e) },
+    { id: 'table', label: '▦', title: 'Table — build one from the selected lines, or add a column / repair the table you are in', run: (b, s, e) => insertTable(b, s, e) },
   ];
 }
 

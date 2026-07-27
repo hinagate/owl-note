@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { toggleInline, cycleHeading, toggleLinePrefix, toggleOrderedList, insertLink, insertTable, nextTableRow, splitTableRow } from '../src/lib/format.js';
+import { renderMarkdown } from '../src/lib/markdown.js';
 
 // Apply an edit object to a body string — the same splice editor.js performs.
 export function applyEdit(body, edit) {
@@ -427,5 +428,54 @@ describe('insertTable adds a column when the caret is already in a table', () =>
 
   it('still inserts a fresh table when the caret is not in one', () => {
     expect(applyEdit('', insertTable('', 0, 0))).toContain('| title 1 | title 2 |');
+  });
+});
+
+describe('insertTable repairs a table broken by hand-editing', () => {
+  // Typing a third header cell leaves the delimiter row two wide, and GFM then
+  // refuses to parse the block as a table at all — it renders as a paragraph.
+  const BROKEN = [
+    '| title 1 | title 2 | title 3 |',
+    '| --- | --- |',
+    '|  |  |',
+  ].join('\n');
+
+  it('does not render as a table while broken', () => {
+    expect(renderMarkdown(BROKEN)).not.toContain('<table>');
+  });
+
+  it('widens the delimiter and body rows to match the header', () => {
+    expect(applyEdit(BROKEN, insertTable(BROKEN, 5, 5)).split('\n')).toEqual([
+      '| title 1 | title 2 | title 3 |',
+      '| --- | --- | --- |',
+      '|  |  |  |',
+    ]);
+  });
+
+  it('renders as a table once repaired', () => {
+    const repaired = applyEdit(BROKEN, insertTable(BROKEN, 5, 5));
+    expect(renderMarkdown(repaired)).toContain('<table>');
+    expect(renderMarkdown(repaired)).toContain('<th>title 3</th>');
+  });
+
+  it('keeps existing cell content while widening', () => {
+    const body = '| a | b | c |\n| --- | --- |\n| 1 | 2 |';
+    expect(applyEdit(body, insertTable(body, 3, 3)).split('\n')[2]).toBe('| 1 | 2 |  |');
+  });
+
+  it('supplies a delimiter row when there is none', () => {
+    const body = '| a | b |\n| 1 | 2 |';
+    expect(applyEdit(body, insertTable(body, 3, 3)).split('\n')).toEqual([
+      '| a | b |',
+      '| --- | --- |',
+      '| 1 | 2 |',
+    ]);
+  });
+
+  it('repairing twice changes nothing the second time', () => {
+    const once = applyEdit(BROKEN, insertTable(BROKEN, 5, 5));
+    // Well-formed now, so the button goes back to its add-a-column job.
+    const twice = applyEdit(once, insertTable(once, 5, 5));
+    expect(twice.split('\n')[1]).toBe('| --- | --- | --- | --- |');
   });
 });

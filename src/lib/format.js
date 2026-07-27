@@ -320,6 +320,34 @@ function columnAt(line, offset) {
   return Math.max(0, pipes - 1);
 }
 
+// GFM demands that the delimiter row match the header's cell count. Add a header
+// cell by hand and the block silently stops being a table altogether — it renders
+// as a paragraph of pipes, with nothing to indicate why. This widens every row to
+// the widest one and supplies a delimiter row if none exists, which is exactly the
+// content-preserving, structure-only repair tidy-markdown.js performs elsewhere.
+// Returns null when the table is already well-formed, so the caller can fall
+// through to adding a column.
+function repairTable(body, pos) {
+  const found = tableBlock(body, pos);
+  if (!found) return null;
+  const [blockStart, blockEnd] = found;
+  const lines = body.slice(blockStart, blockEnd).split('\n');
+  const rows = lines.map(splitTableRow);
+  const separatorAt = lines.findIndex(isSeparatorRow);
+  const columns = Math.max(...rows.map((r) => r.length));
+  if (separatorAt === 1 && rows.every((r) => r.length === columns)) return null;
+
+  const padded = rows.map((cells, i) => {
+    const filler = i === separatorAt ? '---' : '';
+    return cells.concat(Array(columns - cells.length).fill(filler));
+  });
+  // A block of pipe rows with no delimiter at all isn't a table yet: the first
+  // row becomes the header and the delimiter it was missing is inserted.
+  if (separatorAt === -1) padded.splice(1, 0, Array(columns).fill('---'));
+  const insert = padded.map(tableRow).join('\n');
+  return { replaceStart: blockStart, replaceEnd: blockEnd, insert, selStart: blockStart, selEnd: blockStart + insert.length };
+}
+
 // Add a column to EVERY row of the table the caret is in, immediately after the
 // caret's own column — the "insert column right" every table editor offers.
 // Returns null when the caret is not in a table.
@@ -371,8 +399,11 @@ export function insertTable(body, start, end) {
   const [s, e] = clamp(body, start, end);
 
   if (s === e) {
-    // Already inside a table? Then the useful move is a new column, not a
-    // nested table nobody could want.
+    // Inside a table already? A broken one wants repairing before anything else —
+    // adding a column to a table that no longer parses helps nobody. Otherwise the
+    // useful move is a new column, not a nested table nobody could want.
+    const repair = repairTable(body, s);
+    if (repair) return repair;
     const column = addTableColumn(body, s);
     if (column) return column;
     // A table must begin at the start of a line and be its own block, so pad
