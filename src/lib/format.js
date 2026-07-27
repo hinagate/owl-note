@@ -255,6 +255,109 @@ function tableHeader(columns) {
   return Array.from({ length: columns }, (_, i) => `Column ${i + 1}`);
 }
 
+// A table row: starts and ends with a pipe. Good enough to find the block the
+// caret sits in — the renderer is the authority on what actually parses.
+const TABLE_ROW_RE = /^\s*\|.*\|\s*$/;
+// A separator row's cells: ---, :--, --: or :-:.
+const SEPARATOR_CELL_RE = /^:?-{1,}:?$/;
+
+// Split '| a | b |' into ['a', 'b'], honouring \| escapes so an escaped pipe
+// stays inside its cell instead of opening a new column.
+export function splitTableRow(line) {
+  const inner = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+  const cells = [];
+  let cell = '';
+  for (let i = 0; i < inner.length; i++) {
+    if (inner[i] === '\\' && inner[i + 1] === '|') { cell += '\\|'; i += 1; continue; }
+    if (inner[i] === '|') { cells.push(cell.trim()); cell = ''; continue; }
+    cell += inner[i];
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+function isSeparatorRow(line) {
+  const cells = splitTableRow(line);
+  return cells.length > 0 && cells.every((c) => SEPARATOR_CELL_RE.test(c));
+}
+
+function lineBounds(body, pos) {
+  const start = pos === 0 ? 0 : body.lastIndexOf('\n', pos - 1) + 1;
+  let end = body.indexOf('\n', start);
+  if (end === -1) end = body.length;
+  return [start, end];
+}
+
+// The run of consecutive table rows around `pos`, or null when the caret is not
+// on one. Returns [blockStart, blockEnd, lineStart, lineEnd].
+function tableBlock(body, pos) {
+  const [lineStart, lineEnd] = lineBounds(body, pos);
+  if (!TABLE_ROW_RE.test(body.slice(lineStart, lineEnd))) return null;
+  let blockStart = lineStart;
+  while (blockStart > 0) {
+    const [prevStart, prevEnd] = lineBounds(body, blockStart - 1);
+    if (!TABLE_ROW_RE.test(body.slice(prevStart, prevEnd))) break;
+    blockStart = prevStart;
+  }
+  let blockEnd = lineEnd;
+  while (blockEnd < body.length) {
+    const [nextStart, nextEnd] = lineBounds(body, blockEnd + 1);
+    if (!TABLE_ROW_RE.test(body.slice(nextStart, nextEnd))) break;
+    blockEnd = nextEnd;
+  }
+  return [blockStart, blockEnd, lineStart, lineEnd];
+}
+
+// Which column the caret sits in: count the unescaped pipes before it, less the
+// row's leading pipe (which opens no column).
+function columnAt(line, offset) {
+  let pipes = 0;
+  for (let i = 0; i < Math.min(offset, line.length); i++) {
+    if (line[i] === '\\') { i += 1; continue; }
+    if (line[i] === '|') pipes += 1;
+  }
+  return Math.max(0, pipes - 1);
+}
+
+// Add a column to EVERY row of the table the caret is in, immediately after the
+// caret's own column — the "insert column right" every table editor offers.
+// Returns null when the caret is not in a table.
+function addTableColumn(body, pos) {
+  const found = tableBlock(body, pos);
+  if (!found) return null;
+  const [blockStart, blockEnd, lineStart] = found;
+  const at = columnAt(body.slice(lineStart, blockEnd), pos - lineStart);
+  const out = body.slice(blockStart, blockEnd).split('\n').map((line) => {
+    const cells = splitTableRow(line);
+    const index = Math.min(at + 1, cells.length);
+    cells.splice(index, 0, isSeparatorRow(line) ? '---' : '');
+    return tableRow(cells);
+  }).join('\n');
+  return { replaceStart: blockStart, replaceEnd: blockEnd, insert: out, selStart: blockStart, selEnd: blockStart + out.length };
+}
+
+// Enter inside a table: open the next row, matching the current row's column
+// count and dropping the caret in its first cell. On an ALREADY-EMPTY row it
+// clears that row instead, so Enter twice walks out of the table rather than
+// trapping the caret in it. Returns null anywhere else, leaving Enter alone.
+export function nextTableRow(body, start, end) {
+  const [s, e] = clamp(body, start, end);
+  if (s !== e) return null; // a selection means "replace", not "extend the table"
+  const found = tableBlock(body, s);
+  if (!found) return null;
+  const [, , lineStart, lineEnd] = found;
+  const line = body.slice(lineStart, lineEnd);
+  const cells = splitTableRow(line);
+
+  if (!isSeparatorRow(line) && cells.every((c) => c === '')) {
+    // Empty row -> leave the table, putting the caret on the now-blank line.
+    return { replaceStart: lineStart, replaceEnd: lineEnd, insert: '', selStart: lineStart, selEnd: lineStart };
+  }
+  const insert = `\n${tableRow(Array(cells.length).fill(''))}`;
+  const caret = lineEnd + 1 + 2; // past the new row's '| '
+  return { replaceStart: lineEnd, replaceEnd: lineEnd, insert, selStart: caret, selEnd: caret };
+}
+
 // Turn the selected lines into a GFM table, or drop in a starter table when
 // nothing is selected.
 //
@@ -267,6 +370,10 @@ export function insertTable(body, start, end) {
   const [s, e] = clamp(body, start, end);
 
   if (s === e) {
+    // Already inside a table? Then the useful move is a new column, not a
+    // nested table nobody could want.
+    const column = addTableColumn(body, s);
+    if (column) return column;
     // A table must begin at the start of a line and be its own block, so pad
     // with newlines only where the surrounding text does not already supply them.
     const before = s === 0 || body[s - 1] === '\n' ? '' : '\n';

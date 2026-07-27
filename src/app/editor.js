@@ -5,6 +5,7 @@ import { extractImages, inlineImages, pruneAttachments, attachFile, listFileRefs
 import { getBytes } from '../lib/attachment-store.js';
 import * as panes from './panes.js';
 import { renderFormatBar, formatActions } from './format-bar.js';
+import { nextTableRow } from '../lib/format.js';
 import { showDrawPanel } from './draw-panel.js';
 
 export function renderEditor(
@@ -801,6 +802,18 @@ export function renderEditor(
   const shortcutActions = new Map(fmtActions.filter((a) => a.shortcut).map((a) => [a.shortcut, a]));
   ta.addEventListener('keydown', (e) => {
     if (e.isComposing || e.keyCode === 229) return; // IME composition — never format mid-composition (ask-panel.js convention)
+    // Enter inside a table opens the next row. nextTableRow returns null
+    // everywhere else, so a plain Enter keeps its normal behaviour — including
+    // Shift+Enter, which stays a hard line break inside a cell's paragraph.
+    if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const edit = nextTableRow(ta.value, ta.selectionStart, ta.selectionEnd);
+      if (edit) {
+        e.preventDefault();
+        insertText(edit.insert, edit.replaceStart, edit.replaceEnd);
+        ta.setSelectionRange(edit.selStart, edit.selEnd);
+      }
+      return;
+    }
     if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
     const action = shortcutActions.get(e.key.toLowerCase());
     if (!action) return;

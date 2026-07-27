@@ -98,3 +98,45 @@ describe('format bar in the editor', () => {
     expect(ta.value).toBe('## T');
   });
 });
+
+describe('Enter inside a table', () => {
+  const TABLE = '| Step | Sketch |\n| --- | --- |\n| walk | sketch |';
+
+  function pressEnter(ta, caret) {
+    ta.selectionStart = ta.selectionEnd = caret;
+    const ev = new KeyboardEvent('keydown', { key: 'Enter', cancelable: true, bubbles: true });
+    const prevented = !ta.dispatchEvent(ev);
+    return prevented;
+  }
+
+  it('adds a matching empty row and consumes the keypress', () => {
+    render({ body: TABLE });
+    const ta = document.querySelector('.note-body');
+    expect(pressEnter(ta, TABLE.length)).toBe(true); // preventDefault -> no stray newline
+    expect(ta.value.split('\n')[3]).toBe('|  |  |');
+  });
+
+  it('leaves Enter alone outside a table', () => {
+    render({ body: 'plain prose' });
+    const ta = document.querySelector('.note-body');
+    expect(pressEnter(ta, 5)).toBe(false); // not prevented -> the textarea inserts its own newline
+    expect(ta.value).toBe('plain prose');
+  });
+
+  it('does not hijack Shift+Enter', () => {
+    render({ body: TABLE });
+    const ta = document.querySelector('.note-body');
+    ta.selectionStart = ta.selectionEnd = TABLE.length;
+    const ev = new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, cancelable: true, bubbles: true });
+    expect(!ta.dispatchEvent(ev)).toBe(false);
+    expect(ta.value).toBe(TABLE);
+  });
+
+  it('walks out of the table when Enter lands on an empty row', () => {
+    const body = `${TABLE}\n|  |  |`;
+    render({ body });
+    const ta = document.querySelector('.note-body');
+    pressEnter(ta, body.length - 3);
+    expect(ta.value).toBe(`${TABLE}\n`);
+  });
+});

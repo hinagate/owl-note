@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toggleInline, cycleHeading, toggleLinePrefix, toggleOrderedList, insertLink, insertTable } from '../src/lib/format.js';
+import { toggleInline, cycleHeading, toggleLinePrefix, toggleOrderedList, insertLink, insertTable, nextTableRow, splitTableRow } from '../src/lib/format.js';
 
 // Apply an edit object to a body string — the same splice editor.js performs.
 export function applyEdit(body, edit) {
@@ -343,5 +343,89 @@ describe('insertTable', () => {
 
   it('is a no-op on an all-blank selection', () => {
     expect(insertTable('\n\n', 0, 2)).toBeNull();
+  });
+});
+
+const TABLE = [
+  '| Step | Sketch |',
+  '| --- | --- |',
+  '| walk | ![a](owl-img:x) |',
+].join('\n');
+
+describe('splitTableRow', () => {
+  it('splits on pipes and trims each cell', () => {
+    expect(splitTableRow('| a | b |')).toEqual(['a', 'b']);
+  });
+
+  it('keeps an escaped pipe inside its cell', () => {
+    expect(splitTableRow('| cost \\| tax | b |')).toEqual(['cost \\| tax', 'b']);
+  });
+});
+
+describe('nextTableRow (Enter inside a table)', () => {
+  it('leaves Enter alone outside a table', () => {
+    expect(nextTableRow('just prose', 4, 4)).toBeNull();
+  });
+
+  it('opens a matching empty row below the caret line', () => {
+    const caret = TABLE.length - 3;
+    const out = applyEdit(TABLE, nextTableRow(TABLE, caret, caret));
+    expect(out.split('\n')).toHaveLength(4);
+    expect(out.split('\n')[3]).toBe('|  |  |');
+  });
+
+  it('puts the caret in the new row\'s first cell', () => {
+    const caret = TABLE.length - 3;
+    const edit = nextTableRow(TABLE, caret, caret);
+    const out = applyEdit(TABLE, edit);
+    expect(out.slice(0, edit.selStart).endsWith('|  |  |'.slice(0, 2))).toBe(true);
+  });
+
+  it('matches the column count of a wider table', () => {
+    const wide = '| a | b | c |\n| --- | --- | --- |\n| 1 | 2 | 3 |';
+    const out = applyEdit(wide, nextTableRow(wide, wide.length, wide.length));
+    expect(out.split('\n')[3]).toBe('|  |  |  |');
+  });
+
+  it('adds a row from the header line too', () => {
+    const out = applyEdit(TABLE, nextTableRow(TABLE, 5, 5));
+    expect(out.split('\n')[1]).toBe('|  |  |');
+  });
+
+  it('clears an already-empty row so Enter walks out of the table', () => {
+    const body = `${TABLE}\n|  |  |`;
+    const caret = body.length - 3;
+    const edit = nextTableRow(body, caret, caret);
+    expect(applyEdit(body, edit)).toBe(`${TABLE}\n`);
+  });
+
+  it('ignores Enter when there is a selection', () => {
+    expect(nextTableRow(TABLE, 0, 10)).toBeNull();
+  });
+});
+
+describe('insertTable adds a column when the caret is already in a table', () => {
+  it('inserts the new column after the caret\'s column, in every row', () => {
+    const caret = TABLE.indexOf('Step') + 1; // inside column 1
+    expect(applyEdit(TABLE, insertTable(TABLE, caret, caret)).split('\n')).toEqual([
+      '| Step |  | Sketch |',
+      '| --- | --- | --- |',
+      '| walk |  | ![a](owl-img:x) |',
+    ]);
+  });
+
+  it('keeps the separator row a separator', () => {
+    const caret = TABLE.indexOf('Sketch');
+    const rows = applyEdit(TABLE, insertTable(TABLE, caret, caret)).split('\n');
+    expect(rows[1]).toBe('| --- | --- | --- |');
+  });
+
+  it('appends when the caret is in the last column', () => {
+    const caret = TABLE.indexOf('Sketch');
+    expect(applyEdit(TABLE, insertTable(TABLE, caret, caret)).split('\n')[0]).toBe('| Step | Sketch |  |');
+  });
+
+  it('still inserts a fresh table when the caret is not in one', () => {
+    expect(applyEdit('', insertTable('', 0, 0))).toContain('| Step | Sketch |');
   });
 });
