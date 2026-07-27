@@ -4,6 +4,7 @@ import { markedHighlight } from 'marked-highlight';
 import markedKatex from 'marked-katex-extension';
 import hljs from 'highlight.js';
 import DOMPurify from 'dompurify';
+import { normalizeTables } from './table.js';
 
 const marked = new Marked(
   markedHighlight({
@@ -87,7 +88,13 @@ if (typeof DOMPurify.addHook === 'function') {
 }
 
 export function renderMarkdown(body) {
-  const clean = DOMPurify.sanitize(marked.parse(String(body ?? '')), SANITIZE_OPTS);
+  // Render forgivingly: a table whose rows disagree on cell count does not parse
+  // as a table AT ALL in GFM — adding one header cell by hand silently demotes
+  // the whole block to a paragraph of pipes. normalizeTables widens the rows for
+  // RENDERING only; the note's own text is never rewritten, so nothing fights
+  // the user mid-keystroke. See src/lib/table.js.
+  const source = normalizeTables(String(body ?? ''));
+  const clean = DOMPurify.sanitize(marked.parse(source), SANITIZE_OPTS);
   return softenKatexErrors(clean);
 }
 

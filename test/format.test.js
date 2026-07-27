@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toggleInline, cycleHeading, toggleLinePrefix, toggleOrderedList, insertLink, insertTable, nextTableRow, splitTableRow } from '../src/lib/format.js';
+import { toggleInline, cycleHeading, toggleLinePrefix, toggleOrderedList, insertLink, insertTable, nextTableRow } from '../src/lib/format.js';
 import { renderMarkdown } from '../src/lib/markdown.js';
 
 // Apply an edit object to a body string — the same splice editor.js performs.
@@ -353,16 +353,6 @@ const TABLE = [
   '| walk | ![a](owl-img:x) |',
 ].join('\n');
 
-describe('splitTableRow', () => {
-  it('splits on pipes and trims each cell', () => {
-    expect(splitTableRow('| a | b |')).toEqual(['a', 'b']);
-  });
-
-  it('keeps an escaped pipe inside its cell', () => {
-    expect(splitTableRow('| cost \\| tax | b |')).toEqual(['cost \\| tax', 'b']);
-  });
-});
-
 describe('nextTableRow (Enter inside a table)', () => {
   it('leaves Enter alone outside a table', () => {
     expect(nextTableRow('just prose', 4, 4)).toBeNull();
@@ -440,8 +430,12 @@ describe('insertTable repairs a table broken by hand-editing', () => {
     '|  |  |',
   ].join('\n');
 
-  it('does not render as a table while broken', () => {
-    expect(renderMarkdown(BROKEN)).not.toContain('<table>');
+  // The preview repairs a broken table for DISPLAY (see table.test.js), but the
+  // note's own text is left exactly as typed — rendering must never edit you.
+  // The button is what actually rewrites the source.
+  it('leaves the note text broken until the button is pressed', () => {
+    renderMarkdown(BROKEN);
+    expect(BROKEN.split('\n')[1]).toBe('| --- | --- |');
   });
 
   it('widens the delimiter and body rows to match the header', () => {

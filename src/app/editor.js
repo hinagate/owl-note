@@ -6,6 +6,7 @@ import { getBytes } from '../lib/attachment-store.js';
 import * as panes from './panes.js';
 import { renderFormatBar, formatActions } from './format-bar.js';
 import { nextTableRow } from '../lib/format.js';
+import { tableCellTarget } from '../lib/table.js';
 import { showDrawPanel } from './draw-panel.js';
 
 export function renderEditor(
@@ -811,6 +812,19 @@ export function renderEditor(
         e.preventDefault();
         insertText(edit.insert, edit.replaceStart, edit.replaceEnd);
         ta.setSelectionRange(edit.selStart, edit.selEnd);
+      }
+      return;
+    }
+    // Tab walks cell to cell inside a table, selecting each cell so typing
+    // replaces it. tableCellTarget returns null outside a table AND for
+    // Shift+Tab in the very first cell, so Tab always keeps a way to move focus
+    // out of the textarea — it is never trapped.
+    if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const move = tableCellTarget(ta.value, ta.selectionStart, ta.selectionEnd, !e.shiftKey);
+      if (move) {
+        e.preventDefault();
+        if (move.insert != null) insertText(move.insert, move.replaceStart, move.replaceEnd);
+        ta.setSelectionRange(move.selStart, move.selEnd);
       }
       return;
     }

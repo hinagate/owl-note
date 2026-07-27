@@ -12,6 +12,8 @@
 // may also return null: pressing it inside an image/attachment ref
 // (![name](owl-img:…)) is a deliberate no-op, not an unwrap.
 
+import { splitTableRow, tableRow, isSeparatorRow, isTableRowLine } from './table.js';
+
 // Clamp a selection into [0, body.length] and normalize start <= end.
 function clamp(body, start, end) {
   const len = body.length;
@@ -242,10 +244,6 @@ function tableCell(text) {
   return String(text).trim().replace(/\s+/g, ' ').replace(/\|/g, '\\|');
 }
 
-function tableRow(cells) {
-  return `| ${cells.join(' | ')} |`;
-}
-
 // A GFM table cannot exist without a header row — without one it parses as a
 // plain paragraph, not a table. So the header is structural, and these are
 // deliberately meaningless placeholders to be typed over rather than words that
@@ -254,32 +252,6 @@ const HEADER_PLACEHOLDER = (i) => `title ${i + 1}`;
 
 function tableHeader(columns) {
   return Array.from({ length: columns }, (_, i) => HEADER_PLACEHOLDER(i));
-}
-
-// A table row: starts and ends with a pipe. Good enough to find the block the
-// caret sits in — the renderer is the authority on what actually parses.
-const TABLE_ROW_RE = /^\s*\|.*\|\s*$/;
-// A separator row's cells: ---, :--, --: or :-:.
-const SEPARATOR_CELL_RE = /^:?-{1,}:?$/;
-
-// Split '| a | b |' into ['a', 'b'], honouring \| escapes so an escaped pipe
-// stays inside its cell instead of opening a new column.
-export function splitTableRow(line) {
-  const inner = line.trim().replace(/^\|/, '').replace(/\|$/, '');
-  const cells = [];
-  let cell = '';
-  for (let i = 0; i < inner.length; i++) {
-    if (inner[i] === '\\' && inner[i + 1] === '|') { cell += '\\|'; i += 1; continue; }
-    if (inner[i] === '|') { cells.push(cell.trim()); cell = ''; continue; }
-    cell += inner[i];
-  }
-  cells.push(cell.trim());
-  return cells;
-}
-
-function isSeparatorRow(line) {
-  const cells = splitTableRow(line);
-  return cells.length > 0 && cells.every((c) => SEPARATOR_CELL_RE.test(c));
 }
 
 function lineBounds(body, pos) {
@@ -293,17 +265,17 @@ function lineBounds(body, pos) {
 // on one. Returns [blockStart, blockEnd, lineStart, lineEnd].
 function tableBlock(body, pos) {
   const [lineStart, lineEnd] = lineBounds(body, pos);
-  if (!TABLE_ROW_RE.test(body.slice(lineStart, lineEnd))) return null;
+  if (!isTableRowLine(body.slice(lineStart, lineEnd))) return null;
   let blockStart = lineStart;
   while (blockStart > 0) {
     const [prevStart, prevEnd] = lineBounds(body, blockStart - 1);
-    if (!TABLE_ROW_RE.test(body.slice(prevStart, prevEnd))) break;
+    if (!isTableRowLine(body.slice(prevStart, prevEnd))) break;
     blockStart = prevStart;
   }
   let blockEnd = lineEnd;
   while (blockEnd < body.length) {
     const [nextStart, nextEnd] = lineBounds(body, blockEnd + 1);
-    if (!TABLE_ROW_RE.test(body.slice(nextStart, nextEnd))) break;
+    if (!isTableRowLine(body.slice(nextStart, nextEnd))) break;
     blockEnd = nextEnd;
   }
   return [blockStart, blockEnd, lineStart, lineEnd];

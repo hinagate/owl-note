@@ -140,3 +140,48 @@ describe('Enter inside a table', () => {
     expect(ta.value).toBe(`${TABLE}\n`);
   });
 });
+
+describe('Tab between table cells', () => {
+  const TABLE = '| one | two |\n| --- | --- |\n| aa | bb |';
+
+  function pressTab(ta, caret, shift = false) {
+    ta.selectionStart = ta.selectionEnd = caret;
+    const ev = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: shift, cancelable: true, bubbles: true });
+    return !ta.dispatchEvent(ev); // true when prevented
+  }
+
+  it('selects the next cell and consumes the keypress', () => {
+    render({ body: TABLE });
+    const ta = document.querySelector('.note-body');
+    expect(pressTab(ta, TABLE.indexOf('one'))).toBe(true);
+    expect(ta.value.slice(ta.selectionStart, ta.selectionEnd)).toBe('two');
+  });
+
+  it('Shift+Tab selects the previous cell', () => {
+    render({ body: TABLE });
+    const ta = document.querySelector('.note-body');
+    pressTab(ta, TABLE.indexOf('two'), true);
+    expect(ta.value.slice(ta.selectionStart, ta.selectionEnd)).toBe('one');
+  });
+
+  it('opens a new row when tabbing past the last cell', () => {
+    render({ body: TABLE });
+    const ta = document.querySelector('.note-body');
+    pressTab(ta, TABLE.indexOf('bb'));
+    expect(ta.value).toBe(`${TABLE}\n|  |  |`);
+  });
+
+  // Tab must stay escapable: outside a table, and on Shift+Tab in the first
+  // cell, the keypress is NOT consumed so focus can leave the textarea.
+  it('does not consume Tab outside a table', () => {
+    render({ body: 'plain prose' });
+    const ta = document.querySelector('.note-body');
+    expect(pressTab(ta, 3)).toBe(false);
+  });
+
+  it('does not consume Shift+Tab in the very first cell', () => {
+    render({ body: TABLE });
+    const ta = document.querySelector('.note-body');
+    expect(pressTab(ta, TABLE.indexOf('one'), true)).toBe(false);
+  });
+});
