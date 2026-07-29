@@ -1041,10 +1041,17 @@ async function refreshPanes() {
     },
     onRenameNotebook: (id, current) => renameNotebook(id, current),
     onDeleteNotebook: (id) => deleteNotebook(id),
-    onDropNote: async (folderId, bookmarkId) => {
-      await dropNote(bookmarkId, folderId);
+    onDropNote: async (folderId, draggedHandle) => {
+      // Dragging any member of the current multi-selection moves the whole set.
+      // A non-selected card keeps the familiar single-note behaviour even when
+      // some other cards are selected.
+      const handles = ui.selected.has(draggedHandle)
+        ? [...ui.selected]
+        : [draggedHandle];
+      for (const handle of handles) await dropNote(handle, folderId);
+      ui.selected = new Set(); ui.anchor = null; ui.focus = -1;
       await refreshPanes();
-      toast('Note moved');
+      toast(handles.length === 1 ? 'Note moved' : `${handles.length} notes moved`);
     },
     onMoveNotebook: async (childId, newParentId) => {
       if (childId === newParentId) return;

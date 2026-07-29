@@ -396,6 +396,51 @@ describe('app integration', () => {
     expect(await bm.listNotes(nb2)).toHaveLength(1);
   });
 
+  it('moves every selected note when one selected card is dragged onto a notebook', async () => {
+    const app = await import('../src/app/app.js');
+    const bm = await import('../src/lib/bookmarks.js');
+    const { encode } = await import('../src/lib/codec.js');
+    const { createNote } = await import('../src/lib/note.js');
+    const root = await bm.ensureRoot();
+    const nb1 = await bm.createNotebook(root, 'NB1');
+    const nb2 = await bm.createNotebook(root, 'NB2');
+    for (const title of ['One', 'Two', 'Three']) {
+      const note = createNote({ title, body: title });
+      await bm.createNote(nb1, note.title, await encode(note));
+    }
+    await app.initUI(root);
+    [...document.querySelectorAll('#sidebar .item.folder')]
+      .find((row) => row.querySelector('.nb-label')?.textContent === 'NB1')
+      .click();
+    await waitFor(() => document.querySelectorAll('#note-list .item.card').length === 3);
+
+    const cards = [...document.querySelectorAll('#note-list .item.card')];
+    cards[0].dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
+    cards[2].dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
+    await waitFor(() => document.querySelectorAll('#note-list .item.selected').length === 2);
+
+    const values = new Map();
+    const dataTransfer = {
+      effectAllowed: '',
+      setData: (type, value) => values.set(type, value),
+      getData: (type) => values.get(type) || '',
+    };
+    const drag = new Event('dragstart', { bubbles: true });
+    drag.dataTransfer = dataTransfer;
+    document.querySelector('#note-list .item.selected').dispatchEvent(drag);
+
+    const nb2Row = [...document.querySelectorAll('#sidebar .item.folder')]
+      .find((row) => row.querySelector('.nb-label')?.textContent === 'NB2');
+    const drop = new Event('drop', { bubbles: true });
+    drop.dataTransfer = dataTransfer;
+    drop.preventDefault = () => {};
+    nb2Row.dispatchEvent(drop);
+
+    await waitFor(async () => (await bm.listNotes(nb2)).length === 2);
+    expect(await bm.listNotes(nb1)).toHaveLength(1);
+    expect(await bm.listNotes(nb2)).toHaveLength(2);
+  });
+
   it('keeps the same search input element across keystrokes (no focus loss)', async () => {
     const app = await import('../src/app/app.js');
     const bm = await import('../src/lib/bookmarks.js');
