@@ -67,6 +67,7 @@ describe('service worker handlers', () => {
       { id: 'owl-save-selection', title: 'Save selection to OWL-Note', contexts: ['selection'] },
       { id: 'owl-capture-smart-page', title: 'Rebuild LLM chat to OWL-Note', contexts: ['page'] },
       { id: 'owl-capture-full-page', title: 'Capture entire page to OWL-Note', contexts: ['page'] },
+      { id: 'owl-transcribe-video', title: 'Live Transcription save to OWL-Note', contexts: ['page', 'video'] },
     ]);
   });
 

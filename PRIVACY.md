@@ -1,6 +1,6 @@
 # OWL-Note privacy policy
 
-_Last updated: 2026-07-19_
+_Last updated: 2026-07-30_
 
 OWL-Note stores your notes **as bookmarks in your own browser**. A note's text
 is compressed and placed inside the bookmark's URL. A local backup copy is kept
@@ -20,9 +20,10 @@ Even though everything is processed locally, we disclose it plainly. OWL-Note
 handles only:
 
 - **Your note content** (titles, body text, attachments you add, web content
-  you explicitly select, and full-page images you explicitly capture) — stored
-  in your browser's bookmarks and its local backup, and, if you turn on Drive
-  sync, in your own Google Drive. Never sent to us.
+  you explicitly select, full-page images you explicitly capture, and
+  transcripts you explicitly create from tab audio) — stored in your browser's
+  bookmarks and its local backup, and, if you turn on Drive sync, in your own
+  Google Drive. Never sent to us.
 - **A Google sign-in token** — only if you turn on Drive sync, only to access the
   files OWL-Note created in your own Drive (see below). Never sent to us.
 
@@ -59,6 +60,22 @@ offline.
 service is not shipped in this build. If it's added later, it will clearly warn
 you before anything is sent off-device.
 
+## Live transcription
+
+Tab audio is captured only for the tab you explicitly start with **Live
+Transcription save to OWL-Note**, and only from that right-click onwards: Chrome
+grants capture access per tab, as part of the temporary access that same gesture
+creates, and revokes it when the page navigates. No tab is capturable until you
+act on it. The captured audio track is passed directly to Chrome's Web Speech API
+with `processLocally` enabled. There is no cloud-transcription fallback, and
+OWL-Note never uploads or stores the audio.
+
+Chrome may install a local speech resource for the session language after you
+confirm the setup prompt. Interim captions are shown only in the page overlay.
+Final transcript text is kept locally as a pending session and becomes a note
+when you save it or when the captured tab closes. The audio stream and offscreen
+processing document are closed when you save, discard, or stop the session.
+
 ## Optional Google Drive sync
 
 Turn on the Google Drive sync toggle (off by default) and OWL-Note additionally
@@ -88,14 +105,25 @@ including the Limited Use requirements.
 - `bookmarks` — to store and read your notes.
 - `storage` and `unlimitedStorage` — for the local backup copy of your notes and
   the cached on-device semantic-search model.
-- `contextMenus` — for the "Save selection to OWL-Note" and "Capture full page
-  to OWL-Note" right-click items.
+- `contextMenus` — for the selection, page capture, LLM chat reconstruction, and
+  live transcription right-click items.
 - `activeTab` and `scripting` — only after you click one of those right-click
   items. Selection capture reads the selected fragment's formatting and converts
   it to Markdown. Full-page capture temporarily measures and scrolls that page,
   captures its visible tiles with Chrome's screenshot API, stitches them locally,
-  and restores the original scroll position. OWL-Note does not receive persistent
-  page access or access pages you did not explicitly capture from.
+  and restores the original scroll position. Native transcription uses temporary
+  page access to display its local caption controls. OWL-Note does not receive
+  persistent page access or access pages you did not explicitly act on.
+- `offscreen` — to keep the explicitly captured audio stream and Chrome's local
+  speech recognizer alive while a transcription session is running.
+- `tabCapture` — Chrome displays the broad permission warning **"Read and change
+  all your data on all websites"** for this API. OWL-Note uses it only to request
+  audio from the specific tab where you explicitly choose the live-transcription
+  right-click command. Chrome hands out capture access one tab at a time as part
+  of that temporary gesture and takes it back when the page navigates. It is
+  declared up front because Chrome computes the per-tab capture grant at the
+  moment you click; adding the permission afterwards cannot be applied to a
+  gesture that already happened.
 - `identity` — only used to sign in to your own Google account if you turn on
   Drive sync.
 

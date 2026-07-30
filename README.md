@@ -67,6 +67,12 @@ Right‑click → **Capture entire page to OWL‑Note**
 
 Scrolls and stitches the full page (including below the fold) into a single long image. Ideal for long articles, docs, receipts, dashboards, and complex layouts. All processing happens locally.
 
+**Live Transcription save to OWL‑Note**
+
+Right-click → **Live Transcription save to OWL‑Note**
+
+Turn a playing tab's speech into a Markdown note with a draggable live-caption overlay. Right-click **Live Transcription save to OWL‑Note** to start — one right-click, first session included. Chrome 139+ uses its native on-device speech engine; the first session in a language pauses for a one-click confirmation while Chrome downloads that language's local model, then resumes on its own. Audio is never uploaded or stored, and OWL‑Note never falls back to cloud transcription.
+
 **Smart Selection Capture**
 
 Right‑click → **Save selection to OWL‑Note**

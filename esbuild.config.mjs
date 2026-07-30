@@ -52,6 +52,12 @@ await build({
     app: 'src/app/app.js',
     'service-worker': 'src/background/service-worker.js',
     'embed-worker': 'src/workers/embed-worker.js',
+    // Transcription: Chrome's native on-device Web Speech engine runs in the
+    // offscreen document; the other entries provide its page overlay and
+    // one-time permission/language-resource setup.
+    offscreen: 'src/offscreen/offscreen.js',
+    overlay: 'src/content/overlay.js',
+    enable: 'src/permission/enable.js',
   },
   bundle: true,
   format: 'iife',
@@ -86,6 +92,8 @@ else throw new Error(`Missing ORT WASM loader: ${ortMjs}`);
 
 cpSync('src/app/app.html', 'dist/app.html');
 cpSync('src/app/app.css', 'dist/app.css');
+cpSync('src/offscreen/offscreen.html', 'dist/offscreen.html');
+cpSync('src/permission/enable.html', 'dist/enable.html');
 cpSync('manifest.json', 'dist/manifest.json');
 const theme = 'node_modules/highlight.js/styles/github.css';
 if (existsSync(theme)) cpSync(theme, 'dist/github.css');
