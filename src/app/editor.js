@@ -178,7 +178,12 @@ export function renderEditor(
     const del = document.createElement('button');
     del.className = 'delete danger';
     del.textContent = '🗑 Delete';
-    del.addEventListener('click', () => onDelete());
+    // onDelete is async and a click handler cannot await it, so guard the floating
+    // promise the way sidebar.js does for notebook deletion: a bookmark read that
+    // fails mid-delete should log, not surface as an unhandled rejection.
+    del.addEventListener('click', () => {
+      Promise.resolve(onDelete()).catch((err) => console.warn('delete note failed', err));
+    });
     bar.appendChild(del);
   }
 

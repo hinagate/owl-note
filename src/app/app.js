@@ -133,6 +133,11 @@ export async function toggleDriveSync(checked) {
       if (!ok) { toast('Drive sync not enabled.'); return false; } // user declined consent — leave sync off
       await enable();
       const promoted = await reconcileLocalToDrive(); // push notes stranded local-only while sync was off
+      // The mirror image of that catch-up: a permanent delete performed while sync was off
+      // checkpointed its Drive file ids but could not reach Drive to remove them. Flush that
+      // backlog now instead of leaving it until the next app launch. Floating and guarded —
+      // the ids stay checkpointed, so a failure here must not report the toggle as failed.
+      void retryPendingDriveCleanup().catch((e) => { console.warn('Drive cleanup retry failed:', e); });
       toast(promoted > 0
         ? `Google Drive sync on — synced ${promoted} local note${promoted === 1 ? '' : 's'} to Drive`
         : 'Google Drive sync on');
