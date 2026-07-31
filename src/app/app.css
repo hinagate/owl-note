@@ -783,3 +783,25 @@ body.resizing { user-select: none; cursor: col-resize; }
 .note-body-highlights mark.note-search-hit.active { background: rgba(255, 174, 0, 0.68); box-shadow: 0 0 0 1px rgba(190, 120, 0, 0.42); }
 /* Highlight (<mark>) in the rendered preview — softer than the browser default. */
 .preview mark { background: rgba(255, 213, 79, 0.45); color: inherit; padding: 0 1px; border-radius: 2px; }
+
+/* ── Phonetics reader (M10) ───────────────────────────────────────────────────
+   Readings sit above every word, so the preview needs extra leading or the rt of
+   one line collides with the descenders of the line above. The looser line-height
+   applies ONLY while phonetics is on — normal reading keeps its tighter rhythm. */
+.preview-content.phonetics { line-height: 2.55; }
+.preview-content.phonetics ruby { ruby-position: over; ruby-align: center; }
+.preview-content.phonetics rt {
+  font-size: 0.6em;
+  font-weight: 400;
+  line-height: 1.2;
+  color: var(--muted);
+  /* The IPA block is not in every UI font; name the faces that carry it so glyphs
+     never fall back to tofu on Windows. */
+  font-family: "Gentium Plus", "Charis SIL", "Doulos SIL", "Segoe UI", "Arial Unicode MS", sans-serif;
+  user-select: none; /* copying the preview should yield prose, not prose+IPA */
+}
+/* Headings already carry their own weight and spacing; a reading over them is
+   readable at a smaller relative size. */
+.preview-content.phonetics :is(h1, h2, h3, h4, h5, h6) rt { font-size: 0.42em; }
+.editor-bar .phonetics-toggle.on { background: rgba(45, 190, 96, 0.16); border-color: var(--accent); color: var(--accent-dark); font-weight: 600; }
+.editor-bar .phonetics-toggle[disabled] { opacity: 0.6; cursor: progress; }

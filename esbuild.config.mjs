@@ -1,5 +1,6 @@
 import { build } from 'esbuild';
 import { cpSync, mkdirSync, existsSync, rmSync, readFileSync } from 'node:fs';
+import { writeIpaTable } from './scripts/build-ipa-dict.mjs';
 
 // Clean dist first so stale files (e.g. dropped .ttf/.woff fonts) never linger.
 rmSync('dist', { recursive: true, force: true });
@@ -89,6 +90,11 @@ else throw new Error(`Missing ORT WASM artifact: ${ortWasm}`);
 const ortMjs = 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.mjs';
 if (existsSync(ortMjs)) cpSync(ortMjs, 'dist/ort-wasm-simd-threaded.asyncify.mjs');
 else throw new Error(`Missing ORT WASM loader: ${ortMjs}`);
+
+// Phonetics reader (M10): bake CMUdict into the compact IPA table the app fetches the
+// first time a reader turns annotations on. Generated, never committed — the source is a
+// devDependency, so nothing of it reaches the bundle.
+await writeIpaTable('dist/ipa-en.tsv.gz');
 
 cpSync('src/app/app.html', 'dist/app.html');
 cpSync('src/app/app.css', 'dist/app.css');

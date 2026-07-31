@@ -39,6 +39,7 @@ import { buildOwlNotePackage, parseOwlNotePackage, owlNoteFilename } from '../li
 import { buildNotePdf, notePdfFilename, verifiedPdfBytes, verifiedPdfFile } from '../lib/note-pdf.js';
 import * as driveClient from '../lib/drive/client.js';
 import { retryPendingDriveCleanup } from '../lib/drive-gc.js';
+import { ensureIpaTable, lookup as lookupIpa } from '../lib/phonetics.js';
 import SparkMD5 from 'spark-md5';
 import { showShareLinkDialog } from './share-link-dialog.js';
 import { showPdfShareDialog } from './pdf-share-dialog.js';
@@ -178,11 +179,66 @@ export async function reconcileLocalToDrive(save = saveNote) {
   return synced;
 }
 
+// ── Phonetic readings (M10) ─────────────────────────────────────────────────────
+// Off by default and per-reader, not per-note: whether you want pronunciation help is
+// a property of who is reading, and it must never alter the note's own text. The ~800 KB
+// dictionary is fetched on first enable, so a reader who never turns it on pays nothing.
+const PHONETICS_KEY = 'owl:phonetics';
+const IPA_TABLE_URL = () => chrome.runtime?.getURL?.('ipa-en.tsv.gz') || 'ipa-en.tsv.gz';
+
+async function loadPhoneticsPref() {
+  try { return !!(await chrome.storage.local.get(PHONETICS_KEY))[PHONETICS_KEY]; } catch { return false; }
+}
+
+// Resolves to true once the table is in memory. Re-render the editor around every call:
+// the button has to show its loading state while 800 KB arrives.
+async function ensurePhoneticsTable() {
+  if (ui.phoneticsTable) return true;
+  ui.phoneticsBusy = true;
+  renderCurrentEditor();
+  try {
+    ui.phoneticsTable = await ensureIpaTable(IPA_TABLE_URL());
+    return true;
+  } catch (error) {
+    console.warn('Phonetic dictionary failed to load:', error);
+    return false;
+  } finally {
+    ui.phoneticsBusy = false;
+  }
+}
+
+export async function togglePhonetics() {
+  if (ui.phoneticsBusy) return ui.phonetics; // a second click during the download is a no-op
+  const next = !ui.phonetics;
+  if (next && !(await ensurePhoneticsTable())) {
+    toast('Could not load the pronunciation dictionary', true);
+    renderCurrentEditor(); // clear the loading state; stay off
+    return ui.phonetics;
+  }
+  ui.phonetics = next;
+  try { await chrome.storage.local.set({ [PHONETICS_KEY]: next }); } catch { /* preference is best-effort */ }
+  renderCurrentEditor();
+  return next;
+}
+
+// Boot: a reader who left phonetics on last session gets the dictionary fetched in the
+// background. Floating and guarded, like the other boot catch-ups — a failed fetch turns
+// the feature off for this session rather than blocking first paint.
+function restorePhonetics(enabled) {
+  ui.phonetics = enabled;
+  if (!enabled) return;
+  ui.phoneticsBusy = true;
+  void ensureIpaTable(IPA_TABLE_URL())
+    .then((table) => { ui.phoneticsTable = table; })
+    .catch((error) => { console.warn('Phonetic dictionary failed to load:', error); ui.phonetics = false; })
+    .finally(() => { ui.phoneticsBusy = false; renderCurrentEditor(); });
+}
+
 const QUICK_CAPTURE_KEY = 'owl:quickCapture';
 let lastQuickCaptureToken = null;
 let quickCaptureQueue = Promise.resolve();
 
-const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1, indexReady: null, driveEnabled: false };
+const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1, indexReady: null, driveEnabled: false, phonetics: false, phoneticsTable: null, phoneticsBusy: false };
 
 export function resetUI() {
   ui.rootId = null;
@@ -205,6 +261,9 @@ export function resetUI() {
   quickCaptureQueue = Promise.resolve();
   ui.indexReady = null;
   ui.driveEnabled = false;
+  ui.phonetics = false;
+  ui.phoneticsTable = null;
+  ui.phoneticsBusy = false;
   // Drop the Ask drawer/controller so the next initUI rebinds to the fresh DOM
   // (test harnesses replace document.body between runs).
   if (askPanel && askPanel.destroy) askPanel.destroy();
@@ -706,6 +765,7 @@ export async function initUI(rootId) {
   // so the open-latest-note flow below has content to land on instead of a blank editor.
   // Self-gating (flag + emptiness) and fully guarded, so it never blocks or breaks boot.
   await maybeCreateWelcomeNote();
+  restorePhonetics(await loadPhoneticsPref()); // before the first render, so the toggle shows its true state
   renderCurrentEditor();
   await openByHash();
   // Register before reading the one-shot value so a capture arriving during boot
@@ -1222,6 +1282,14 @@ function renderCurrentEditor(opts = {}) {
       const title = await suggestTitle(body).catch(() => null);
       if (title === null) toast("On-device AI isn't available — enable it in the Ask panel", true);
       return title;
+    },
+    // `reading` is null until the table is in memory, which is what makes the editor
+    // render plain text during the download instead of half-annotating.
+    phonetics: {
+      enabled: ui.phonetics,
+      busy: ui.phoneticsBusy,
+      reading: ui.phoneticsTable ? (word) => lookupIpa(ui.phoneticsTable, word) : null,
+      onToggle: togglePhonetics,
     },
     shareActions: [
       { id: 'pdf', label: 'Share with PDF', run: shareNoteWithPdf },

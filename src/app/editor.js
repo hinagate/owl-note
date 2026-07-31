@@ -8,10 +8,11 @@ import { renderFormatBar, formatActions } from './format-bar.js';
 import { nextTableRow } from '../lib/format.js';
 import { tableCellTarget, alignTableAt } from '../lib/table.js';
 import { showDrawPanel } from './draw-panel.js';
+import { annotateRuby } from '../lib/ruby-annotate.js';
 
 export function renderEditor(
   container,
-  { title = '', body = '', attachments = [], created = null, updated = null, onChange = () => {}, onSave = () => {}, onDelete = null, focusTitle = false, measure = null, breadcrumb = [], onNavigate = () => {}, onSuggestTitle = null, shareActions = [], recoverAttachments = null, loadImageBytes = getBytes },
+  { title = '', body = '', attachments = [], created = null, updated = null, onChange = () => {}, onSave = () => {}, onDelete = null, focusTitle = false, measure = null, breadcrumb = [], onNavigate = () => {}, onSuggestTitle = null, shareActions = [], recoverAttachments = null, loadImageBytes = getBytes, phonetics = null },
 ) {
   container.innerHTML = '';
   // Images live in `atts` (as data: URIs); the body only carries short owl-img refs.
@@ -172,7 +173,24 @@ export function renderEditor(
   readingHint.textContent = '📖 Reading mode';
 
   // viewBtn (« / ») sits to the LEFT of Save — a quick "preview only" reading toggle.
+  // Phonetic readings (M10) — a reading aid for the PREVIEW, so it sits beside the
+  // other preview control rather than among the text-editing buttons. Absent unless
+  // the host wires it, which keeps every existing renderEditor caller untouched.
+  const phoneticsBtn = document.createElement('button');
+  if (phonetics) {
+    phoneticsBtn.className = `phonetics-toggle${phonetics.enabled ? ' on' : ''}`;
+    phoneticsBtn.textContent = 'ˈɑ';
+    phoneticsBtn.disabled = !!phonetics.busy;
+    phoneticsBtn.title = phonetics.busy
+      ? 'Loading the pronunciation dictionary…'
+      : `${phonetics.enabled ? 'Hide' : 'Show'} phonetic readings in the preview`;
+    phoneticsBtn.addEventListener('click', () => {
+      Promise.resolve(phonetics.onToggle?.()).catch((err) => console.warn('phonetics toggle failed', err));
+    });
+  }
+
   bar.append(viewBtn, save, shareWrap, codeBtn, imgBtn, imgInput, drawBtn, fileBtn, fileInput, listBtn, readingHint);
+  if (phonetics) bar.insertBefore(phoneticsBtn, readingHint);
 
   if (onDelete) {
     const del = document.createElement('button');
@@ -754,6 +772,10 @@ export function renderEditor(
     decorateCodeBlocks(content);
     wireFileLinks(content);
     decoratePreviewImages(content);
+    // Last of the decorators: it rewrites text nodes, so everything that looks for
+    // its own markup (code blocks, file links, images) must have run already.
+    content.classList.toggle('phonetics', !!(phonetics?.enabled && phonetics.reading));
+    if (phonetics?.enabled && phonetics.reading) annotateRuby(content, phonetics.reading);
     renderChips();
     updateNoteSearch();
     resolveDriveImages();
