@@ -1,6 +1,8 @@
 import { build } from 'esbuild';
 import { cpSync, mkdirSync, existsSync, rmSync, readFileSync } from 'node:fs';
 import { writeIpaTable } from './scripts/build-ipa-dict.mjs';
+import { writeKanaTable } from './scripts/build-kana-dict.mjs';
+import { writePinyinTable } from './scripts/build-pinyin-dict.mjs';
 
 // Clean dist first so stale files (e.g. dropped .ttf/.woff fonts) never linger.
 rmSync('dist', { recursive: true, force: true });
@@ -91,10 +93,13 @@ const ortMjs = 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncif
 if (existsSync(ortMjs)) cpSync(ortMjs, 'dist/ort-wasm-simd-threaded.asyncify.mjs');
 else throw new Error(`Missing ORT WASM loader: ${ortMjs}`);
 
-// Phonetics reader (M10): bake CMUdict into the compact IPA table the app fetches the
-// first time a reader turns annotations on. Generated, never committed — the source is a
-// devDependency, so nothing of it reaches the bundle.
+// Phonetics reader (M10): bake the reading tables the app fetches the first time a reader
+// turns annotations on — IPA for English, hiragana for Japanese kanji, pinyin for Chinese.
+// Generated, never committed — every source is a devDependency, so nothing of them reaches
+// the bundle. One file per language, because a note is fetched only in its own language.
 await writeIpaTable('dist/ipa-en.tsv.gz');
+await writeKanaTable('dist/kana-ja.tsv.gz');
+await writePinyinTable('dist/pinyin-zh.tsv.gz');
 
 cpSync('src/app/app.html', 'dist/app.html');
 cpSync('src/app/app.css', 'dist/app.css');

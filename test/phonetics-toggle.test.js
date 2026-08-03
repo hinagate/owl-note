@@ -3,19 +3,28 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { gzipSync } from 'node:zlib';
 import { installFakeChrome } from './helpers/fake-chrome.js';
-import { resetIpaTable } from '../src/lib/phonetics.js';
+import { resetTables } from '../src/lib/phonetics.js';
 
-const TABLE = "phonics\tˈfɑnɪks\nis\tɪz\nuseful\tˈjusfəl\n";
+// One stub table per language file the build produces. Values follow the baked format:
+// the kana value is the kanji core only, the pinyin value is one syllable per character.
+const TABLES = {
+  'ipa-en.tsv.gz': "phonics\tˈfɑnɪks\nis\tɪz\nuseful\tˈjusfəl\n",
+  'kana-ja.tsv.gz': '日本語\tにほんご\n日本\tにほん\n私\tわたし\n読む\tよ\n',
+  'pinyin-zh.tsv.gz': '中\tzhōng\n国\tguó\n银\tyín\n行\txíng\n银行\tyín háng\n',
+};
 
 let fetches;
 
 beforeEach(async () => {
   installFakeChrome();
-  resetIpaTable();
+  resetTables();
   fetches = [];
   globalThis.fetch = async (url) => {
-    fetches.push(String(url));
-    return new Response(gzipSync(Buffer.from(TABLE, 'utf8')));
+    const file = String(url).split('/').pop();
+    fetches.push(file);
+    const table = TABLES[file];
+    if (!table) return new Response('', { status: 404 });
+    return new Response(gzipSync(Buffer.from(table, 'utf8')));
   };
   document.body.innerHTML =
     '<div id="toolbar"></div><aside id="sidebar"></aside><section id="note-list"></section><main id="editor"></main><div id="toast" hidden></div>';
@@ -101,7 +110,7 @@ describe('phonetics reader', () => {
     // Fresh session: same stored preference, new module state.
     const app = await import('../src/app/app.js');
     app.resetUI();
-    resetIpaTable();
+    resetTables();
     await openNoteWithBody('Phonics is useful');
     await waitFor(() => rubies().length > 0);
     expect(toggleBtn().classList.contains('on')).toBe(true);
@@ -117,6 +126,52 @@ describe('phonetics reader', () => {
     expect(toggleBtn().classList.contains('on')).toBe(false);
     expect(rubies()).toHaveLength(0);
     expect((await chrome.storage.local.get('owl:phonetics'))['owl:phonetics']).toBeUndefined();
+  });
+
+  it('puts hiragana over kanji in a Japanese note', async () => {
+    await openNoteWithBody('私は日本語を読む');
+    toggleBtn().click();
+    await waitFor(() => rubies().length > 0);
+
+    expect(rubies().map((r) => r.querySelector('rt').textContent))
+      .toEqual(['わたし', 'にほんご', 'よ']);
+    // The okurigana stays outside the ruby, where furigana belongs.
+    expect(document.querySelector('#editor .preview-content').textContent).toContain('む');
+  });
+
+  it('puts pinyin over each hanzi in a Chinese note, with the phrase exception applied', async () => {
+    await openNoteWithBody('中国银行');
+    toggleBtn().click();
+    await waitFor(() => rubies().length > 0);
+
+    expect(rubies().map((r) => r.querySelector('rt').textContent))
+      .toEqual(['zhōng', 'guó', 'yín', 'háng']); // 行 reads háng here, not xíng
+  });
+
+  it('fetches only the table the note actually needs', async () => {
+    await openNoteWithBody('中国银行');
+    toggleBtn().click();
+    await waitFor(() => rubies().length > 0);
+
+    // The whole point of splitting the tables: a Chinese note never pulls the 1.7 MB kana
+    // table, and never pulls the 830 KB English one either.
+    expect(fetches).toEqual(['pinyin-zh.tsv.gz']);
+  });
+
+  it('pulls a second table when the reader opens a note in another language', async () => {
+    const app = await openNoteWithBody('Phonics is useful');
+    toggleBtn().click();
+    await waitFor(() => rubies().length > 0);
+    expect(fetches).toEqual(['ipa-en.tsv.gz']);
+
+    // Same session, different script: the kana table arrives without a second toggle.
+    document.querySelector('button.new').click();
+    const ta = document.querySelector('#editor textarea.note-body');
+    ta.value = '私は日本語を読む';
+    ta.dispatchEvent(new Event('input'));
+    await waitFor(() => fetches.includes('kana-ja.tsv.gz'));
+    await waitFor(() => rubies().some((r) => r.querySelector('rt').textContent === 'わたし'));
+    expect(app).toBeTruthy();
   });
 
   it('leaves code spans unannotated', async () => {

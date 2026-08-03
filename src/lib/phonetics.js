@@ -1,10 +1,11 @@
-// Runtime side of the phonetics reader: load the baked IPA table, and split text into
-// the word/gap runs a ruby annotator rebuilds from. Pure except for loadIpaTable, which
-// takes its fetch so tests never touch the network.
+// Runtime side of the phonetics reader: load a baked reading table, and split text into
+// the word/gap runs a ruby annotator rebuilds from. Pure except for loadTable, which takes
+// its fetch so tests never touch the network.
 //
-// The table is fetched, not bundled. It is ~800 KB gzipped and only ever needed by a
-// reader who has switched phonetics ON, so paying for it at import time would tax every
-// user for a default-off feature.
+// Tables are fetched, not bundled, and one per language: English IPA (~830 KB), Japanese
+// kana (~1.7 MB) and Mandarin pinyin (~170 KB). Bundling them would tax every user with
+// 2.7 MB of parsing for a default-off feature, so each is pulled only when a note is
+// actually written in that language.
 
 const APOSTROPHES = /[’‘＇]/g;
 
@@ -13,8 +14,8 @@ const APOSTROPHES = /[’‘＇]/g;
 // correct lookup into two misses.
 const WORD = /\p{L}+(?:['-]\p{L}+)*/gu;
 
-/** @param {string} text TSV as produced by scripts/build-ipa-dict.mjs */
-export function parseIpaTable(text) {
+/** @param {string} text TSV as produced by the scripts/build-*-dict.mjs bakers */
+export function parseTable(text) {
   const table = new Map();
   for (const line of String(text || '').split('\n')) {
     if (!line) continue;
@@ -55,32 +56,35 @@ export function lookup(table, raw) {
 }
 
 /**
- * Fetch and inflate the baked table. Chrome inflates gzip natively, so shipping the
- * compressed file costs nothing at runtime and saves 1.8 MB in the package.
+ * Fetch and inflate a baked table. Chrome inflates gzip natively, so shipping the
+ * compressed files costs nothing at runtime and saves ~9 MB in the package.
  */
-export async function loadIpaTable(url, fetchImpl = globalThis.fetch) {
+export async function loadTable(url, fetchImpl = globalThis.fetch) {
   const res = await fetchImpl(url);
-  if (!res.ok) throw new Error(`IPA table unavailable (${res.status})`);
+  if (!res.ok) throw new Error(`reading table unavailable (${res.status})`);
   const inflated = res.body.pipeThrough(new DecompressionStream('gzip'));
-  return parseIpaTable(await new Response(inflated).text());
+  return parseTable(await new Response(inflated).text());
 }
 
-let pending = null;
+// Keyed by URL so the three language tables load independently — a reader who opens a
+// Japanese note should not also pay for the English one.
+const pending = new Map();
 
 /**
- * Load once per page. The failure is NOT cached: a reader who toggles phonetics on while
- * offline must be able to succeed on the next try rather than be stuck until reload.
+ * Load each table once per page. The failure is NOT cached: a reader who toggles phonetics
+ * on while offline must be able to succeed on the next try rather than be stuck until
+ * reload.
  */
-export function ensureIpaTable(url, fetchImpl) {
-  if (!pending) {
-    pending = loadIpaTable(url, fetchImpl).catch((error) => {
-      pending = null;
+export function ensureTable(url, fetchImpl) {
+  if (!pending.has(url)) {
+    pending.set(url, loadTable(url, fetchImpl).catch((error) => {
+      pending.delete(url);
       throw error;
-    });
+    }));
   }
-  return pending;
+  return pending.get(url);
 }
 
-export function resetIpaTable() {
-  pending = null;
+export function resetTables() {
+  pending.clear();
 }

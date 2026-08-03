@@ -39,7 +39,8 @@ import { buildOwlNotePackage, parseOwlNotePackage, owlNoteFilename } from '../li
 import { buildNotePdf, notePdfFilename, verifiedPdfBytes, verifiedPdfFile } from '../lib/note-pdf.js';
 import * as driveClient from '../lib/drive/client.js';
 import { retryPendingDriveCleanup } from '../lib/drive-gc.js';
-import { ensureIpaTable, lookup as lookupIpa } from '../lib/phonetics.js';
+import { ensureTable } from '../lib/phonetics.js';
+import { makeSegmenter, detectHanScript, hasHan, hasLatin } from '../lib/segment.js';
 import SparkMD5 from 'spark-md5';
 import { showShareLinkDialog } from './share-link-dialog.js';
 import { showPdfShareDialog } from './pdf-share-dialog.js';
@@ -181,36 +182,105 @@ export async function reconcileLocalToDrive(save = saveNote) {
 
 // ── Phonetic readings (M10) ─────────────────────────────────────────────────────
 // Off by default and per-reader, not per-note: whether you want pronunciation help is
-// a property of who is reading, and it must never alter the note's own text. The ~800 KB
-// dictionary is fetched on first enable, so a reader who never turns it on pays nothing.
+// a property of who is reading, and it must never alter the note's own text.
+//
+// One table per language — IPA over English, hiragana over kanji, pinyin over hanzi — and
+// each is fetched only when a note actually uses that script. That is what keeps the cost
+// honest: a reader of English notes never pays to parse the 1.7 MB kana table, and a
+// reader of Chinese notes pays 170 KB rather than all 2.7 MB.
 const PHONETICS_KEY = 'owl:phonetics';
-const IPA_TABLE_URL = () => chrome.runtime?.getURL?.('ipa-en.tsv.gz') || 'ipa-en.tsv.gz';
+const TABLE_FILES = { en: 'ipa-en.tsv.gz', ja: 'kana-ja.tsv.gz', zh: 'pinyin-zh.tsv.gz' };
+const tableUrl = (lang) => chrome.runtime?.getURL?.(TABLE_FILES[lang]) || TABLE_FILES[lang];
+
+const currentBody = () => ui.current?.body || '';
 
 async function loadPhoneticsPref() {
   try { return !!(await chrome.storage.local.get(PHONETICS_KEY))[PHONETICS_KEY]; } catch { return false; }
 }
 
-// Resolves to true once the table is in memory. Re-render the editor around every call:
-// the button has to show its loading state while 800 KB arrives.
-async function ensurePhoneticsTable() {
-  if (ui.phoneticsTable) return true;
+/** Which tables this note needs, from the scripts its text actually uses. */
+function neededTables(text) {
+  const need = [];
+  if (hasLatin(text)) need.push('en');
+  if (!hasHan(text)) return need;
+
+  const script = detectHanScript(text);
+  need.push(script);
+  // A note with kana in it is Japanese overall, but can still hold a Chinese paragraph —
+  // a language-learning note comparing the two is the obvious case. The pinyin table is
+  // 167 KB against the kana table's 1.7 MB, so carrying it as insurance is cheap enough to
+  // be worth doing unconditionally. The reverse does not hold: a note with no kana anywhere
+  // has no Japanese in it, so it never pays for the big table.
+  if (script === 'ja') need.push('zh');
+  return need;
+}
+
+/**
+ * Fetch whatever the given text needs and is not already in memory. Resolves true when
+ * every needed table is loaded. Tables already in flight are not re-requested, which is
+ * what stops the render → load → render cycle from looping.
+ */
+async function loadPhoneticsTables(text) {
+  const missing = neededTables(text)
+    .filter((lang) => !ui.phoneticsTables[lang] && !ui.phoneticsLoading.has(lang));
+  if (!missing.length) return neededTables(text).every((lang) => ui.phoneticsTables[lang]);
+
+  for (const lang of missing) ui.phoneticsLoading.add(lang);
   ui.phoneticsBusy = true;
-  renderCurrentEditor();
+  renderCurrentEditor(); // the button has to show its loading state while the table arrives
   try {
-    ui.phoneticsTable = await ensureIpaTable(IPA_TABLE_URL());
+    await Promise.all(missing.map(async (lang) => {
+      try {
+        ui.phoneticsTables[lang] = await ensureTable(tableUrl(lang));
+      } finally {
+        ui.phoneticsLoading.delete(lang);
+      }
+    }));
     return true;
   } catch (error) {
     console.warn('Phonetic dictionary failed to load:', error);
     return false;
   } finally {
-    ui.phoneticsBusy = false;
+    ui.phoneticsBusy = ui.phoneticsLoading.size > 0;
   }
+}
+
+/**
+ * Fire-and-forget version for note switches: opening a Japanese note while phonetics is
+ * already on has to pull the kana table without blocking the render.
+ *
+ * Deliberately does NOT re-render synchronously — it is called from inside
+ * renderCurrentEditor, and re-entering that would tear down the editor mid-build. Marking
+ * `busy` is enough; the render already in progress picks it up, and the async tail
+ * re-renders once the table lands.
+ */
+function syncPhoneticsTables(text) {
+  if (!ui.phonetics) return;
+  const missing = neededTables(text)
+    .filter((lang) => !ui.phoneticsTables[lang] && !ui.phoneticsLoading.has(lang));
+  if (!missing.length) return;
+
+  for (const lang of missing) ui.phoneticsLoading.add(lang);
+  ui.phoneticsBusy = true;
+  void Promise.all(missing.map((lang) => ensureTable(tableUrl(lang))
+    .then((table) => { ui.phoneticsTables[lang] = table; })
+    .catch((error) => { console.warn(`Phonetic table for ${lang} failed to load:`, error); })
+    .finally(() => { ui.phoneticsLoading.delete(lang); })))
+    .finally(() => {
+      ui.phoneticsBusy = ui.phoneticsLoading.size > 0;
+      // Rebuilding the editor mid-keystroke would take the caret with it, so when the
+      // reader is typing, repaint only the preview; the toolbar catches up on the next
+      // full render. Typing is exactly when this fires — the script of a note usually
+      // only becomes clear once there is text in it.
+      if (document.activeElement?.classList?.contains('note-body')) ui.editor?.refresh?.();
+      else renderCurrentEditor();
+    });
 }
 
 export async function togglePhonetics() {
   if (ui.phoneticsBusy) return ui.phonetics; // a second click during the download is a no-op
   const next = !ui.phonetics;
-  if (next && !(await ensurePhoneticsTable())) {
+  if (next && !(await loadPhoneticsTables(currentBody()))) {
     toast('Could not load the pronunciation dictionary', true);
     renderCurrentEditor(); // clear the loading state; stay off
     return ui.phonetics;
@@ -221,24 +291,26 @@ export async function togglePhonetics() {
   return next;
 }
 
-// Boot: a reader who left phonetics on last session gets the dictionary fetched in the
-// background. Floating and guarded, like the other boot catch-ups — a failed fetch turns
-// the feature off for this session rather than blocking first paint.
+// Boot: a reader who left phonetics on last session gets the tables fetched in the
+// background once a note is open. Floating and guarded, like the other boot catch-ups — a
+// failed fetch leaves the note plain rather than blocking first paint.
 function restorePhonetics(enabled) {
   ui.phonetics = enabled;
-  if (!enabled) return;
-  ui.phoneticsBusy = true;
-  void ensureIpaTable(IPA_TABLE_URL())
-    .then((table) => { ui.phoneticsTable = table; })
-    .catch((error) => { console.warn('Phonetic dictionary failed to load:', error); ui.phonetics = false; })
-    .finally(() => { ui.phoneticsBusy = false; renderCurrentEditor(); });
+}
+
+/** null while nothing is loaded, which renders the note plain instead of half-annotated. */
+function phoneticsSegmenter(text) {
+  if (!ui.phonetics) return null;
+  const { en, ja, zh } = ui.phoneticsTables;
+  if (!en && !ja && !zh) return null;
+  return makeSegmenter({ ipa: en, kana: ja, pinyin: zh, script: detectHanScript(text) });
 }
 
 const QUICK_CAPTURE_KEY = 'owl:quickCapture';
 let lastQuickCaptureToken = null;
 let quickCaptureQueue = Promise.resolve();
 
-const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1, indexReady: null, driveEnabled: false, phonetics: false, phoneticsTable: null, phoneticsBusy: false };
+const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1, indexReady: null, driveEnabled: false, phonetics: false, phoneticsTables: { en: null, ja: null, zh: null }, phoneticsLoading: new Set(), phoneticsBusy: false };
 
 export function resetUI() {
   ui.rootId = null;
@@ -262,7 +334,8 @@ export function resetUI() {
   ui.indexReady = null;
   ui.driveEnabled = false;
   ui.phonetics = false;
-  ui.phoneticsTable = null;
+  ui.phoneticsTables = { en: null, ja: null, zh: null };
+  ui.phoneticsLoading = new Set();
   ui.phoneticsBusy = false;
   // Drop the Ask drawer/controller so the next initUI rebinds to the fresh DOM
   // (test harnesses replace document.body between runs).
@@ -1208,6 +1281,9 @@ function renderCurrentEditor(opts = {}) {
     ? (ui.activeLocalFolderId ?? ui.activeFolder)
     : (ui.current?.folderId ?? ui.activeFolder);
   if (ui.editor && ui.editor.destroy) ui.editor.destroy(); // cancel the prior editor's pending auto-save
+  // A note switch can bring a script whose table isn't in memory yet — opening a Japanese
+  // note with phonetics already on pulls the kana table here.
+  syncPhoneticsTables(ui.current ? ui.current.body : '');
   ui.editor = renderEditor(document.getElementById('editor'), {
     title: ui.current ? ui.current.title : '',
     body: ui.current ? ui.current.body : '',
@@ -1220,6 +1296,9 @@ function renderCurrentEditor(opts = {}) {
     measure: measureNoteSize,
     onChange: ({ title, body, attachments }) => {
       if (ui.current) { ui.current.title = title; ui.current.body = body; ui.current.attachments = attachments; }
+      // A note is usually empty when it opens, so typing is where its script first shows.
+      // No-op once the tables it needs are in memory.
+      syncPhoneticsTables(body);
       // Keep the Ask drawer's context chip label in sync with TITLE edits too —
       // manual typing or the ✨ suggest-title fill (user-reported: chip kept the old
       // title). Cheap: rebuilds one small pill row; per-note dismissal survives
@@ -1283,12 +1362,12 @@ function renderCurrentEditor(opts = {}) {
       if (title === null) toast("On-device AI isn't available — enable it in the Ask panel", true);
       return title;
     },
-    // `reading` is null until the table is in memory, which is what makes the editor
-    // render plain text during the download instead of half-annotating.
+    // `segment` is null until a table is in memory, which is what makes the editor render
+    // plain text during the download instead of half-annotating.
     phonetics: {
       enabled: ui.phonetics,
       busy: ui.phoneticsBusy,
-      reading: ui.phoneticsTable ? (word) => lookupIpa(ui.phoneticsTable, word) : null,
+      segmenter: () => phoneticsSegmenter(ui.current ? ui.current.body : ''),
       onToggle: togglePhonetics,
     },
     shareActions: [

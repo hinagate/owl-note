@@ -150,3 +150,18 @@ Works with Chrome, Edge, and other Chromium‑based browsers. See Releases or th
 **GPL‑3.0**
 
 Source code: **[https://github.com/hinagate/owl-note](https://github.com/hinagate/owl-note)**
+
+#### Pronunciation data
+
+The phonetic reading tables are generated at build time from third‑party dictionaries and
+shipped as data files. They are not part of the program's source code, and each keeps its
+own licence:
+
+| Table | Source | Licence |
+| --- | --- | --- |
+| `ipa-en.tsv.gz` — English IPA | [CMU Pronouncing Dictionary](https://github.com/cmusphinx/cmudict) (Carnegie Mellon University) | ISC |
+| `kana-ja.tsv.gz` — Japanese kanji readings | [yomi-dict](https://github.com/marmooo/yomi-dict) | Apache‑2.0 |
+| `pinyin-zh.tsv.gz` — Mandarin pinyin | [CC‑CEDICT](https://www.mdbg.net/chinese/dictionary?page=cc-cedict), via [cedict-json](https://github.com/matt-tingen/cedict-json) | CC BY‑SA 4.0 |
+
+`pinyin-zh.tsv.gz` is a derivative of CC‑CEDICT and is therefore itself distributed under
+[CC BY‑SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).

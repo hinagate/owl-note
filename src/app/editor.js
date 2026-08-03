@@ -183,7 +183,7 @@ export function renderEditor(
     phoneticsBtn.disabled = !!phonetics.busy;
     phoneticsBtn.title = phonetics.busy
       ? 'Loading the pronunciation dictionary…'
-      : `${phonetics.enabled ? 'Hide' : 'Show'} phonetic readings in the preview`;
+      : `${phonetics.enabled ? 'Hide' : 'Show'} readings in the preview — IPA on English, hiragana on kanji, pinyin on hanzi`;
     phoneticsBtn.addEventListener('click', () => {
       Promise.resolve(phonetics.onToggle?.()).catch((err) => console.warn('phonetics toggle failed', err));
     });
@@ -774,8 +774,13 @@ export function renderEditor(
     decoratePreviewImages(content);
     // Last of the decorators: it rewrites text nodes, so everything that looks for
     // its own markup (code blocks, file links, images) must have run already.
-    content.classList.toggle('phonetics', !!(phonetics?.enabled && phonetics.reading));
-    if (phonetics?.enabled && phonetics.reading) annotateRuby(content, phonetics.reading);
+    //
+    // Asked for per refresh rather than captured once: the reading tables load in the
+    // background, so a segmenter that was null when this editor was built can be ready by
+    // the time the reader's next keystroke repaints the preview.
+    const segment = phonetics?.enabled ? phonetics.segmenter?.() : null;
+    content.classList.toggle('phonetics', !!segment);
+    if (segment) annotateRuby(content, segment);
     renderChips();
     updateNoteSearch();
     resolveDriveImages();
@@ -1062,6 +1067,8 @@ export function renderEditor(
     getTitle: () => titleInput.value,
     getAttachments: () => atts,
     replaceBody, // [Task E10] undo-preserving whole-body replace (Format's Apply path)
+    refresh, // repaint the preview in place — lets a late-arriving reading table show up
+             // without rebuilding the editor and taking the caret with it
     setShareActionVisible: (id, visible) => { const item = shareItems.get(id); if (item) item.hidden = !visible; },
     flush: () => doSave({ auto: true }),
     destroy: () => {

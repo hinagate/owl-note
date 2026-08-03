@@ -3,10 +3,12 @@
 // AFTER DOMPurify. It builds nodes with DOM APIs and never assigns innerHTML, so it
 // needs no change to the sanitizer's allowlist and can introduce no injection.
 //
-// Language-agnostic on purpose: phase 1 supplies English IPA and phase 2 will supply
-// kana for kanji. Only the `reading` function differs — this walker does not change.
-
-import { tokenize } from './phonetics.js';
+// Language-agnostic on purpose: the caller supplies a segmenter and this walker never
+// learns which language it is annotating. English IPA, Japanese furigana and Mandarin
+// pinyin all arrive here as the same {text, reading} runs.
+//
+// Segmenting is the caller's job rather than this file's because CJK word boundaries come
+// from the dictionary, not from the text — see makeSegmenter in ./segment.js.
 
 // Regions where an overhead reading is wrong, not merely unhelpful:
 //   code/pre/kbd/samp — source text, where a pronunciation is meaningless
@@ -16,11 +18,13 @@ const SKIP = 'code, pre, kbd, samp, .katex, ruby';
 
 /**
  * @param {Element} root subtree to annotate, mutated in place
- * @param {(word: string) => string|null} reading returns the annotation, or null to skip
- * @returns {number} how many words were annotated
+ * @param {(text: string) => { text: string, reading: string|null, lang?: string }[]} segment
+ *   splits text into runs, each carrying its reading or null and optionally the BCP-47
+ *   language of that reading; the runs must rebuild the text exactly
+ * @returns {number} how many runs were annotated
  */
-export function annotateRuby(root, reading) {
-  if (!root || typeof reading !== 'function') return 0;
+export function annotateRuby(root, segment) {
+  if (!root || typeof segment !== 'function') return 0;
 
   // Collect first, mutate second: replacing nodes while the TreeWalker is live
   // invalidates its position and silently skips siblings.
@@ -37,26 +41,28 @@ export function annotateRuby(root, reading) {
 
   let annotated = 0;
   for (const node of targets) {
-    const runs = tokenize(node.nodeValue);
-    const readings = runs.map((run) => (run.isWord ? reading(run.text) : null));
+    const runs = segment(node.nodeValue);
     // Leaving an untouched node alone keeps the DOM (and the user's selection) stable
     // across the many re-renders that typing causes.
-    if (!readings.some(Boolean)) continue;
+    if (!runs.some((run) => run.reading)) continue;
 
     const fragment = document.createDocumentFragment();
-    runs.forEach((run, i) => {
-      if (!readings[i]) {
+    for (const run of runs) {
+      if (!run.reading) {
         fragment.append(run.text);
-        return;
+        continue;
       }
       const ruby = document.createElement('ruby');
+      // Tagging the language lets the stylesheet size furigana and pinyin differently from
+      // IPA, and tells the font matcher and screen readers which script they are in.
+      if (run.lang) ruby.lang = run.lang;
       ruby.append(run.text);
       const rt = document.createElement('rt');
-      rt.textContent = readings[i];
+      rt.textContent = run.reading;
       ruby.append(rt);
       fragment.append(ruby);
       annotated += 1;
-    });
+    }
     node.parentNode?.replaceChild(fragment, node);
   }
   return annotated;

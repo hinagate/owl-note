@@ -1,23 +1,27 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { gzipSync } from 'node:zlib';
 import {
-  parseIpaTable, normalizeWord, tokenize, lookup, loadIpaTable, ensureIpaTable, resetIpaTable,
+  parseTable, normalizeWord, tokenize, lookup, loadTable, ensureTable, resetTables,
 } from '../src/lib/phonetics.js';
 
 const TABLE = "phonics\tˈfɑnɪks\nis\tɪz\nuseful\tˈjusfəl\ndon't\tdoʊnt\nwell-known\tˈwɛlˈnoʊn\n";
 
-beforeEach(() => resetIpaTable());
+beforeEach(() => resetTables());
 
-describe('parseIpaTable', () => {
-  it('reads word/IPA pairs and ignores blank or malformed lines', () => {
-    const table = parseIpaTable(`${TABLE}\n\nbroken-line-without-tab\n`);
+describe('parseTable', () => {
+  it('reads word/reading pairs and ignores blank or malformed lines', () => {
+    const table = parseTable(`${TABLE}\n\nbroken-line-without-tab\n`);
     expect(table.get('phonics')).toBe('ˈfɑnɪks');
     expect(table.size).toBe(5);
   });
 
   it('survives empty input', () => {
-    expect(parseIpaTable('').size).toBe(0);
-    expect(parseIpaTable(null).size).toBe(0);
+    expect(parseTable('').size).toBe(0);
+    expect(parseTable(null).size).toBe(0);
+  });
+
+  it('keeps a reading that itself contains spaces, as the pinyin table needs', () => {
+    expect(parseTable('银行\tyín háng\n').get('银行')).toBe('yín háng');
   });
 });
 
@@ -53,7 +57,7 @@ describe('tokenize', () => {
 });
 
 describe('lookup', () => {
-  const table = parseIpaTable(TABLE);
+  const table = parseTable(TABLE);
 
   it('is case-insensitive', () => {
     expect(lookup(table, 'Phonics')).toBe('ˈfɑnɪks');
@@ -74,28 +78,39 @@ describe('lookup', () => {
   });
 });
 
-describe('loadIpaTable', () => {
+describe('loadTable', () => {
   const gzipped = () => new Response(gzipSync(Buffer.from(TABLE, 'utf8')));
 
   it('inflates the gzipped table it fetches', async () => {
-    const table = await loadIpaTable('/ipa-en.tsv.gz', async () => gzipped());
+    const table = await loadTable('/ipa-en.tsv.gz', async () => gzipped());
     expect(table.get('useful')).toBe('ˈjusfəl');
   });
 
   it('reports an unavailable table rather than resolving empty', async () => {
-    await expect(loadIpaTable('/x', async () => new Response('', { status: 404 })))
-      .rejects.toThrow('IPA table unavailable (404)');
+    await expect(loadTable('/x', async () => new Response('', { status: 404 })))
+      .rejects.toThrow('reading table unavailable (404)');
   });
 
   it('loads once and reuses the result', async () => {
     let calls = 0;
     const fetchImpl = async () => { calls += 1; return gzipped(); };
     const [a, b] = await Promise.all([
-      ensureIpaTable('/ipa-en.tsv.gz', fetchImpl),
-      ensureIpaTable('/ipa-en.tsv.gz', fetchImpl),
+      ensureTable('/ipa-en.tsv.gz', fetchImpl),
+      ensureTable('/ipa-en.tsv.gz', fetchImpl),
     ]);
     expect(calls).toBe(1);
     expect(a).toBe(b);
+  });
+
+  it('caches per URL, so each language table loads independently', async () => {
+    const urls = [];
+    const fetchImpl = async (url) => { urls.push(url); return gzipped(); };
+    await Promise.all([
+      ensureTable('/ipa-en.tsv.gz', fetchImpl),
+      ensureTable('/kana-ja.tsv.gz', fetchImpl),
+      ensureTable('/ipa-en.tsv.gz', fetchImpl), // already cached
+    ]);
+    expect(urls).toEqual(['/ipa-en.tsv.gz', '/kana-ja.tsv.gz']);
   });
 
   it('does not cache a failure — toggling on again while offline must be able to work', async () => {
@@ -105,8 +120,16 @@ describe('loadIpaTable', () => {
       if (calls === 1) throw new Error('offline');
       return gzipped();
     };
-    await expect(ensureIpaTable('/ipa-en.tsv.gz', fetchImpl)).rejects.toThrow('offline');
-    expect((await ensureIpaTable('/ipa-en.tsv.gz', fetchImpl)).get('is')).toBe('ɪz');
+    await expect(ensureTable('/ipa-en.tsv.gz', fetchImpl)).rejects.toThrow('offline');
+    expect((await ensureTable('/ipa-en.tsv.gz', fetchImpl)).get('is')).toBe('ɪz');
     expect(calls).toBe(2);
+  });
+
+  it('a failed table does not poison a different one', async () => {
+    const fetchImpl = async (url) => (url.includes('kana')
+      ? new Response('', { status: 404 })
+      : gzipped());
+    await expect(ensureTable('/kana-ja.tsv.gz', fetchImpl)).rejects.toThrow();
+    expect((await ensureTable('/ipa-en.tsv.gz', fetchImpl)).get('is')).toBe('ɪz');
   });
 });

@@ -795,11 +795,19 @@ body.resizing { user-select: none; cursor: col-resize; }
   font-weight: 400;
   line-height: 1.2;
   color: var(--muted);
-  /* The IPA block is not in every UI font; name the faces that carry it so glyphs
-     never fall back to tofu on Windows. */
-  font-family: "Gentium Plus", "Charis SIL", "Doulos SIL", "Segoe UI", "Arial Unicode MS", sans-serif;
-  user-select: none; /* copying the preview should yield prose, not prose+IPA */
+  /* Three scripts share this one rt: IPA, hiragana and tone-marked pinyin. The IPA block
+     and the CJK faces live in different fonts, so list both — IPA resolves from the SIL
+     faces, kana falls through to the CJK ones, and pinyin's diacritics are covered by
+     either. Without the CJK entries, kana lands on tofu on a default Windows install. */
+  font-family: "Gentium Plus", "Charis SIL", "Doulos SIL", "Segoe UI",
+    "Yu Gothic UI", "Meiryo", "Microsoft JhengHei", "Microsoft YaHei",
+    "Noto Sans CJK JP", "Hiragino Sans", "Arial Unicode MS", sans-serif;
+  user-select: none; /* copying the preview should yield prose, not prose+readings */
 }
+/* Furigana and pinyin sit over dense CJK glyphs rather than between Latin words, so the
+   same 0.6em reads oversized and pushes the characters apart. */
+.preview-content.phonetics ruby:lang(ja) rt,
+.preview-content.phonetics ruby:lang(zh) rt { font-size: 0.5em; }
 /* Headings already carry their own weight and spacing; a reading over them is
    readable at a smaller relative size. */
 .preview-content.phonetics :is(h1, h2, h3, h4, h5, h6) rt { font-size: 0.42em; }
