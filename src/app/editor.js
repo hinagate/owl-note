@@ -181,9 +181,12 @@ export function renderEditor(
     phoneticsBtn.className = `phonetics-toggle${phonetics.enabled ? ' on' : ''}`;
     phoneticsBtn.textContent = 'ˈɑ';
     phoneticsBtn.disabled = !!phonetics.busy;
+    // Names the three languages AND says "only": the button gives no feedback on a note
+    // written in anything else, so the tooltip is the one place a reader can find out that
+    // silence is the feature working as intended rather than failing.
     phoneticsBtn.title = phonetics.busy
       ? 'Loading the pronunciation dictionary…'
-      : `${phonetics.enabled ? 'Hide' : 'Show'} readings in the preview — IPA on English, hiragana on kanji, pinyin on hanzi`;
+      : `${phonetics.enabled ? 'Hide' : 'Show'} readings in the preview — English (IPA), Japanese (hiragana) and Chinese (pinyin) only`;
     phoneticsBtn.addEventListener('click', () => {
       Promise.resolve(phonetics.onToggle?.()).catch((err) => console.warn('phonetics toggle failed', err));
     });

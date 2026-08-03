@@ -128,6 +128,21 @@ describe('phonetics reader', () => {
     expect((await chrome.storage.local.get('owl:phonetics'))['owl:phonetics']).toBeUndefined();
   });
 
+  it('says which three languages it supports, and that they are the only ones', async () => {
+    await openNoteWithBody('Phonics is useful');
+
+    // A note in an unsupported language just renders plain, with nothing to explain why,
+    // so the tooltip has to carry the scope.
+    const hint = toggleBtn().title;
+    for (const language of ['English', 'Japanese', 'Chinese']) expect(hint).toContain(language);
+    expect(hint).toContain('only');
+
+    toggleBtn().click();
+    await waitFor(() => rubies().length > 0);
+    expect(toggleBtn().title).toContain('Hide'); // still scoped once it is on
+    expect(toggleBtn().title).toContain('only');
+  });
+
   it('puts hiragana over kanji in a Japanese note', async () => {
     await openNoteWithBody('私は日本語を読む');
     toggleBtn().click();
