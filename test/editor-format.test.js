@@ -141,6 +141,33 @@ describe('Enter inside a table', () => {
   });
 });
 
+describe('Alt+Enter inside a table cell', () => {
+  const TABLE = '| Symbol | Mouth |\n| --- | --- |\n| ɔi | boy |';
+
+  function pressAltEnter(ta, start, end = start) {
+    ta.setSelectionRange(start, end);
+    const ev = new KeyboardEvent('keydown', { key: 'Enter', altKey: true, cancelable: true, bubbles: true });
+    return !ta.dispatchEvent(ev);
+  }
+
+  it('inserts <br> in the source and renders another line in the same cell', () => {
+    render({ body: TABLE });
+    const ta = document.querySelector('.note-body');
+    const caret = TABLE.indexOf('boy') + 3;
+    expect(pressAltEnter(ta, caret)).toBe(true);
+    expect(ta.value).toContain('| ɔi | boy<br> |');
+    expect(document.querySelector('.preview-body td:last-child').innerHTML).toBe('boy<br>');
+    expect(ta.selectionStart).toBe(caret + 4);
+  });
+
+  it('does not consume Alt+Enter outside a table', () => {
+    render({ body: 'plain prose' });
+    const ta = document.querySelector('.note-body');
+    expect(pressAltEnter(ta, 5)).toBe(false);
+    expect(ta.value).toBe('plain prose');
+  });
+});
+
 describe('Tab between table cells', () => {
   const TABLE = '| one | two |\n| --- | --- |\n| aa | bb |';
 

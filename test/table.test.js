@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   splitTableRow, tableRow, isSeparatorRow, isTableRowLine,
-  tableCellSpans, tableCellTarget, normalizeTables, alignTableAt,
+  tableCellSpans, tableCellTarget, tableCellLineBreak, isTableCellSelection, normalizeTables, alignTableAt,
 } from '../src/lib/table.js';
 import { renderMarkdown } from '../src/lib/markdown.js';
 
@@ -266,5 +266,36 @@ describe('tableCellTarget (Tab between cells)', () => {
     expect(move.selStart).toBe(move.selEnd); // empty cell -> caret, nothing selected
     expect(body[move.selStart]).toBe('|');   // sitting inside the cell, before its closing pipe
     expect(body.slice(0, move.selStart)).toBe('| a |  ');
+  });
+});
+
+describe('tableCellLineBreak (Alt+Enter inside a cell)', () => {
+  it('inserts a Markdown-compatible visual line break at the caret', () => {
+    const caret = TABLE.indexOf('bb') + 2;
+    const edit = tableCellLineBreak(TABLE, caret, caret);
+    const out = TABLE.slice(0, edit.replaceStart) + edit.insert + TABLE.slice(edit.replaceEnd);
+    expect(out).toContain('| aa | bb<br> |');
+    expect(edit.selStart).toBe(caret + 4);
+  });
+
+  it('replaces a selection contained within one cell', () => {
+    const start = TABLE.indexOf('bb');
+    const edit = tableCellLineBreak(TABLE, start, start + 2);
+    const out = TABLE.slice(0, edit.replaceStart) + edit.insert + TABLE.slice(edit.replaceEnd);
+    expect(out).toContain('| aa | <br> |');
+  });
+
+  it('leaves prose, delimiter rows, and cross-cell selections alone', () => {
+    expect(tableCellLineBreak('plain prose', 3, 3)).toBeNull();
+    const delimiter = TABLE.indexOf('---');
+    expect(tableCellLineBreak(TABLE, delimiter, delimiter)).toBeNull();
+    expect(tableCellLineBreak(TABLE, TABLE.indexOf('aa'), TABLE.indexOf('bb') + 2)).toBeNull();
+  });
+
+  it('recognizes the padding in an empty cell as part of that cell', () => {
+    const body = '| a | b |\n| --- | --- |\n| value |  |';
+    const caret = body.lastIndexOf('|'); // immediately before the closing pipe
+    expect(isTableCellSelection(body, caret, caret)).toBe(true);
+    expect(tableCellLineBreak(body, caret, caret)?.insert).toBe('<br>');
   });
 });

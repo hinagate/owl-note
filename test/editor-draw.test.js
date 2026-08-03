@@ -48,7 +48,11 @@ describe('editor drawing button', () => {
 
     try {
       const onSave = vi.fn();
-      renderEditor(document.getElementById('root'), { body: 'notes', onSave });
+      const table = '| Symbol | Mouth |\n| --- | --- |\n| aʊ |  |';
+      renderEditor(document.getElementById('root'), { body: table, onSave });
+      const textarea = document.querySelector('.note-body');
+      const cellCaret = table.lastIndexOf('|');
+      textarea.setSelectionRange(cellCaret, cellCaret);
 
       click(document.querySelector('.insert-drawing'));
       const canvas = document.querySelector('.draw-canvas');
@@ -63,6 +67,8 @@ describe('editor drawing button', () => {
       await vi.waitFor(() => expect(onSave).toHaveBeenCalled());
       const saved = onSave.mock.calls.at(-1)[0];
       expect(saved.body).toMatch(/!\[drawing-\d{8}-\d{6}\.png\]\(owl-img:[A-Za-z0-9]+\)/);
+      expect(saved.body.split('\n')).toHaveLength(3); // the drawing stays in its pipe row
+      expect(saved.body).toMatch(/\| aʊ \| !\[drawing-\d{8}-\d{6}\.png\]\(owl-img:[A-Za-z0-9]+\) \|/);
       expect(saved.attachments).toHaveLength(1);
       expect(saved.attachments[0].dataUri).toBe(png);
     } finally {

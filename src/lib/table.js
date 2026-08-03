@@ -42,7 +42,7 @@ export function isSeparatorRow(line) {
 
 // Content bounds of each cell within a row line, as [start, end) offsets with
 // the padding spaces trimmed off. Used to move the caret cell to cell.
-export function tableCellSpans(line) {
+function rawTableCellSpans(line) {
   const raw = [];
   let cellStart = null;
   for (let i = 0; i < line.length; i++) {
@@ -51,7 +51,11 @@ export function tableCellSpans(line) {
     if (cellStart !== null) raw.push([cellStart, i]);
     cellStart = i + 1;
   }
-  return raw.map(([a, b]) => {
+  return raw;
+}
+
+export function tableCellSpans(line) {
+  return rawTableCellSpans(line).map(([a, b]) => {
     while (a < b && line[a] === ' ') a += 1;
     while (b > a && line[b - 1] === ' ') b -= 1;
     return [a, b];
@@ -119,6 +123,41 @@ export function tableCellTarget(body, start, end, forward = true) {
     if (prevSpans.length) return select(prevStart, prevSpans[prevSpans.length - 1]);
   }
   return null; // first cell of the first row — let Tab move focus out
+}
+
+// True when the caret or selection is contained by one content cell in a valid
+// GFM table. Raw spans include the cell's padding, which matters for an empty
+// cell: its caret otherwise has no trimmed content span to land in.
+export function isTableCellSelection(body, start, end) {
+  const s = Math.min(start, end);
+  const e = Math.max(start, end);
+  const found = tableBlockAt(body, s);
+  if (!found || e > found.lineEnd) return false;
+
+  const lines = body.slice(found.blockStart, found.blockEnd).split('\n');
+  if (lines.length < 2 || !isSeparatorRow(lines[1])) return false;
+
+  const line = body.slice(found.lineStart, found.lineEnd);
+  if (isSeparatorRow(line)) return false;
+  const offsetStart = s - found.lineStart;
+  const offsetEnd = e - found.lineStart;
+  return rawTableCellSpans(line).some(([a, b]) =>
+    offsetStart >= a && offsetStart <= b && offsetEnd >= a && offsetEnd <= b);
+}
+
+// Alt+Enter inside one table cell: insert the HTML line-break token that GFM
+// accepts inside a cell. A physical newline would terminate the pipe row and
+// break the table, so the editor must represent the visual newline as <br>.
+// Returns null outside a valid table, on its delimiter row, or when a selection
+// crosses a cell boundary; those keypresses retain the textarea's normal action.
+export function tableCellLineBreak(body, start, end) {
+  const s = Math.min(start, end);
+  const e = Math.max(start, end);
+  if (!isTableCellSelection(body, s, e)) return null;
+
+  const insert = '<br>';
+  const caret = s + insert.length;
+  return { replaceStart: s, replaceEnd: e, insert, selStart: caret, selEnd: caret };
 }
 
 // The run of consecutive table rows around `pos`, or null when the caret is not

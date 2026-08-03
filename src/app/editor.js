@@ -6,7 +6,7 @@ import { getBytes } from '../lib/attachment-store.js';
 import * as panes from './panes.js';
 import { renderFormatBar, formatActions } from './format-bar.js';
 import { nextTableRow } from '../lib/format.js';
-import { tableCellTarget, alignTableAt } from '../lib/table.js';
+import { tableCellTarget, tableCellLineBreak, isTableCellSelection, alignTableAt } from '../lib/table.js';
 import { showDrawPanel } from './draw-panel.js';
 import { annotateRuby } from '../lib/ruby-annotate.js';
 
@@ -844,11 +844,23 @@ export function renderEditor(
 
   refresh();
   ta.addEventListener('input', fireChange);
-  // Ctrl/Cmd+B / I / U / K — the four universal shortcuts; everything else is
-  // button-only. Shift/Alt combos are left for the browser/OS.
+  // Ctrl/Cmd+B / I / U / K are the universal formatting shortcuts. Alt+Enter
+  // has one table-specific meaning below; other modifier combos stay untouched.
   const shortcutActions = new Map(fmtActions.filter((a) => a.shortcut).map((a) => [a.shortcut, a]));
   ta.addEventListener('keydown', (e) => {
     if (e.isComposing || e.keyCode === 229) return; // IME composition — never format mid-composition (ask-panel.js convention)
+    // Excel-style Alt+Enter creates a visual newline inside the current cell.
+    // It inserts <br>, not a physical newline, because GFM table rows cannot
+    // span source lines. Outside a valid cell the browser keeps normal control.
+    if (e.key === 'Enter' && e.altKey && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      const edit = tableCellLineBreak(ta.value, ta.selectionStart, ta.selectionEnd);
+      if (edit) {
+        e.preventDefault();
+        insertText(edit.insert, edit.replaceStart, edit.replaceEnd);
+        ta.setSelectionRange(edit.selStart, edit.selEnd);
+      }
+      return;
+    }
     // Enter inside a table opens the next row. nextTableRow returns null
     // everywhere else, so a plain Enter keeps its normal behaviour — including
     // Shift+Enter, which stays a hard line break inside a cell's paragraph.
@@ -905,7 +917,15 @@ export function renderEditor(
     ta.selectionStart = ta.selectionEnd = before.length + open.length + selected.length;
   });
 
-  // Shared image insertion pipeline used by the 🖼 button, paste, and drop.
+  // Attachments are inline tokens inside table cells, but block-style everywhere
+  // else. A physical newline inside a pipe row would split and break the table.
+  function attachmentSnippet(ref, start, end) {
+    if (isTableCellSelection(ta.value, start, end)) return ref;
+    const before = ta.value.slice(0, start);
+    return (before && !before.endsWith('\n') ? '\n' : '') + ref + '\n';
+  }
+
+  // Shared image insertion pipeline used by Draw, the 🖼 button, paste, and drop.
   async function insertImageFile(file) {
     const label = imgBtn.textContent;
     imgBtn.disabled = true;
@@ -917,8 +937,7 @@ export function renderEditor(
       atts = merged;
       const start = ta.selectionStart ?? ta.value.length;
       const end = ta.selectionEnd ?? start;
-      const before = ta.value.slice(0, start);
-      const snippet = (before && !before.endsWith('\n') ? '\n' : '') + ref + '\n';
+      const snippet = attachmentSnippet(ref, start, end);
       insertText(snippet, start, end); // keeps undo alive
     } finally {
       imgBtn.disabled = false;
@@ -943,9 +962,9 @@ export function renderEditor(
     const { ref, attachments: merged } = attachFile({ name: file.name || 'file', mime: file.type, dataUri }, atts);
     atts = merged;
     const start = ta.selectionStart ?? ta.value.length;
-    const before = ta.value.slice(0, start);
-    const snippet = (before && !before.endsWith('\n') ? '\n' : '') + ref + '\n';
-    insertText(snippet, start, ta.selectionEnd ?? start); // keeps undo alive
+    const end = ta.selectionEnd ?? start;
+    const snippet = attachmentSnippet(ref, start, end);
+    insertText(snippet, start, end); // keeps undo alive
   }
 
   function filesFromTransfer(transfer) {
