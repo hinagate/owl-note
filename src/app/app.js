@@ -41,6 +41,7 @@ import * as driveClient from '../lib/drive/client.js';
 import { retryPendingDriveCleanup } from '../lib/drive-gc.js';
 import { ensureTable } from '../lib/phonetics.js';
 import { makeSegmenter, detectHanScript, hasHan, hasLatin } from '../lib/segment.js';
+import { normalizeZoom, DEFAULT_ZOOM } from './preview-zoom.js';
 import SparkMD5 from 'spark-md5';
 import { showShareLinkDialog } from './share-link-dialog.js';
 import { showPdfShareDialog } from './pdf-share-dialog.js';
@@ -306,11 +307,32 @@ function phoneticsSegmenter(text) {
   return makeSegmenter({ ipa: en, kana: ja, pinyin: zh, script: detectHanScript(text) });
 }
 
+// ── Preview zoom ────────────────────────────────────────────────────────────────
+// A reader-level preference like phonetics, not a property of any note: someone who needs
+// 150% needs it on every note. Persisted so it survives closing the extension.
+const PREVIEW_ZOOM_KEY = 'owl:previewZoom';
+
+async function loadPreviewZoom() {
+  try {
+    return normalizeZoom((await chrome.storage.local.get(PREVIEW_ZOOM_KEY))[PREVIEW_ZOOM_KEY]);
+  } catch {
+    return DEFAULT_ZOOM;
+  }
+}
+
+// No re-render: the zoom bar has already applied the change to the live preview, and
+// rebuilding the editor here would throw away the reader's scroll position mid-click.
+function savePreviewZoom(zoom) {
+  ui.previewZoom = zoom;
+  chrome.storage.local.set({ [PREVIEW_ZOOM_KEY]: zoom })
+    .catch(() => { /* preference is best-effort, same as phonetics */ });
+}
+
 const QUICK_CAPTURE_KEY = 'owl:quickCapture';
 let lastQuickCaptureToken = null;
 let quickCaptureQueue = Promise.resolve();
 
-const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1, indexReady: null, driveEnabled: false, phonetics: false, phoneticsTables: { en: null, ja: null, zh: null }, phoneticsLoading: new Set(), phoneticsBusy: false };
+const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1, indexReady: null, driveEnabled: false, phonetics: false, phoneticsTables: { en: null, ja: null, zh: null }, phoneticsLoading: new Set(), phoneticsBusy: false, previewZoom: DEFAULT_ZOOM };
 
 export function resetUI() {
   ui.rootId = null;
@@ -337,6 +359,7 @@ export function resetUI() {
   ui.phoneticsTables = { en: null, ja: null, zh: null };
   ui.phoneticsLoading = new Set();
   ui.phoneticsBusy = false;
+  ui.previewZoom = DEFAULT_ZOOM;
   // Drop the Ask drawer/controller so the next initUI rebinds to the fresh DOM
   // (test harnesses replace document.body between runs).
   if (askPanel && askPanel.destroy) askPanel.destroy();
@@ -839,6 +862,7 @@ export async function initUI(rootId) {
   // Self-gating (flag + emptiness) and fully guarded, so it never blocks or breaks boot.
   await maybeCreateWelcomeNote();
   restorePhonetics(await loadPhoneticsPref()); // before the first render, so the toggle shows its true state
+  ui.previewZoom = await loadPreviewZoom(); // ditto: the bar must open showing the saved level
   renderCurrentEditor();
   await openByHash();
   // Register before reading the one-shot value so a capture arriving during boot
@@ -1370,6 +1394,7 @@ function renderCurrentEditor(opts = {}) {
       segmenter: () => phoneticsSegmenter(ui.current ? ui.current.body : ''),
       onToggle: togglePhonetics,
     },
+    previewZoom: { value: ui.previewZoom, onChange: savePreviewZoom },
     shareActions: [
       { id: 'pdf', label: 'Share with PDF', run: shareNoteWithPdf },
       { id: 'drive', label: 'Create Drive share link', hidden: !ui.driveEnabled, run: createDriveShareLink },

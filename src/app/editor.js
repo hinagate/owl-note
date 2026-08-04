@@ -9,10 +9,11 @@ import { nextTableRow } from '../lib/format.js';
 import { tableCellTarget, tableCellLineBreak, isTableCellSelection, alignTableAt } from '../lib/table.js';
 import { showDrawPanel } from './draw-panel.js';
 import { annotateRuby } from '../lib/ruby-annotate.js';
+import { createZoomBar } from './preview-zoom.js';
 
 export function renderEditor(
   container,
-  { title = '', body = '', attachments = [], created = null, updated = null, onChange = () => {}, onSave = () => {}, onDelete = null, focusTitle = false, measure = null, breadcrumb = [], onNavigate = () => {}, onSuggestTitle = null, shareActions = [], recoverAttachments = null, loadImageBytes = getBytes, phonetics = null },
+  { title = '', body = '', attachments = [], created = null, updated = null, onChange = () => {}, onSave = () => {}, onDelete = null, focusTitle = false, measure = null, breadcrumb = [], onNavigate = () => {}, onSuggestTitle = null, shareActions = [], recoverAttachments = null, loadImageBytes = getBytes, phonetics = null, previewZoom = null },
 ) {
   container.innerHTML = '';
   // Images live in `atts` (as data: URIs); the body only carries short owl-img refs.
@@ -398,6 +399,15 @@ export function renderEditor(
   const content = document.createElement('div');
   content.className = 'preview-content';
   preview.appendChild(content);
+
+  // Zoom bar, pinned to the foot of the preview. Appended after the content so it is the
+  // last flex item, which is what puts it at the bottom when a note is shorter than the
+  // pane. The level is the READER's preference, so it is handed back to the host to persist
+  // rather than kept here — this editor is rebuilt on every note switch.
+  const zoomBar = createZoomBar(preview, content, {
+    value: previewZoom?.value,
+    onChange: (zoom) => previewZoom?.onChange?.(zoom),
+  });
 
   // Preview image lightbox. Event delegation on `content` survives every Markdown
   // refresh (including the later Drive-image replacement).
@@ -1077,6 +1087,7 @@ export function renderEditor(
     destroy: () => {
       destroyed = true;
       clearTimeout(saveTimer);
+      zoomBar.destroy();
       titleRO?.disconnect();
       document.removeEventListener('keydown', onLightboxKeydown);
       window.removeEventListener('resize', onLightboxResize);
