@@ -251,6 +251,148 @@ describe('auto-save (debounced)', () => {
   });
 });
 
+// An auto-save that rewrites an UNCHANGED note is how a second device silently
+// reverts an edit made on the first: blur and the tab-hide flush both fire with no
+// edit at all, and would persist whatever (possibly stale) copy this tab holds.
+describe('auto-save only when something actually changed', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const typeBody = (text) => {
+    const ta = document.querySelector('#editor textarea.note-body');
+    ta.value = text;
+    ta.dispatchEvent(new Event('input'));
+    return ta;
+  };
+
+  it('does not save on blur when nothing was edited', async () => {
+    const onSave = vi.fn().mockResolvedValue({});
+    render({ onSave });
+    document.querySelector('#editor textarea.note-body').dispatchEvent(new Event('blur'));
+    document.querySelector('#editor .note-title').dispatchEvent(new Event('blur'));
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('does not save on the tab-hide flush when nothing was edited', async () => {
+    const onSave = vi.fn().mockResolvedValue({});
+    const api = render({ onSave });
+    await api.flush();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('does not save an edit that was typed and then undone back to the original', async () => {
+    const onSave = vi.fn().mockResolvedValue({});
+    render({ onSave }); // body: 'hello'
+    typeBody('hello there');
+    typeBody('hello'); // back to what was loaded
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('saves once after a real edit, then goes quiet again on later flushes', async () => {
+    const onSave = vi.fn().mockResolvedValue({});
+    const api = render({ onSave });
+    typeBody('hello world');
+    await vi.advanceTimersByTimeAsync(2600);
+    expect(onSave).toHaveBeenCalledTimes(1);
+    await api.flush(); // tab switch after the save — nothing new to write
+    document.querySelector('#editor textarea.note-body').dispatchEvent(new Event('blur'));
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it('still auto-saves an edit made while the previous save was in flight', async () => {
+    let release;
+    const onSave = vi.fn(() => new Promise((r) => { release = () => r({}); }));
+    render({ onSave });
+    typeBody('first');
+    await vi.advanceTimersByTimeAsync(2600); // save #1 starts and parks
+    typeBody('first + second'); // edited DURING the save — must not be swallowed
+    release();
+    await vi.advanceTimersByTimeAsync(2600);
+    expect(onSave).toHaveBeenCalledTimes(2);
+    expect(onSave.mock.calls[1][0].body).toBe('first + second');
+  });
+
+  it('retries after a failed save (the content is still unsaved)', async () => {
+    const onSave = vi.fn().mockRejectedValueOnce(new Error('boom')).mockResolvedValue({});
+    const api = render({ onSave });
+    typeBody('important');
+    await vi.advanceTimersByTimeAsync(2600);
+    expect(document.querySelector('.save-status').textContent).toBe('Save failed');
+    await api.flush(); // dirty state survived the failure, so this retries
+    expect(onSave).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports unsaved edits through isDirty()', async () => {
+    const onSave = vi.fn().mockResolvedValue({});
+    const api = render({ onSave });
+    expect(api.isDirty()).toBe(false);
+    typeBody('changed');
+    expect(api.isDirty()).toBe(true);
+    await vi.advanceTimersByTimeAsync(2600);
+    expect(api.isDirty()).toBe(false);
+  });
+
+  it('treats a title-only edit as dirty', async () => {
+    const onSave = vi.fn().mockResolvedValue({});
+    const api = render({ onSave });
+    const title = document.querySelector('#editor .note-title');
+    title.value = 'New title';
+    title.dispatchEvent(new Event('input'));
+    expect(api.isDirty()).toBe(true);
+    await vi.advanceTimersByTimeAsync(2600);
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][0].title).toBe('New title');
+  });
+});
+
+describe('remote-change notice', () => {
+  it('stays hidden until the app announces a change from another device', () => {
+    const api = render();
+    const barEl = document.querySelector('#editor .remote-change-bar');
+    expect(barEl.hidden).toBe(true);
+    api.notifyRemoteChange({ onReload: () => {} });
+    expect(barEl.hidden).toBe(false);
+  });
+
+  it('Reload runs the callback and closes the notice', () => {
+    const onReload = vi.fn();
+    const api = render();
+    api.notifyRemoteChange({ onReload });
+    document.querySelector('.remote-change-bar .remote-reload').click();
+    expect(onReload).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('.remote-change-bar').hidden).toBe(true);
+  });
+
+  it('Keep mine closes the notice without reloading', () => {
+    const onReload = vi.fn();
+    const api = render();
+    api.notifyRemoteChange({ onReload });
+    document.querySelector('.remote-change-bar .remote-dismiss').click();
+    expect(onReload).not.toHaveBeenCalled();
+    expect(document.querySelector('.remote-change-bar').hidden).toBe(true);
+  });
+
+  it('closes itself once this version is saved', async () => {
+    const api = render({ onSave: vi.fn().mockResolvedValue({}) });
+    api.notifyRemoteChange({ onReload: () => {} });
+    document.querySelector('#editor button.save').click();
+    await new Promise((r) => setTimeout(r));
+    expect(document.querySelector('.remote-change-bar').hidden).toBe(true);
+  });
+
+  it('never touches the in-progress edit', () => {
+    const api = render();
+    const ta = document.querySelector('#editor textarea.note-body');
+    ta.value = 'my unsaved work';
+    ta.dispatchEvent(new Event('input'));
+    api.notifyRemoteChange({ onReload: () => {} });
+    expect(ta.value).toBe('my unsaved work');
+  });
+});
+
 describe('notebook breadcrumb', () => {
   it('renders the folder path as clickable crumbs with separators', () => {
     render({ breadcrumb: [{ id: 'r', title: '📓 Notes' }, { id: 'w', title: 'Work' }, { id: 's', title: 'Research' }] });

@@ -1037,6 +1037,48 @@ async function trashAction(kind, handle) {
   await refreshPanes();
 }
 
+// Load the open note's current stored content into the editor, replacing the copy
+// it was opened with. Only called once the two are known to differ.
+function adoptRemoteNote(fresh) {
+  ui.current = fresh;
+  renderCurrentEditor();
+}
+
+// Refreshing the note list re-reads every bookmark, but the OPEN note lives in
+// ui.current — a separate copy taken when it was opened. Without this, an edit
+// synced in from another device updates the card while the editor keeps showing
+// (and, on its next save, writes back) the pre-sync text.
+async function reconcileOpenNote() {
+  if (!ui.current || !ui.activeBookmarkId || !ui.editor) return; // draft or device-local note: nothing remote to follow
+  let fresh;
+  try {
+    const payload = await bm.payloadAt(ui.activeBookmarkId);
+    if (!payload) return; // note gone or no longer a note — the list refresh already handled it
+    const stored = await decode(payload);
+    if (stored.id !== ui.current.id) return; // a different note occupies this bookmark now
+    // payloadAt gives the note only; keep the device-local fields the editor needs
+    // (breadcrumb folder, creation fallback). An edit never moves a note — a move
+    // fires onMoved and is handled by the list refresh.
+    fresh = await resolveNote({ ...stored, bookmarkId: ui.activeBookmarkId, folderId: ui.current.folderId, dateAdded: ui.current.dateAdded });
+  } catch {
+    return; // unreadable payload / Drive hiccup — leave the editor untouched
+  }
+  // A Drive-backed note degrades to its short preview when Drive is unreachable
+  // (resolveNote's fallback). Adopting that would truncate the editor — wait for a
+  // cycle where the real body loads instead.
+  if (fresh._driveBody && fresh.hash && contentHash(fresh.body) !== fresh.hash) return;
+  if (fresh.body === ui.current.body && fresh.title === ui.current.title) return; // already in sync
+  // This app's own save fires onChanged too. If the editor already shows exactly what
+  // is stored, just re-base ui.current — re-rendering would take the caret with it.
+  if (fresh.body === ui.editor.getBody() && fresh.title === ui.editor.getTitle()) { ui.current = fresh; return; }
+  // Unsaved edits here: never discard them. Offer the choice instead.
+  if (ui.editor.isDirty?.()) {
+    ui.editor.notifyRemoteChange?.({ onReload: () => adoptRemoteNote(fresh) });
+    return;
+  }
+  adoptRemoteNote(fresh);
+}
+
 // Keep the note list live: re-render when bookmarks change outside the app's own
 // actions — the "Save selection" context menu, another tab, or sync from another
 // device. Coalesces bursts without a timer (if a refresh is running, run one more).
@@ -1055,6 +1097,10 @@ async function liveRefreshNoteList() {
       // a queued NEWER refresh still drains on the next pass, which is what actually
       // recovers the list. Same discipline as the index rebuild below.
       await refreshNoteList().catch((e) => console.warn('live refresh failed', e));
+      // The list is only half the picture — pull the OPEN note forward too, so a
+      // cross-device edit can't sit invisible behind a card that already updated.
+      // .catch for the same reason as the refresh above: best-effort, never fatal.
+      await reconcileOpenNote().catch((e) => console.warn('open-note reconcile failed', e));
       // Rebuild the ask index on the SAME coalesced cycle as the note-list refresh:
       // a burst of external chrome.bookmarks events (Drive sync, another tab) collapses
       // into ONE rebuild per cycle via the do/while queue below — never one per event.

@@ -571,6 +571,13 @@ development machine and fabricating them would defeat the purpose. See
 - **Preview-only devices.** A note too large for bookmark sync is indexed in full
   only where it was written (or anywhere with Drive sync on); other devices index
   its synced preview, so deep questions about it can legitimately miss there.
+- **Simultaneous edits still resolve last-writer-wins.** A note edited on another
+  device is pulled into the open editor on the next bookmark event, and an
+  auto-save never rewrites a note this tab did not actually change — so the common
+  "the other device reverted my edit" path is closed. But if BOTH devices hold
+  unsaved edits, the second save still overwrites the first; the editor only warns
+  (the "changed on another device" bar) and offers to reload. Merging, or writing
+  the loser out as a conflicted copy, would need a version check inside `saveNote`.
 - **The context ceiling.** Evidence genuinely spread across many notes can lose
   to the packing limit. Better ranking helps; a bigger window is the browsers'
   move, not ours.

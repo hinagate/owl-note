@@ -206,6 +206,14 @@ body.resizing { user-select: none; cursor: col-resize; }
 .editor-bar .share-menu { left: 0; min-width: 255px; z-index: 20; }
 .editor-bar .share-menu .menu-item { border: 0; border-radius: 0; padding: 9px 12px; }
 .editor-bar .share-menu .menu-item:disabled { opacity: 0.55; cursor: wait; }
+/* "Changed on another device" notice — only shown when this editor has unsaved edits,
+   so the user chooses instead of one version silently winning. */
+.remote-change-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 14px; font-size: 13px;
+  color: #7a4a06; background: #fff8e6; border-bottom: 1px solid #f0dfae; }
+.remote-change-bar[hidden] { display: none; }
+.remote-change-bar .remote-change-text { margin-right: auto; }
+.remote-change-bar button { border: 1px solid #e3cf95; background: #fff; color: inherit; padding: 4px 10px; border-radius: 8px; font-size: 12px; cursor: pointer; }
+.remote-change-bar button:hover { background: #fdf3dc; }
 .note-title {
   display: block; width: 100%; flex: 0 0 auto; border: 0; border-bottom: 1px solid var(--border); outline: 0;
   padding: 16px 20px 8px; font-size: 24px; font-weight: 700; color: var(--text); background: #fff;

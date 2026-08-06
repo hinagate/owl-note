@@ -76,6 +76,29 @@ export function renderEditor(
   document.addEventListener('click', closeShareMenu);
   shareWrap.append(shareBtn, shareMenu);
 
+  // Shown when the open note changed on ANOTHER device while this editor holds
+  // unsaved edits. Purely additive — it never touches the fields, so the in-progress
+  // edit survives while the user decides which version to keep.
+  const remoteBar = document.createElement('div');
+  remoteBar.className = 'remote-change-bar';
+  remoteBar.hidden = true;
+  remoteBar.setAttribute('role', 'status');
+  const remoteText = document.createElement('span');
+  remoteText.className = 'remote-change-text';
+  remoteText.textContent = 'This note changed on another device. Saving will overwrite that version.';
+  const remoteReload = document.createElement('button');
+  remoteReload.type = 'button';
+  remoteReload.className = 'remote-reload';
+  remoteReload.textContent = 'Reload';
+  const remoteDismiss = document.createElement('button');
+  remoteDismiss.type = 'button';
+  remoteDismiss.className = 'remote-dismiss';
+  remoteDismiss.textContent = 'Keep mine';
+  let onRemoteReload = null;
+  remoteReload.addEventListener('click', () => { remoteBar.hidden = true; onRemoteReload?.(); });
+  remoteDismiss.addEventListener('click', () => { remoteBar.hidden = true; });
+  remoteBar.append(remoteText, remoteReload, remoteDismiss);
+
   const statusRow = document.createElement('div');
   statusRow.className = 'editor-status-row';
   const updatedLabel = document.createElement('span');
@@ -581,7 +604,7 @@ export function renderEditor(
     crumbs.appendChild(cb);
   });
 
-  container.append(crumbs, bar, split, lightbox);
+  container.append(crumbs, bar, remoteBar, split, lightbox);
   growTitle(); // size the title to its content now that it's in the DOM
   // Recompute the auto-grown title height when the edit pane's width changes (pane drag /
   // window resize): a title that now wraps to more lines would otherwise clip (UI audit).
@@ -831,6 +854,14 @@ export function renderEditor(
   let saveTimer = null;
   let saving = false;
   let resaveQueued = false;
+  // What this editor last loaded or successfully saved. An auto-save that matches it
+  // is a no-op: blur and the tab-hide flush both fire with NO edit at all, and on a
+  // second device that rewrites the note from whatever this tab holds — silently
+  // reverting an edit made elsewhere. Attachment ids are included because a pasted
+  // owl-img/owl-file reference can recover an attachment without changing the body.
+  const snapshot = () => JSON.stringify([titleInput.value, ta.value, atts.map((a) => a && a.id)]);
+  let savedSnapshot = snapshot();
+  const isDirty = () => snapshot() !== savedSnapshot;
   const setStatus = (s) => {
     status.textContent = s;
     statusRow.hidden = updatedLabel.hidden && !s;
@@ -845,11 +876,17 @@ export function renderEditor(
     const title = titleInput.value;
     const body = ta.value;
     if (auto && !title.trim() && !body.trim()) { setStatus(''); return; } // never auto-create an empty note
+    // Nothing actually changed — don't rewrite the note (see savedSnapshot above).
+    // A manual Save stays unconditional: the click is explicit intent and still reports "Saved".
+    if (auto && !isDirty()) { setStatus(''); return; }
     if (saving) { resaveQueued = true; return; } // a save is already in flight — coalesce edits made during it
+    const snap = snapshot(); // the exact content this save persists; edits made during it stay dirty
     saving = true;
     setStatus('Saving…');
     try {
       const saved = await onSave({ title, body, attachments: pruneAttachments(ta.value, atts) }, { auto });
+      savedSnapshot = snap;
+      remoteBar.hidden = true; // this version won; the remote-change notice no longer applies
       if (saved) setTimestamps({ created: saved.created, updated: saved.updated });
       setStatus('Saved ✓');
     } catch {
@@ -1083,6 +1120,10 @@ export function renderEditor(
     refresh, // repaint the preview in place — lets a late-arriving reading table show up
              // without rebuilding the editor and taking the caret with it
     setShareActionVisible: (id, visible) => { const item = shareItems.get(id); if (item) item.hidden = !visible; },
+    isDirty, // unsaved edits? — lets the app reload a synced-in change without discarding work
+    // Announce that the open note changed elsewhere. Only used when the editor is
+    // dirty; a clean editor is reloaded outright instead of asking.
+    notifyRemoteChange: ({ onReload = null } = {}) => { onRemoteReload = onReload; remoteBar.hidden = false; },
     flush: () => doSave({ auto: true }),
     destroy: () => {
       destroyed = true;
