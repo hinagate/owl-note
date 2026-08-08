@@ -8,9 +8,10 @@ import {
   createSketch, beginStroke, extendStroke, straightenStroke, endStroke,
   beginShape, updateShape, endShape,
   addImage, imageAt, itemAt, addText, setText, styleText, beginTransform, applyTransform, endTransform, removeItem,
-  undo, redo, clear, isEmpty, canUndo, canRedo, replay, visibleItems, boxOf,
+  undo, redo, clear, isEmpty, canUndo, canRedo, replay, visibleItems, paintableItems, boxOf,
   isShapeTool, isFreehandTool, isFillable,
   centerOf, rotatePoint, toLocalPoint, setAngle, normalizeAngle, textFontCss, TEXT_FONTS,
+  bringToFront, sendToBack,
   PEN, HIGHLIGHT, ERASE, SELECT, LINE, ARROW, RECT, ROUND_RECT, ELLIPSE,
   TRIANGLE, RIGHT_TRIANGLE, DIAMOND, PENTAGON, HEXAGON, STAR, TEXT,
   LINE_HEIGHT,
@@ -66,6 +67,12 @@ export const MAX_WIDTH = 40;
 // Paint's size list, which is what people actually reach for.
 export const TEXT_SIZES = [8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 64, 72, 96];
 const DEFAULT_TEXT_SIZE = 24;
+// A compact preset row for the text controls. Ten covers the useful range in one
+// line — an OS colour dialog is the wrong weight for a toolbar choice.
+export const TEXT_PRESETS = [
+  '#000000', '#7f7f7f', '#ffffff', '#ed1c24', '#ff7f27',
+  '#fff200', '#22b14c', '#00a2e8', '#3f48cc', '#a349a4',
+];
 // A fresh text box is given room to type into before it is auto-sized on commit.
 const TEXT_BOX_WIDTH = 260;
 // An eraser you can barely see is useless — it tracks the pen's width but wider.
@@ -213,7 +220,10 @@ export function showDrawPanel({
   let textSize = DEFAULT_TEXT_SIZE;
   // Sticky text styling: the next box you draw keeps the last one's look, the
   // way Paint's text toolbar does.
-  const textStyle = { font: 'sans', bold: false, italic: false, underline: false };
+  const textStyle = { font: 'sans', bold: false, italic: false, underline: false, background: null };
+  let textColor = '#000000';
+  // Remembered while the fill is off, so toggling back on restores the choice.
+  let textBgColor = '#ffffff';
   let fill = false;
   let selected = null;      // index into state.items
   let drag = null;          // { mode: 'draw' | 'move' | 'resize', ... }
@@ -246,6 +256,9 @@ export function showDrawPanel({
     tools.appendChild(el);
     return el;
   });
+  // The highlighter's icon draws the swipe it would lay down, so it has to carry
+  // the current ink the way the size dot does.
+  const highlightButton = toolButtons.find((el) => el.dataset.tool === HIGHLIGHT);
 
   const colorDivider = document.createElement('span');
   colorDivider.className = 'draw-divider';
@@ -327,6 +340,10 @@ export function showDrawPanel({
     sizeDot.style.width = `${preview}px`;
     sizeDot.style.height = `${preview}px`;
     sizeDot.style.background = tool === ERASE ? '#9aa0a6' : color;
+    highlightButton?.style.setProperty('--tool-ink', color);
+    const hasSelection = selected != null && !!state.items[selected];
+    frontButton.disabled = !hasSelection;
+    backButton.disabled = !hasSelection;
     // Stroke width means nothing to a text box, so the control steps aside.
     sizeWrap.hidden = tool === TEXT;
   }
@@ -361,11 +378,86 @@ export function showDrawPanel({
     textSizeSelect.appendChild(option);
   }
   textSizeSelect.value = String(DEFAULT_TEXT_SIZE);
+  // Text keeps its own colour, separate from the shape palette. Preset swatches
+  // rather than an OS colour dialog: one click, and the choice is visible in the
+  // toolbar instead of hidden behind a modal.
+  function presetRow(className, label, presets, isActive, onPick) {
+    const row = document.createElement('div');
+    row.className = `draw-preset-row ${className}`;
+    row.setAttribute('role', 'group');
+    row.setAttribute('aria-label', label);
+    const swatches = presets.map((preset) => {
+      const value = preset === null ? null : preset;
+      const el = button(`draw-preset${value === null ? ' draw-preset-none' : ''}`, '',
+        value === null ? 'No fill' : value);
+      if (value !== null) el.style.background = value;
+      el.dataset.preset = value === null ? 'none' : value;
+      el.addEventListener('mousedown', (event) => event.preventDefault()); // keep the caret
+      el.addEventListener('click', () => onPick(value));
+      row.appendChild(el);
+      return el;
+    });
+    row.sync = () => {
+      for (const el of swatches) {
+        const value = el.dataset.preset === 'none' ? null : el.dataset.preset;
+        el.classList.toggle('active', isActive(value));
+      }
+    };
+    return row;
+  }
+
+
+
+  const textColorRow = presetRow(
+    'draw-text-color-row', 'Text color', TEXT_PRESETS,
+    (value) => value === textColor,
+    (value) => {
+      textColor = value;
+      if (editing) {
+        const item = styleText(state, editing.index, { color: value });
+        if (item) applyEditorFont(item);
+      }
+      syncTextBar();
+      invalidate();
+      resumeEditing();
+    },
+  );
+
+  // A leading "None" is what makes the fill removable at all — without it the
+  // only way back from a fill applied by mistake is undo.
+  const textBgRow = presetRow(
+    'draw-text-bg-row', 'Fill behind text', [null, ...TEXT_PRESETS],
+    (value) => value === textStyle.background,
+    (value) => {
+      if (value) textBgColor = value;
+      applyTextStyle({ background: value });
+      resumeEditing();
+    },
+  );
+
   const boldButton = button('draw-text-style draw-bold', 'B', 'Bold');
   const italicButton = button('draw-text-style draw-italic', 'I', 'Italic');
   const underlineButton = button('draw-text-style draw-underline', 'U', 'Underline');
   for (const el of [boldButton, italicButton, underlineButton]) el.setAttribute('aria-pressed', 'false');
-  textBar.append(fontSelect, textSizeSelect, boldButton, italicButton, underlineButton);
+  const textColorLabel = document.createElement('span');
+  textColorLabel.className = 'draw-preset-label';
+  textColorLabel.textContent = 'Text';
+  const textBgLabel = document.createElement('span');
+  textBgLabel.className = 'draw-preset-label';
+  textBgLabel.textContent = 'Behind';
+  textBar.append(
+    fontSelect, textSizeSelect, boldButton, italicButton, underlineButton,
+    textColorLabel, textColorRow, textBgLabel, textBgRow,
+  );
+
+  // Stacking order is what decides whether a caption sits over a photo or under
+  // it, so it belongs to Select — these act on whatever is selected and are dead
+  // otherwise, rather than being a mode of their own.
+  const orderDivider = document.createElement('span');
+  orderDivider.className = 'draw-divider';
+  const frontButton = button('draw-order draw-front', '', 'Bring to front — put the selected object above the others');
+  const backButton = button('draw-order draw-back', '', 'Send to back — put the selected object behind the others');
+  tools.append(orderDivider, frontButton, backButton);
 
   const imageDivider = document.createElement('span');
   imageDivider.className = 'draw-divider';
@@ -504,7 +596,9 @@ export function showDrawPanel({
     frame = 0;
     if (!ctx) return;
     ctx.clearRect(0, 0, cssWidth, cssHeight);
-    replay(ctx, visibleItems(state));
+    // The box being edited is hidden here: its overlay is already showing it,
+    // and painting both stacks the same text twice.
+    replay(ctx, paintableItems(state, editing ? editing.index : null));
     // Chrome only — both are drawn after replay, so neither ever exports.
     paintSelection();
     paintCursor();
@@ -651,10 +745,16 @@ export function showDrawPanel({
   });
 
   function finishDrag(event) {
-    if (!drag) return;
+    // Release the capture FIRST, and whether or not a drag is under way. The
+    // Text tool and a click on empty canvas both return from pointerdown without
+    // setting `drag`, so gating the release on it left the canvas holding the
+    // pointer for good — and a canvas with pointer capture swallows every later
+    // click, including the one meant to put the caret in the text box it just
+    // opened. That reads as the editor losing focus the moment you touch it.
     if (event?.pointerId != null && canvas.hasPointerCapture?.(event.pointerId)) {
       canvas.releasePointerCapture(event.pointerId);
     }
+    if (!drag) return;
     if (drag.mode === 'draw') {
       if (isFreehandTool(tool)) endStroke(state);
       else endShape(state);
@@ -706,6 +806,10 @@ export function showDrawPanel({
     textEditor.style.lineHeight = String(LINE_HEIGHT);
     textEditor.style.color = item.color;
     textEditor.style.textDecoration = item.underline ? 'underline' : 'none';
+    // Wear the fill too, so typing over a photo looks like the result. Without
+    // one the editor keeps its faint wash, which is what makes the caret
+    // findable against a busy picture.
+    textEditor.style.background = item.background || 'rgba(255, 255, 255, 0.72)';
     autoGrow();
   }
 
@@ -732,6 +836,8 @@ export function showDrawPanel({
     textBar.hidden = !active;
     fontSelect.value = textStyle.font;
     textSizeSelect.value = String(textSize);
+    textColorRow.sync();
+    textBgRow.sync();
     for (const [el, on] of [
       [boldButton, textStyle.bold], [italicButton, textStyle.italic], [underlineButton, textStyle.underline],
     ]) {
@@ -740,7 +846,11 @@ export function showDrawPanel({
     }
   }
 
-  fontSelect.addEventListener('change', () => applyTextStyle({ font: fontSelect.value }));
+  // `input` fires while the OS picker is open, so the box being typed in
+  // recolours live rather than only once the dialog is dismissed.
+
+
+  fontSelect.addEventListener('change', () => { applyTextStyle({ font: fontSelect.value }); resumeEditing(); });
   // Size is deliberately NOT folded into `textStyle`: that object is spread over
   // every new box, and a stale size in it would silently outrank textSize.
   textSizeSelect.addEventListener('change', () => {
@@ -752,10 +862,11 @@ export function showDrawPanel({
       if (item) applyEditorFont(item);
     }
     invalidate();
+    resumeEditing();
   });
-  boldButton.addEventListener('click', () => applyTextStyle({ bold: !textStyle.bold }));
-  italicButton.addEventListener('click', () => applyTextStyle({ italic: !textStyle.italic }));
-  underlineButton.addEventListener('click', () => applyTextStyle({ underline: !textStyle.underline }));
+  boldButton.addEventListener('click', () => { applyTextStyle({ bold: !textStyle.bold }); resumeEditing(); });
+  italicButton.addEventListener('click', () => { applyTextStyle({ italic: !textStyle.italic }); resumeEditing(); });
+  underlineButton.addEventListener('click', () => { applyTextStyle({ underline: !textStyle.underline }); resumeEditing(); });
   // The toolbar must not steal the caret out of the box being typed into.
   for (const el of [boldButton, italicButton, underlineButton]) {
     el.addEventListener('mousedown', (event) => event.preventDefault());
@@ -766,7 +877,7 @@ export function showDrawPanel({
     commitTextBox();
     const width = Math.max(60, Math.min(TEXT_BOX_WIDTH, cssWidth - x - 8));
     const index = addText(state, {
-      x, y, width, height: textSize * LINE_HEIGHT, color, ...textStyle, size: textSize,
+      x, y, width, height: textSize * LINE_HEIGHT, ...textStyle, color: textColor, size: textSize,
     });
     editing = { index, created: true };
     selected = null;
@@ -798,7 +909,29 @@ export function showDrawPanel({
     invalidate();
   }
 
-  textEditor.addEventListener('blur', commitTextBox);
+  // Reaching for the text toolbar must not end the box being typed in. The
+  // colour picker and both selects take focus when clicked, and committing on
+  // that blur closed the box before the choice was even made — leaving the user
+  // to dismiss the picker and click back into the canvas, by which point the
+  // box was gone. B/I/U can preventDefault on mousedown to keep the caret, but
+  // a <select> and a colour input cannot: that would stop them opening at all.
+  let holdEditor = false;
+  textBar.addEventListener('pointerdown', () => { holdEditor = true; });
+  textBar.addEventListener('focusin', () => { holdEditor = true; });
+  // Capture, so a click anywhere else clears the hold BEFORE the canvas handler
+  // runs and decides what to do with the open box.
+  const releaseHold = (event) => { if (!textBar.contains(event.target)) holdEditor = false; };
+  document.addEventListener('pointerdown', releaseHold, true);
+
+  // Hand the caret back once the control is finished with it, so typing simply
+  // continues. `change` rather than `input`: the colour picker fires `input`
+  // continuously while it is open, and refocusing then would fight the dialog.
+  function resumeEditing() {
+    holdEditor = false;
+    if (editing) textEditor.focus();
+  }
+
+  textEditor.addEventListener('blur', () => { if (!holdEditor) commitTextBox(); });
   textEditor.addEventListener('keydown', (event) => {
     // Escape commits rather than discards: the text is the work, and Ctrl+Z is
     // right there if it was a mistake.
@@ -861,7 +994,6 @@ export function showDrawPanel({
       if (tool === ERASE || tool === SELECT) setTool(PEN); // picking a color means you want to draw
       for (const other of colorButtons) other.classList.toggle('active', other === el);
       customInput.value = color;
-      if (editing) { styleText(state, editing.index, { color }); applyEditorFont(state.items[editing.index]); }
       invalidate();
     });
   }
@@ -872,7 +1004,6 @@ export function showDrawPanel({
     color = customInput.value;
     for (const other of colorButtons) other.classList.remove('active');
     if (tool === ERASE || tool === SELECT) setTool(PEN);
-    if (editing) { styleText(state, editing.index, { color }); applyEditorFont(state.items[editing.index]); }
     invalidate();
   });
 
@@ -897,6 +1028,17 @@ export function showDrawPanel({
     imageInput.value = ''; // so re-picking the same file fires change again
     if (file) await placeImageFile(file);
   });
+  // The selection follows the item to its new slot; dropping it here would leave
+  // the handles sitting on whichever object slid into the vacated index.
+  function reorder(move) {
+    if (selected == null || !state.items[selected]) return;
+    commitTextBox();
+    selected = move(state, selected);
+    invalidate();
+  }
+  frontButton.addEventListener('click', () => reorder(bringToFront));
+  backButton.addEventListener('click', () => reorder(sendToBack));
+
   undoButton.addEventListener('click', () => { selected = null; undo(state); invalidate(); });
   redoButton.addEventListener('click', () => { selected = null; redo(state); invalidate(); });
   clearButton.addEventListener('click', () => { selected = null; clear(state); invalidate(); });
@@ -905,6 +1047,7 @@ export function showDrawPanel({
     editing = null; // teardown, not a commit: the panel is going away
     document.removeEventListener('keydown', onKeydown);
     document.removeEventListener('paste', onPaste);
+    document.removeEventListener('pointerdown', releaseHold, true);
     if (frame) cancelRaf(frame);
     backdrop.remove();
     previouslyFocused?.focus?.();

@@ -87,6 +87,8 @@ const ROUND_RECT_RADIUS = 22;
 // Matches the app's UI stack so a text box looks like the rest of the product.
 export const TEXT_FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
 export const LINE_HEIGHT = 1.25;
+// Breathing room around a text box's fill, so the words are not flush to its edge.
+export const TEXT_BG_PAD = 4;
 // Highlighter ink is translucent so text and photos read through it, and it
 // multiplies so overlapping passes deepen the way a real marker does.
 export const HIGHLIGHT_ALPHA = 0.32;
@@ -110,6 +112,18 @@ function commit(state, next) {
 // must not leave an undo step behind.
 export function visibleItems(state) {
   return state.draft ? [...state.items, state.draft] : state.items;
+}
+
+// What to paint while an overlay editor is open over one of the items. The
+// overlay IS that item's picture for as long as it is being edited, so painting
+// the item underneath it too shows the same text twice — offset by the editor's
+// border and metrics, which reads as a doubled or blurred layer.
+//
+// The draft is appended last, so item indices line up with state.items.
+export function paintableItems(state, hiddenIndex = null) {
+  const items = visibleItems(state);
+  if (hiddenIndex == null) return items;
+  return items.filter((_, i) => i !== hiddenIndex);
 }
 
 /* ---------------------------------------------------------------- freehand */
@@ -326,7 +340,13 @@ export function itemAt(state, x, y, pad = 0) {
     const local = toLocalPoint(item, x, y);
     // A thick stroke paints outside its point bounds by half its width, and a
     // hairline shape would otherwise be almost impossible to hit at all.
-    const slack = pad + (item.kind === 'stroke' || item.width ? (item.width || 0) / 2 : 0);
+    //
+    // Only for items whose `width` means LINE width. On an image or a text box
+    // it is the box's own width, and treating it as ink gave a 260px-wide
+    // caption a 130px grab halo on every side — enough to swallow clicks meant
+    // for something else entirely.
+    const inked = item.kind === 'stroke' || isShapeTool(item.kind);
+    const slack = pad + (inked ? (item.width || 0) / 2 : 0);
     if (local.x >= box.x - slack && local.x <= box.x + box.width + slack
       && local.y >= box.y - slack && local.y <= box.y + box.height + slack) return i;
   }
@@ -369,10 +389,10 @@ export function textFontCss(item) {
 // `addText` returns the index the caller needs to address it while editing.
 export function addText(state, {
   x, y, width, height, color = '#202124', size = 24, text = '',
-  font = 'sans', bold = false, italic = false, underline = false,
+  font = 'sans', bold = false, italic = false, underline = false, background = null,
 }) {
   commit(state, [...state.items, {
-    kind: TEXT, text, color, size, x, y, width, height, font, bold, italic, underline,
+    kind: TEXT, text, color, size, x, y, width, height, font, bold, italic, underline, background,
   }]);
   return state.items.length - 1;
 }
@@ -453,6 +473,31 @@ export function applyTransform(state, box) {
 export function endTransform(state) {
   state.transform = null;
   return state;
+}
+
+/* --------------------------------------------------------------- z-order */
+
+// Paint order IS stacking order: `items` is drawn front-to-back by index, so
+// moving an item within the array is what "bring to front" and "send to back"
+// mean. Returns the item's NEW index so the caller can keep the selection on it
+// — the alternative, leaving `selected` pointing at whatever slid into the old
+// slot, silently reselects a different object.
+export function bringToFront(state, index) {
+  const item = state.items[index];
+  if (!item || index === state.items.length - 1) return index; // already on top
+  const next = state.items.filter((_, i) => i !== index);
+  next.push(item);
+  commit(state, next);
+  return next.length - 1;
+}
+
+export function sendToBack(state, index) {
+  const item = state.items[index];
+  if (!item || index === 0) return index; // already at the back
+  const next = state.items.filter((_, i) => i !== index);
+  next.unshift(item);
+  commit(state, next);
+  return 0;
 }
 
 export function removeItem(state, index) {
@@ -546,10 +591,32 @@ function drawText(ctx, item) {
   ctx.fillStyle = item.color;
   ctx.textBaseline = 'top';
   ctx.font = textFontCss(item);
-  const measure = typeof ctx.measureText === 'function'
-    ? (s) => ctx.measureText(s).width
-    : (s) => s.length * size * 0.5; // no text metrics (jsdom): estimate rather than throw
+  // Fall back to an estimate whenever the context cannot give a usable width.
+  // Guarding on `typeof measureText === 'function'` alone was not enough: a
+  // context that returns no metrics yields NaN, which then silently swallowed
+  // the background plate and would have put NaN into fillRect.
+  const measure = (s) => {
+    const metric = typeof ctx.measureText === 'function' ? ctx.measureText(s)?.width : undefined;
+    return Number.isFinite(metric) ? metric : String(s).length * size * 0.5;
+  };
   const lines = wrapText(item.text, Math.max(1, item.width), measure);
+  // A solid fill behind the words. Text dropped straight onto a photo or a map is
+  // often unreadable whatever colour it is, and this is the fix people reach for.
+  // Sized to the longest line rather than the box, so a short caption does not
+  // paint a full-width slab across the picture.
+  if (item.background) {
+    const widest = lines.reduce((max, line) => Math.max(max, line ? measure(line) : 0), 0);
+    if (widest > 0) {
+      ctx.fillStyle = item.background;
+      ctx.fillRect(
+        item.x - TEXT_BG_PAD,
+        item.y - TEXT_BG_PAD,
+        widest + TEXT_BG_PAD * 2,
+        lines.length * size * LINE_HEIGHT + TEXT_BG_PAD * 2,
+      );
+      ctx.fillStyle = item.color; // fillRect just took the fill for itself
+    }
+  }
   lines.forEach((line, i) => {
     const y = item.y + i * size * LINE_HEIGHT;
     ctx.fillText(line, item.x, y);

@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { installFakeChrome } from './helpers/fake-chrome.js';
 import { contentHash } from '../src/lib/note.js';
-import { WELCOME_NOTE_ID, WELCOME_NOTE_TITLE } from '../src/app/welcome-note.js';
+import { WELCOME_NOTE_BODY, WELCOME_NOTE_ID, WELCOME_NOTE_TITLE } from '../src/app/welcome-note.js';
 import { ensureTrash, trashNotes } from '../src/lib/trash.js';
 
 let app, bm, encode;
@@ -61,7 +61,25 @@ describe('welcome note — fresh first run', () => {
     const welcome = (await app.loadNotes(root)).find((n) => n.id === WELCOME_NOTE_ID);
     expect(welcome).toBeTruthy();
     expect(welcome.title).toBe(WELCOME_NOTE_TITLE);
+    expect(welcome.body).toBe(WELCOME_NOTE_BODY);
     expect(welcome.bookmarkId).toBeTruthy();
+
+    // The first-run tour covers both the editor's less obvious interactions and
+    // the major feature entry points available elsewhere in the extension.
+    for (const expected of [
+      'change its case or font color',
+      'drag across the grid',
+      '**Alt+Enter**',
+      '**Save selection to OWL-Note**',
+      '**Rebuild LLM chat to OWL-Note**',
+      '**Capture entire page to OWL-Note**',
+      '**Live Transcription save to OWL-Note**',
+      'Save the drawing directly into the note as a PNG attachment',
+      'Export an editable `.owl-note` package',
+      'Phonetic Assistance',
+      'approximately 130 MB',
+      'Oversized content kept safely on the current device',
+    ]) expect(welcome.body).toContain(expected);
 
     // The editor actually LANDED on it (editor/ui state, not merely note existence).
     expect(document.querySelector('#editor .note-title').value).toBe(WELCOME_NOTE_TITLE);

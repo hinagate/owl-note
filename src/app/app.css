@@ -630,6 +630,57 @@ body.resizing { user-select: none; cursor: col-resize; }
 }
 .draw-tool:hover, .draw-undo:hover, .draw-redo:hover, .draw-clear:hover { background: #f1f3f4; }
 .draw-tool.active { border-color: #1a73e8; background: #e8f0fe; }
+/* A dashed marquee, which is what Paint uses and what "select" means here. The
+   cursor arrow this replaced was a near-twin of the Arrow drawing tool sitting
+   six buttons away. */
+.draw-tool-select {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0; line-height: 0;
+}
+.draw-tool-select::before {
+  content: "";
+  display: block;
+  width: 15px; height: 13px;
+  box-sizing: border-box;
+  border: 1.5px dashed currentColor;
+  border-radius: 2px;
+}
+
+/* A chisel-tip marker over the band it lays down. The crayon emoji this
+   replaced sat next to the pencil and read as the same tool at a glance. */
+.draw-tool-highlight {
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0; line-height: 0;
+}
+.draw-tool-highlight::before {
+  content: "";
+  display: block;
+  width: 18px; height: 6.5px;
+  box-sizing: border-box;
+  border: 1.5px solid currentColor;
+  /* Squared-off nib on the left, rounded cap on the right — a marker, not the
+     eraser's rounded block, which is what a fatter barrel here read as. */
+  border-radius: 1px 3px 3px 1px;
+  /* `to right` so the first stop lands on the LEFT: the nib has to end up at the
+     lower-left after the rotation, pointing into the swipe below it. */
+  background: linear-gradient(to right, currentColor 0 26%, transparent 26%);
+  transform: rotate(-45deg) translate(2px, -3.5px);
+}
+/* The translucent swipe, so the icon says what the tool does, not just what it
+   is — and distinguishes it from the pen at a glance. */
+/* Carries the CURRENT ink, like the size dot does — the toolbar should preview
+   what the tool would lay down, not just which tool it is. The hairline keeps
+   white and pale inks visible against the white button. */
+.draw-tool-highlight::after {
+  content: "";
+  position: absolute;
+  left: 6px; right: 6px; bottom: 5px;
+  height: 3.5px; border-radius: 2px;
+  background: var(--tool-ink, currentColor);
+  box-shadow: 0 0 0 1px rgba(32, 33, 36, 0.22);
+}
+
 /* A tilted rubber with a worn band across it — the outline square this replaced
    read as "blank", not "eraser". Drawn rather than set in a glyph because no
    font ships a decent eraser; line-height goes to 0 alongside font-size or the
@@ -652,6 +703,31 @@ body.resizing { user-select: none; cursor: col-resize; }
 /* Paint's swatch grid: ten across, two down, so twenty colors cost one row of
    toolbar height rather than twenty slots. */
 .draw-palette { display: grid; grid-template-columns: repeat(10, 17px); gap: 3px; }
+/* Bring to front / send to back: a block with an arrow out of it. Enabled only
+   while something is selected, since that is the only time they mean anything. */
+.draw-order {
+  display: flex; align-items: center; justify-content: center;
+  min-width: 34px; height: 34px; padding: 0 8px;
+  border: 1px solid #dadce0; border-radius: 8px; background: #fff;
+  color: var(--text); font-size: 0; line-height: 0; cursor: pointer;
+}
+.draw-order:hover:not(:disabled) { background: #f1f3f4; }
+.draw-order:disabled { opacity: 0.35; cursor: default; }
+.draw-order::before {
+  content: ""; display: block; width: 16px; height: 16px;
+  background-color: currentColor;
+  -webkit-mask-size: contain; mask-size: contain;
+  -webkit-mask-position: center; mask-position: center;
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+}
+.draw-front::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='4' y='11' width='16' height='10' rx='2'/%3E%3Cpath d='M12 2.5 V9 M8.5 6 L12 2.5 L15.5 6' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='4' y='11' width='16' height='10' rx='2'/%3E%3Cpath d='M12 2.5 V9 M8.5 6 L12 2.5 L15.5 6' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.draw-back::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='4' y='3' width='16' height='10' rx='2'/%3E%3Cpath d='M12 21.5 V15 M8.5 18 L12 21.5 L15.5 18' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='4' y='3' width='16' height='10' rx='2'/%3E%3Cpath d='M12 21.5 V15 M8.5 18 L12 21.5 L15.5 18' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
 .draw-color {
   width: 17px; height: 17px; padding: 0; border: 1px solid transparent;
   border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(32, 33, 36, 0.22); cursor: pointer;
@@ -672,13 +748,32 @@ body.resizing { user-select: none; cursor: col-resize; }
   pointer-events: none;
 }
 /* The text toolbar only exists while the Text tool is live, the way Paint's does. */
-.draw-text-bar { display: flex; align-items: center; gap: 6px; margin: -4px 0 10px; }
+/* Wraps rather than overflowing: two preset rows plus the font controls are
+   wider than a narrow pane, and a squashed B/I/U is worse than a second line. */
+.draw-text-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; row-gap: 6px; margin: -4px 0 10px; }
 .draw-text-bar[hidden] { display: none; }
 .draw-font, .draw-text-size {
   height: 30px; padding: 0 8px; border: 1px solid #dadce0; border-radius: 8px;
   background: #fff; color: var(--text); font: inherit; font-size: 13px; cursor: pointer;
 }
 .draw-text-size { padding-right: 4px; font-variant-numeric: tabular-nums; }
+/* Preset swatches for the text controls. One click and the choice is visible in
+   the toolbar, instead of an OS colour dialog over the drawing. */
+.draw-preset-label { color: var(--muted); font-size: 11px; margin-left: 2px; }
+.draw-preset-row { display: inline-flex; gap: 3px; padding: 3px; border: 1px solid #dadce0; border-radius: 8px; }
+.draw-preset {
+  width: 17px; height: 17px; padding: 0; border: 1px solid transparent; border-radius: 3px;
+  box-shadow: inset 0 0 0 1px rgba(32, 33, 36, 0.22); cursor: pointer;
+}
+.draw-preset:hover { transform: scale(1.12); }
+.draw-preset.active { border-color: #1a73e8; box-shadow: inset 0 0 0 1px #fff, 0 0 0 1px #1a73e8; }
+/* "No fill": a swatch with a slash through it, the usual way to draw "none". */
+.draw-preset-none {
+  background:
+    linear-gradient(to bottom right, transparent calc(50% - 1px), #d93025 calc(50% - 1px),
+      #d93025 calc(50% + 1px), transparent calc(50% + 1px)),
+    #fff;
+}
 .draw-text-style {
   width: 30px; height: 30px; padding: 0; border: 1px solid #dadce0; border-radius: 8px;
   background: #fff; color: var(--text); font-size: 14px; line-height: 1; cursor: pointer;
@@ -705,7 +800,9 @@ body.resizing { user-select: none; cursor: col-resize; }
   display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px;
   border: 1px solid #dadce0; border-radius: 8px; background: #fff;
 }
-.draw-size .draw-width-dot { flex: none; min-width: 1px; min-height: 1px; }
+/* Same hairline as the other ink previews, so a white or pale stroke colour
+   is still visible against the white control. */
+.draw-size .draw-width-dot { flex: none; min-width: 1px; min-height: 1px; box-shadow: 0 0 0 1px rgba(32, 33, 36, 0.22); }
 .draw-size-range { width: 96px; accent-color: #1a73e8; cursor: pointer; }
 .draw-size-value {
   min-width: 34px; color: var(--muted); font-size: 11px;
@@ -978,6 +1075,8 @@ body.resizing { user-select: none; cursor: col-resize; }
 }
 .table-size-cell:hover, .table-size-cell:focus-visible { outline: 1px solid var(--accent); outline-offset: 0; }
 .table-size-cell.selected { border-color: var(--accent-dark); background: rgba(45, 190, 96, 0.22); }
+.table-shortcut-hint { margin: 9px 0 0; padding-top: 8px; border-top: 1px solid var(--border); color: var(--muted); font-size: 10.5px; line-height: 1.4; white-space: nowrap; }
+.table-shortcut-hint kbd { padding: 1px 4px; border: 1px solid #c8cdd5; border-bottom-width: 2px; border-radius: 3px; background: #f6f7f8; color: var(--text); font: 10px ui-monospace, Menlo, Consolas, monospace; }
 .format-bar .note-search {
   display: inline-flex; align-items: center; gap: 4px; margin-left: auto; min-width: 145px; max-width: 210px;
   height: 27px; padding: 0 7px; border: 1px solid rgba(217, 221, 227, 0.75); border-radius: 999px;

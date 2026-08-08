@@ -113,6 +113,8 @@ describe('format bar', () => {
     const apply = vi.fn();
     render(c, { apply });
     c.querySelector('.format-table-menu').click();
+    expect(c.querySelector('.table-shortcut-hint').textContent)
+      .toBe('Tip: Alt + Enter wraps to a new line inside a cell.');
     const start = c.querySelector('.table-size-cell[data-column="1"][data-row="1"]');
     const end = c.querySelector('.table-size-cell[data-column="5"][data-row="4"]');
     start.dispatchEvent(new Event('pointerdown', { bubbles: true }));

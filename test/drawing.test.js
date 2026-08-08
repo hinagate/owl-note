@@ -512,3 +512,73 @@ describe('text boxes', () => {
     expect(boxOf(state.items[0])).toEqual({ x: 20, y: 40, width: 200, height: 60 });
   });
 });
+
+// `width` means LINE width on a stroke or shape, but BOX width on an image or a
+// text box. Treating the latter as ink gave a wide caption a grab halo half its
+// own width on every side, letting it swallow clicks meant for its neighbours.
+describe('hit-test slack only applies to line width', () => {
+  it('does not give a wide text box a halo', () => {
+    const state = createSketch();
+    addText(state, { x: 20, y: 120, width: 260, height: 30, text: 'wide caption' });
+    expect(itemAt(state, 30, 130)).toBe(0);   // inside
+    expect(itemAt(state, 30, 25)).toBe(-1);   // 95px above it: not a hit
+    expect(itemAt(state, 30, 200)).toBe(-1);  // and not below
+  });
+
+  it('does not give a large image a halo', () => {
+    const state = createSketch();
+    addImage(state, { src: 'x', el: null, x: 200, y: 200, width: 300, height: 200 });
+    expect(itemAt(state, 250, 250)).toBe(0);
+    expect(itemAt(state, 60, 250)).toBe(-1);  // well clear to the left
+  });
+
+  it('still gives a thick stroke the slack it paints with', () => {
+    const state = createSketch();
+    state.items = [{ kind: 'stroke', width: 24, points: [{ x: 50, y: 50 }, { x: 90, y: 50 }] }];
+    expect(itemAt(state, 70, 58)).toBe(0);   // within half the 24px nib
+    expect(itemAt(state, 70, 90)).toBe(-1);  // beyond it
+  });
+
+  it('picks the box actually clicked when two sit apart', () => {
+    const state = createSketch();
+    addText(state, { x: 20, y: 20, width: 260, height: 30, text: 'first' });
+    addText(state, { x: 20, y: 120, width: 260, height: 30, text: 'second' });
+    expect(itemAt(state, 25, 25)).toBe(0);
+    expect(itemAt(state, 25, 125)).toBe(1);
+  });
+});
+
+describe('fill behind text rendering', () => {
+  const rects = (ctx) => ctx.calls.filter((c) => c[0] === 'fillRect');
+
+  it('paints a fill behind the text, sized to the longest line', () => {
+    const state = createSketch();
+    addText(state, { x: 40, y: 60, width: 200, height: 30, text: 'over a map', size: 20, background: '#ffffff' });
+    const ctx = fakeCtx();
+    replay(ctx, state.items);
+    expect(rects(ctx).length).toBeGreaterThan(0);
+    const [, x, y] = rects(ctx)[0];
+    expect(x).toBeLessThan(40); // padded outwards from the text origin
+    expect(y).toBeLessThan(60);
+  });
+
+  it('paints nothing when the fill is off', () => {
+    const state = createSketch();
+    addText(state, { x: 40, y: 60, width: 200, height: 30, text: 'plain', size: 20 });
+    const ctx = fakeCtx();
+    replay(ctx, state.items);
+    expect(rects(ctx)).toHaveLength(0);
+  });
+
+  // fillRect consumes fillStyle, so the words would inherit the fill colour and
+  // vanish into it.
+  it('restores the text colour after filling', () => {
+    const state = createSketch();
+    addText(state, { x: 0, y: 0, width: 200, height: 30, text: 'hi', size: 20, color: '#ed1c24', background: '#ffffff' });
+    const ctx = fakeCtx();
+    replay(ctx, state.items);
+    const styles = ctx.calls.filter((c) => c[0] === 'set:fillStyle').map((c) => c[1]);
+    expect(styles[styles.length - 1]).toBe('#ed1c24');
+  });
+});
+

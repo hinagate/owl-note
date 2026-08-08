@@ -312,7 +312,16 @@ export function renderFormatBar(container, { apply, actions = formatActions() })
       }
     }
     selectSize(1, 1);
-    menu.append(label, grid);
+    const shortcutHint = document.createElement('p');
+    shortcutHint.className = 'table-shortcut-hint';
+    shortcutHint.append(
+      document.createTextNode('Tip: '),
+      Object.assign(document.createElement('kbd'), { textContent: 'Alt' }),
+      document.createTextNode(' + '),
+      Object.assign(document.createElement('kbd'), { textContent: 'Enter' }),
+      document.createTextNode(' wraps to a new line inside a cell.'),
+    );
+    menu.append(label, grid, shortcutHint);
     registerPopup(menu, arrow, 'dialog');
     wrap.append(main, arrow, menu);
     container.appendChild(wrap);

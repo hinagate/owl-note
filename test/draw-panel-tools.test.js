@@ -472,3 +472,374 @@ describe('rotation', () => {
   });
 });
 
+describe('text color is its own control', () => {
+  const setTextColor = (hex) => click(document.querySelector(`.draw-text-color-row [data-preset="${hex}"]`));
+
+  it('offers preset text colours in the text bar', () => {
+    showDrawPanel({});
+    expect(document.querySelectorAll('.draw-text-color-row .draw-preset').length).toBeGreaterThan(5);
+    expect(document.querySelector('.draw-text-color-row input[type="color"]')).toBeNull();
+  });
+
+  it('colors the text with it', () => {
+    const panel = showDrawPanel({});
+    pickTool('text');
+    setTextColor('#ed1c24');
+    pointer(panel.canvas, 'pointerdown', 10, 10);
+    typeInto(panel.textEditor, 'red words');
+    panel.textEditor.dispatchEvent(new Event('blur'));
+    expect(panel.state.items[0].color).toBe('#ed1c24');
+  });
+
+  it('recolors the box being typed in', () => {
+    const panel = showDrawPanel({});
+    pickTool('text');
+    pointer(panel.canvas, 'pointerdown', 10, 10);
+    typeInto(panel.textEditor, 'watch me');
+    setTextColor('#22b14c');
+    expect(panel.textEditor.style.color).toBeTruthy();
+    panel.textEditor.dispatchEvent(new Event('blur'));
+    expect(panel.state.items[0].color).toBe('#22b14c');
+  });
+
+  // Picking a shape colour to draw an arrow must not silently restyle the
+  // caption typed next — that is the whole reason text has its own control.
+  it('is independent of the shape palette in both directions', () => {
+    const panel = showDrawPanel({});
+    setTextColor('#3f48cc');
+    click(document.querySelector('.draw-color[data-color="#ed1c24"]')); // shape red
+    pickTool('text');
+    pointer(panel.canvas, 'pointerdown', 10, 10);
+    typeInto(panel.textEditor, 'still blue');
+    panel.textEditor.dispatchEvent(new Event('blur'));
+    expect(panel.state.items[0].color).toBe('#3f48cc');
+
+    pickTool('rect');
+    draw(panel.canvas, [[40, 40], [90, 80]]);
+    expect(panel.state.items[1].color).toBe('#ed1c24'); // shape kept its own
+  });
+});
+
+// The reported sequence: start typing, reach for a text-bar control, and the
+// blur that focus change causes would commit the box — so by the time the
+// colour was chosen there was no box left to apply it to, and dismissing the
+// picker meant clicking the canvas, which lost the selection too.
+describe('the text bar does not close the box being typed in', () => {
+  function openAndType(panel, text = 'keep me open') {
+    pickTool('text');
+    pointer(panel.canvas, 'pointerdown', 10, 10);
+    typeInto(panel.textEditor, text);
+  }
+  // Focusing a control fires blur on the textarea; jsdom needs it dispatched.
+  function focusControl(el) {
+    el.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    panelBlur();
+  }
+  let currentEditor = null;
+  function panelBlur() { currentEditor.dispatchEvent(new Event('blur')); }
+
+  // Preset swatches preventDefault on mousedown so the caret never leaves at
+  // all; this pins that, and that the colour still lands on the open box.
+  it('survives picking a colour preset, and applies it', () => {
+    const panel = showDrawPanel({});
+    currentEditor = panel.textEditor;
+    openAndType(panel);
+    click(document.querySelector('.draw-text-color-row [data-preset="#a349a4"]'));
+    expect(panel.textEditor.hidden).toBe(false); // still open
+
+    panel.textEditor.dispatchEvent(new Event('blur'));
+    expect(panel.state.items).toHaveLength(1);
+    expect(panel.state.items[0]).toMatchObject({ text: 'keep me open', color: '#a349a4' });
+  });
+
+  it('survives the font and size selects', () => {
+    const panel = showDrawPanel({});
+    currentEditor = panel.textEditor;
+    openAndType(panel, 'styled');
+    const size = document.querySelector('.draw-text-size');
+    focusControl(size);
+    expect(panel.textEditor.hidden).toBe(false);
+    size.value = '48';
+    size.dispatchEvent(new Event('change', { bubbles: true }));
+
+    const font = document.querySelector('.draw-font');
+    focusControl(font);
+    font.value = 'serif';
+    font.dispatchEvent(new Event('change', { bubbles: true }));
+
+    panel.textEditor.dispatchEvent(new Event('blur'));
+    expect(panel.state.items[0]).toMatchObject({ text: 'styled', size: 48, font: 'serif' });
+  });
+
+  // The hold must not leak: clicking away still finishes the box.
+  it('still commits when the click lands outside the text bar', () => {
+    const panel = showDrawPanel({});
+    currentEditor = panel.textEditor;
+    openAndType(panel, 'done now');
+    focusControl(document.querySelector('.draw-text-size')); // a select DOES take focus
+    expect(panel.textEditor.hidden).toBe(false);
+
+    document.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })); // elsewhere
+    panel.textEditor.dispatchEvent(new Event('blur'));
+    expect(panel.textEditor.hidden).toBe(true);
+    expect(panel.state.items[0].text).toBe('done now');
+  });
+});
+
+// jsdom has no pointer capture at all, which is exactly why this bug shipped:
+// the panel called setPointerCapture on every pointerdown but only released it
+// when a drag had been started. The Text tool and a click on empty canvas both
+// return without one, so the canvas kept the pointer for good — and a captured
+// canvas swallows every later click, including the one meant to put the caret
+// in the text box it had just opened.
+function trackPointerCapture(canvas) {
+  const held = new Set();
+  canvas.setPointerCapture = (id) => held.add(id);
+  canvas.releasePointerCapture = (id) => held.delete(id);
+  canvas.hasPointerCapture = (id) => held.has(id);
+  return held;
+}
+
+describe('the canvas never keeps the pointer captured', () => {
+  it('releases it after placing a text box', () => {
+    const panel = showDrawPanel({});
+    const held = trackPointerCapture(panel.canvas);
+    pickTool('text');
+    pointer(panel.canvas, 'pointerdown', 20, 20);
+    pointer(panel.canvas, 'pointerup', 20, 20);
+    expect(held.size).toBe(0);
+  });
+
+  it('releases it after clicking empty canvas with Select', () => {
+    const panel = showDrawPanel({});
+    const held = trackPointerCapture(panel.canvas);
+    pickTool('select');
+    pointer(panel.canvas, 'pointerdown', 400, 300); // nothing there
+    pointer(panel.canvas, 'pointerup', 400, 300);
+    expect(held.size).toBe(0);
+  });
+
+  it('still releases it after a real drag', () => {
+    const panel = showDrawPanel({});
+    const held = trackPointerCapture(panel.canvas);
+    pickTool('rect');
+    draw(panel.canvas, [[10, 10], [60, 50]]);
+    expect(held.size).toBe(0);
+    expect(panel.state.items).toHaveLength(1); // and the drag still worked
+  });
+
+  it('reopens a committed text box for editing from the Select tool', () => {
+    const panel = showDrawPanel({});
+    trackPointerCapture(panel.canvas);
+    pickTool('text');
+    pointer(panel.canvas, 'pointerdown', 20, 20);
+    typeInto(panel.textEditor, 'first pass');
+    panel.textEditor.dispatchEvent(new Event('blur'));
+
+    pickTool('select');
+    pointer(panel.canvas, 'pointerdown', 30, 30);
+    pointer(panel.canvas, 'pointerup', 30, 30);
+    panel.canvas.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, clientX: 30, clientY: 30 }));
+    expect(panel.textEditor.hidden).toBe(false);
+    expect(panel.textEditor.value).toBe('first pass');
+
+    typeInto(panel.textEditor, 'second pass');
+    panel.textEditor.dispatchEvent(new Event('blur'));
+    expect(panel.state.items).toHaveLength(1); // edited, not duplicated
+    expect(panel.state.items[0].text).toBe('second pass');
+  });
+});
+
+// jsdom hands back no 2D context, so nothing in this suite had ever checked what
+// actually gets PAINTED. A recording context makes the doubled-text bug visible:
+// while a box is open for editing, its overlay is already showing the text, and
+// replay was drawing the same item underneath it as well.
+function recordingContext() {
+  const calls = [];
+  const ctx = new Proxy({ calls }, {
+    get(target, prop) {
+      if (prop === 'calls') return calls;
+      if (prop === 'measureText') return (s) => ({ width: String(s).length * 8 });
+      return (...args) => { calls.push([prop, ...args]); };
+    },
+    set() { return true; },
+  });
+  return ctx;
+}
+const painted = (ctx) => ctx.calls.filter((c) => c[0] === 'fillText').map((c) => c[1]);
+const nextFrame = () => new Promise((resolve) => setTimeout(resolve, 24));
+
+describe('the canvas does not paint the box being edited', () => {
+  it('draws committed text, but not while its editor is open over it', async () => {
+    const ctx = recordingContext();
+    HTMLCanvasElement.prototype.getContext = () => ctx;
+    const panel = showDrawPanel({});
+
+    pickTool('text');
+    pointer(panel.canvas, 'pointerdown', 20, 20);
+    typeInto(panel.textEditor, 'ghosted');
+    panel.textEditor.dispatchEvent(new Event('blur'));
+    await nextFrame();
+    expect(painted(ctx)).toContain('ghosted'); // committed: the canvas owns it
+
+    ctx.calls.length = 0;
+    pickTool('select');
+    pointer(panel.canvas, 'pointerdown', 30, 30);
+    pointer(panel.canvas, 'pointerup', 30, 30);
+    panel.canvas.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, clientX: 30, clientY: 30 }));
+    await nextFrame();
+    // Re-opened: the overlay is the picture now, so the canvas must stay clear
+    // of it or the same words render twice, offset by the editor's border.
+    expect(painted(ctx)).not.toContain('ghosted');
+
+    ctx.calls.length = 0;
+    panel.textEditor.dispatchEvent(new Event('blur'));
+    await nextFrame();
+    expect(painted(ctx)).toContain('ghosted'); // handed back on commit
+  });
+
+  it('keeps painting every other item while one is being edited', async () => {
+    const ctx = recordingContext();
+    HTMLCanvasElement.prototype.getContext = () => ctx;
+    const panel = showDrawPanel({});
+
+    pickTool('text');
+    pointer(panel.canvas, 'pointerdown', 20, 20);
+    typeInto(panel.textEditor, 'first');
+    panel.textEditor.dispatchEvent(new Event('blur'));
+    pointer(panel.canvas, 'pointerdown', 20, 120);
+    typeInto(panel.textEditor, 'second');
+    panel.textEditor.dispatchEvent(new Event('blur'));
+
+    ctx.calls.length = 0;
+    panel.canvas.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, clientX: 25, clientY: 25 }));
+    await nextFrame();
+    const drawn = painted(ctx);
+    expect(drawn).not.toContain('first');  // the one being edited
+    expect(drawn).toContain('second');     // its neighbour is untouched
+  });
+});
+
+// Stacking order decides whether a caption sits over a photo or under it, and
+// it is the Select tool's job: these act on whatever is selected.
+describe('bring to front and send to back', () => {
+  function twoShapes(panel) {
+    pickTool('rect');
+    draw(panel.canvas, [[20, 20], [120, 120]]);   // index 0
+    pickTool('ellipse');
+    draw(panel.canvas, [[40, 40], [140, 140]]);   // index 1, on top
+  }
+  const selectAt = (panel, x, y) => {
+    pickTool('select');
+    pointer(panel.canvas, 'pointerdown', x, y);
+    pointer(panel.canvas, 'pointerup', x, y);
+  };
+  const kinds = (panel) => panel.state.items.map((i) => i.kind);
+
+  it('is disabled until something is selected', () => {
+    const panel = showDrawPanel({});
+    twoShapes(panel);
+    expect(document.querySelector('.draw-front').disabled).toBe(true);
+    selectAt(panel, 130, 130); // only the ellipse reaches here
+    expect(document.querySelector('.draw-front').disabled).toBe(false);
+    expect(document.querySelector('.draw-back').disabled).toBe(false);
+  });
+
+  it('sends the selected object behind the others', () => {
+    const panel = showDrawPanel({});
+    twoShapes(panel);
+    expect(kinds(panel)).toEqual(['rect', 'ellipse']);
+    selectAt(panel, 130, 130);
+    click(document.querySelector('.draw-back'));
+    expect(kinds(panel)).toEqual(['ellipse', 'rect']);
+  });
+
+  it('brings the selected object above the others', () => {
+    const panel = showDrawPanel({});
+    twoShapes(panel);
+    selectAt(panel, 25, 25); // the rect, which the ellipse does not cover
+    click(document.querySelector('.draw-front'));
+    expect(kinds(panel)).toEqual(['ellipse', 'rect']);
+  });
+
+  // Dropping the selection here would leave the handles on whichever object
+  // slid into the vacated slot.
+  it('keeps the selection on the object that moved', () => {
+    const panel = showDrawPanel({});
+    twoShapes(panel);
+    selectAt(panel, 130, 130);
+    click(document.querySelector('.draw-back'));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+    expect(kinds(panel)).toEqual(['rect']); // the ellipse went, not the rect
+  });
+
+  it('is one undo step', () => {
+    const panel = showDrawPanel({});
+    twoShapes(panel);
+    selectAt(panel, 130, 130);
+    click(document.querySelector('.draw-back'));
+    click(document.querySelector('.draw-undo'));
+    expect(kinds(panel)).toEqual(['rect', 'ellipse']);
+  });
+
+  it('does nothing when the object is already where it is asked to go', () => {
+    const panel = showDrawPanel({});
+    twoShapes(panel);
+    selectAt(panel, 130, 130);           // the ellipse, already on top
+    click(document.querySelector('.draw-front'));
+    expect(kinds(panel)).toEqual(['rect', 'ellipse']);
+    expect(document.querySelector('.draw-undo').disabled).toBe(false);
+    click(document.querySelector('.draw-undo'));
+    expect(kinds(panel)).toEqual(['rect', 'ellipse']); // no wasted history step
+  });
+});
+
+// Text dropped on a photo or a map is often unreadable whatever colour it is;
+// a colour filled behind the words is the fix. Preset swatches, not an OS dialog.
+describe('fill behind text', () => {
+  const openBox = (panel) => { pickTool('text'); pointer(panel.canvas, 'pointerdown', 20, 20); };
+  const commit = (panel) => panel.textEditor.dispatchEvent(new Event('blur'));
+  const pickFill = (hex) => click(document.querySelector(`.draw-text-bg-row [data-preset="${hex}"]`));
+
+  it('offers presets rather than a colour dialog', () => {
+    showDrawPanel({});
+    expect(document.querySelectorAll('.draw-text-bg-row .draw-preset').length).toBeGreaterThan(5);
+    expect(document.querySelector('.draw-text-bg-row input[type="color"]')).toBeNull();
+  });
+
+  it('is off until a preset is picked', () => {
+    const panel = showDrawPanel({});
+    openBox(panel);
+    typeInto(panel.textEditor, 'plain');
+    commit(panel);
+    expect(panel.state.items[0].background).toBeNull();
+  });
+
+  it('fills behind the words with the preset picked', () => {
+    const panel = showDrawPanel({});
+    openBox(panel);
+    pickFill('#fff200');
+    typeInto(panel.textEditor, 'over a map');
+    commit(panel);
+    expect(panel.state.items[0].background).toBe('#fff200');
+  });
+
+  // Without a "None" the only way back from a fill applied by mistake is undo.
+  it('clears the fill again with None', () => {
+    const panel = showDrawPanel({});
+    openBox(panel);
+    pickFill('#fff200');
+    click(document.querySelector('.draw-text-bg-row [data-preset="none"]'));
+    typeInto(panel.textEditor, 'plain again');
+    commit(panel);
+    expect(panel.state.items[0].background).toBeNull();
+  });
+
+  it('shows the fill in the editor while typing', () => {
+    const panel = showDrawPanel({});
+    openBox(panel);
+    pickFill('#ffffff');
+    expect(panel.textEditor.style.background).toContain('rgb(255, 255, 255)');
+  });
+});
+
