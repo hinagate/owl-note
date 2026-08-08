@@ -5,6 +5,7 @@ import {
   addImage, imageAt, beginTransform, applyTransform, endTransform, removeItem,
   squareBox, snapAngle, arrowHead, compositeFor, boxOf, isShapeTool, isFreehandTool,
   undo, redo, clear, isEmpty, canUndo, canRedo, replay,
+  itemAt, addText, setText, wrapText, isFillable, POLYGONS,
   PEN, HIGHLIGHT, ERASE, LINE, ARROW, RECT, ROUND_RECT, ELLIPSE, IMAGE,
 } from '../src/lib/drawing.js';
 
@@ -383,5 +384,131 @@ describe('pasted images', () => {
     const ctx = fakeCtx();
     expect(() => replay(ctx, s.items)).not.toThrow();
     expect(ctx.calls.map((c) => c[0])).not.toContain('drawImage');
+  });
+});
+
+describe('Paint-style shapes', () => {
+  it('offers the basic shape set beyond line and arrow', () => {
+    for (const kind of ['triangle', 'right-triangle', 'diamond', 'pentagon', 'hexagon', 'star']) {
+      expect(isShapeTool(kind)).toBe(true);
+    }
+  });
+
+  it('normalizes every polygon to fill its box edge to edge', () => {
+    for (const [kind, points] of Object.entries(POLYGONS)) {
+      const xs = points.map((p) => p[0]);
+      const ys = points.map((p) => p[1]);
+      expect(Math.min(...xs), kind).toBeCloseTo(0, 6);
+      expect(Math.max(...xs), kind).toBeCloseTo(1, 6);
+      expect(Math.min(...ys), kind).toBeCloseTo(0, 6);
+      expect(Math.max(...ys), kind).toBeCloseTo(1, 6);
+    }
+  });
+
+  it('gives the star ten alternating vertices and the polygons their side count', () => {
+    expect(POLYGONS.star).toHaveLength(10);
+    expect(POLYGONS.pentagon).toHaveLength(5);
+    expect(POLYGONS.hexagon).toHaveLength(6);
+  });
+
+  // Fill is meaningless without an enclosed area, and the toolbar disables it
+  // for those tools rather than letting the flag lie.
+  it('only lets enclosing shapes be filled', () => {
+    expect(isFillable('rect')).toBe(true);
+    expect(isFillable('star')).toBe(true);
+    expect(isFillable('line')).toBe(false);
+    expect(isFillable('arrow')).toBe(false);
+    expect(isFillable('pen')).toBe(false);
+  });
+
+  it('records the fill flag on the shape it belongs to, never on a line', () => {
+    const filled = createSketch();
+    beginShape(filled, { tool: 'ellipse', x: 0, y: 0, fill: true });
+    expect(filled.draft.fill).toBe(true);
+
+    const line = createSketch();
+    beginShape(line, { tool: 'line', x: 0, y: 0, fill: true });
+    expect(line.draft.fill).toBe(false);
+  });
+});
+
+describe('selecting and transforming any item', () => {
+  function sketchWith(item) {
+    const state = createSketch();
+    state.items = [item];
+    return state;
+  }
+
+  it('hit-tests shapes and strokes, not just photos', () => {
+    const shape = sketchWith({ kind: 'rect', color: '#000', width: 4, x0: 10, y0: 10, x1: 60, y1: 40 });
+    expect(itemAt(shape, 30, 20)).toBe(0);
+    expect(itemAt(shape, 200, 200)).toBe(-1);
+
+    const stroke = sketchWith({ kind: 'stroke', color: '#000', width: 4, points: [{ x: 5, y: 5 }, { x: 25, y: 30 }] });
+    expect(itemAt(stroke, 15, 20)).toBe(0);
+  });
+
+  it('picks the topmost item when they overlap', () => {
+    const state = createSketch();
+    state.items = [
+      { kind: 'rect', width: 2, x0: 0, y0: 0, x1: 100, y1: 100 },
+      { kind: 'rect', width: 2, x0: 10, y0: 10, x1: 50, y1: 50 },
+    ];
+    expect(itemAt(state, 20, 20)).toBe(1);
+  });
+
+  it('ignores eraser strokes, which are holes rather than objects', () => {
+    const state = sketchWith({ kind: 'stroke', mode: 'erase', width: 10, points: [{ x: 5, y: 5 }, { x: 20, y: 20 }] });
+    expect(itemAt(state, 10, 10)).toBe(-1);
+  });
+
+  it('moves a shape without flipping the direction it was drawn in', () => {
+    const state = sketchWith({ kind: 'arrow', width: 4, x0: 80, y0: 80, x1: 20, y1: 20 }); // drawn right-to-left
+    beginTransform(state, 0);
+    applyTransform(state, { x: 100, y: 100 });
+    const item = state.items[0];
+    expect(boxOf(item)).toMatchObject({ x: 100, y: 100, width: 60, height: 60 });
+    expect(item.x0).toBeGreaterThan(item.x1); // still points the same way
+  });
+
+  it('scales a stroke’s points into the new box', () => {
+    const state = sketchWith({ kind: 'stroke', width: 2, points: [{ x: 0, y: 0 }, { x: 10, y: 10 }, { x: 20, y: 0 }] });
+    beginTransform(state, 0);
+    applyTransform(state, { x: 0, y: 0, width: 40, height: 20 });
+    expect(state.items[0].points).toEqual([{ x: 0, y: 0 }, { x: 20, y: 20 }, { x: 40, y: 0 }]);
+  });
+
+  it('does not reach back through the undo snapshot when a stroke is dragged', () => {
+    const state = sketchWith({ kind: 'stroke', width: 2, points: [{ x: 0, y: 0 }, { x: 10, y: 10 }] });
+    const before = JSON.stringify(state.items[0].points);
+    beginTransform(state, 0);
+    applyTransform(state, { x: 50, y: 50 });
+    endTransform(state);
+    undo(state);
+    expect(JSON.stringify(state.items[0].points)).toBe(before);
+  });
+});
+
+describe('text boxes', () => {
+  it('adds a text box and reports blank content so the panel can drop it', () => {
+    const state = createSketch();
+    const index = addText(state, { x: 5, y: 5, width: 100, height: 30 });
+    expect(setText(state, index, '   ')).toBe(false);
+    expect(setText(state, index, 'hello')).toBe(true);
+    expect(state.items[index]).toMatchObject({ kind: 'text', text: 'hello', x: 5, y: 5 });
+  });
+
+  it('wraps greedily at the box width and keeps explicit line breaks', () => {
+    const measure = (s) => s.length * 10; // 10px per character
+    expect(wrapText('aaa bbb ccc', 70, measure)).toEqual(['aaa bbb', 'ccc']);
+    expect(wrapText('one\ntwo', 1000, measure)).toEqual(['one', 'two']);
+  });
+
+  it('moves and resizes like any other item', () => {
+    const state = createSketch();
+    addText(state, { x: 0, y: 0, width: 100, height: 30, text: 'hi' });
+    beginTransform(state, 0);
+    applyTransform(state, { x: 20, y: 40, width: 200, height: 60 });
+    expect(boxOf(state.items[0])).toEqual({ x: 20, y: 40, width: 200, height: 60 });
   });
 });

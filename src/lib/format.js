@@ -12,7 +12,7 @@
 // may also return null: pressing it inside an image/attachment ref
 // (![name](owl-img:…)) is a deliberate no-op, not an unwrap.
 
-import { splitTableRow, tableRow, isSeparatorRow, isTableRowLine, tableBlockAt, alignTableLines } from './table.js';
+import { splitTableRow, tableRow, isSeparatorRow, isTableRowLine, tableCellSpans, tableBlockAt, alignTableLines } from './table.js';
 
 // Clamp a selection into [0, body.length] and normalize start <= end.
 function clamp(body, start, end) {
@@ -68,9 +68,12 @@ function enclosingSpan(body, s, e, left, right) {
   }
 }
 
-export function toggleInline(body, start, end, { left, right }) {
-  let [s, e] = clamp(body, start, end);
-  [s, e] = trimEdges(body, s, e);
+export function toggleInline(body, start, end, marker) {
+  const [s, e] = clamp(body, start, end);
+  return applyPerSegment(body, s, e, (b, a, z) => toggleInlineOne(b, a, z, marker));
+}
+
+function toggleInlineOne(body, s, e, { left, right }) {
   const sel = body.slice(s, e);
   // Markers immediately OUTSIDE the selection -> unwrap. (Also catches the
   // empty `**|**` pair right after a collapsed insert, so toggling twice undoes.)
@@ -101,6 +104,484 @@ export function toggleInline(body, start, end, { left, right }) {
     return { replaceStart: s, replaceEnd: e, insert: left + right, selStart: s + left.length, selEnd: s + left.length };
   }
   return { replaceStart: s, replaceEnd: e, insert: left + sel + right, selStart: s + left.length, selEnd: s + left.length + sel.length };
+}
+
+/* ------------------------------------------------------ highlight + casing */
+
+// An inline wrapper (<mark>, a font-color <span>, **bold**) is only valid
+// INSIDE one block-level container. The body is Markdown source, so a single
+// pair stretched across a selection can straddle a boundary the renderer
+// enforces later, and the result is silently wrong rather than loudly broken:
+//   * across a table cell — `| <mark>a | b</mark> |` splits into two cells and
+//     the sanitizer drops the orphaned tag, so only the first cell highlights;
+//   * across a blank line — the two halves land in different <p> blocks and
+//     everything after the first paragraph loses the formatting.
+// So a selection is cut into the segments a wrapper may legally cover: one per
+// line, and one per cell within a table row. Each is wrapped on its own and the
+// pieces are stitched back into a single edit (one undo step, as before).
+//
+// A line's structural prefix — indent, quote markers, list marker, heading
+// hashes — stays outside the segment for the same reason: `<mark>- a</mark>`
+// is no longer a list item, so selecting three bullets and highlighting them
+// would flatten the list into a paragraph.
+const BLOCK_PREFIX_RE = /^(\s*(?:> )*(?:[-*+] |\d+[.)] )?(?:#{1,6}\s+)?)/;
+
+function selectionSegments(body, s, e) {
+  if (s === e) return [[s, e]]; // a collapsed caret is always one segment
+  const segments = [];
+  let lineStart = s === 0 ? 0 : body.lastIndexOf('\n', s - 1) + 1;
+  while (lineStart < e || (lineStart === e && segments.length === 0)) {
+    let lineEnd = body.indexOf('\n', lineStart);
+    if (lineEnd === -1) lineEnd = body.length;
+    const from = Math.max(s, lineStart);
+    const to = Math.min(e, lineEnd);
+    const line = body.slice(lineStart, lineEnd);
+    if (from < to) {
+      if (isTableRowLine(line)) {
+        // A delimiter row carries no prose, so formatting it would only break
+        // the table's cell count.
+        if (!isSeparatorRow(line)) {
+          for (const [cellStart, cellEnd] of tableCellSpans(line)) {
+            const [a, b] = trimEdges(body, Math.max(from, lineStart + cellStart), Math.min(to, lineStart + cellEnd));
+            if (a < b) segments.push([a, b]);
+          }
+        }
+      } else {
+        const prefix = BLOCK_PREFIX_RE.exec(line)?.[1].length || 0;
+        const [a, b] = trimEdges(body, Math.max(from, lineStart + prefix), to);
+        if (a < b) segments.push([a, b]);
+      }
+    }
+    if (lineEnd >= body.length) break;
+    lineStart = lineEnd + 1;
+  }
+  return segments;
+}
+
+// Run a single-span formatter over every segment of the selection and stitch
+// the results into one edit. Segments run left to right and never overlap, so
+// the pieces concatenate in order.
+function applyPerSegment(body, s, e, applyOne) {
+  const segments = selectionSegments(body, s, e);
+  if (segments.length === 0) return null;
+  if (segments.length === 1) return applyOne(body, segments[0][0], segments[0][1]);
+  const edits = [];
+  for (const [from, to] of segments) {
+    const edit = applyOne(body, from, to);
+    if (edit) edits.push(edit);
+  }
+  if (edits.length === 0) return null;
+  // An unwrap reaches back to its opening tag, which can sit before the
+  // selection, so the block has to cover the edits as well as the segments.
+  const blockStart = Math.min(edits[0].replaceStart, segments[0][0]);
+  const blockEnd = Math.max(edits[edits.length - 1].replaceEnd, segments[segments.length - 1][1]);
+  let insert = '';
+  let cursor = blockStart;
+  for (const edit of edits) {
+    if (edit.replaceStart < cursor) return null; // overlapping spans: refuse rather than corrupt
+    insert += body.slice(cursor, edit.replaceStart) + edit.insert;
+    cursor = edit.replaceEnd;
+  }
+  insert += body.slice(cursor, blockEnd);
+  return { replaceStart: blockStart, replaceEnd: blockEnd, insert, selStart: blockStart, selEnd: blockStart + insert.length };
+}
+
+// Highlight colors are represented as classes rather than inline styles. That
+// keeps note HTML on a small, audited palette and lets DOMPurify remain the
+// authority over arbitrary pasted HTML.
+const HIGHLIGHT_OPEN_RE = /<mark(?:\s[^>]*)?>/gi;
+const HIGHLIGHT_CLOSE_RE = /<\/mark\s*>/gi;
+const HIGHLIGHT_CLOSE = '</mark>';
+const HIGHLIGHT_COLORS = new Set(['yellow', 'green', 'cyan', 'blue', 'pink', 'orange', 'purple', 'gray']);
+
+function highlightSpanAt(body, s, e) {
+  const lineStart = s === 0 ? 0 : body.lastIndexOf('\n', s - 1) + 1;
+  let lineEnd = body.indexOf('\n', lineStart);
+  if (lineEnd === -1) lineEnd = body.length;
+  if (e > lineEnd) return null;
+
+  HIGHLIGHT_OPEN_RE.lastIndex = lineStart;
+  for (;;) {
+    const open = HIGHLIGHT_OPEN_RE.exec(body);
+    if (!open || open.index >= lineEnd) return null;
+    const contentStart = open.index + open[0].length;
+    HIGHLIGHT_CLOSE_RE.lastIndex = contentStart;
+    const close = HIGHLIGHT_CLOSE_RE.exec(body);
+    if (!close || close.index > lineEnd) return null;
+    const closeStart = close.index;
+    const closeEnd = closeStart + close[0].length;
+    const selectionInside = contentStart <= s && e <= closeStart;
+    const wholeSpanSelected = s === open.index && e === closeEnd;
+    if (selectionInside || wholeSpanSelected) {
+      return {
+        openStart: open.index,
+        contentStart,
+        closeStart,
+        closeEnd,
+        color: /\bhighlight-([a-z-]+)/i.exec(open[0])?.[1]?.toLowerCase() || 'yellow',
+      };
+    }
+    HIGHLIGHT_OPEN_RE.lastIndex = closeEnd;
+  }
+}
+
+function stripHighlightTags(text) {
+  return text.replace(HIGHLIGHT_OPEN_RE, '').replace(HIGHLIGHT_CLOSE_RE, '');
+}
+
+function unwrapHighlight(body, span, s, e) {
+  const inner = body.slice(span.contentStart, span.closeStart);
+  const wholeSpanSelected = s === span.openStart && e === span.closeEnd;
+  const relativeStart = wholeSpanSelected ? 0 : s - span.contentStart;
+  const relativeEnd = wholeSpanSelected ? inner.length : e - span.contentStart;
+  return {
+    replaceStart: span.openStart,
+    replaceEnd: span.closeEnd,
+    insert: inner,
+    selStart: span.openStart + relativeStart,
+    selEnd: span.openStart + relativeEnd,
+  };
+}
+
+function setHighlightOne(body, s, e, color) {
+  const safeColor = HIGHLIGHT_COLORS.has(color) ? color : 'yellow';
+  // Keep the original yellow syntax byte-compatible with older notes. Other
+  // palette choices carry one of the fixed classes above.
+  const left = safeColor === 'yellow' ? '<mark>' : `<mark class="highlight-${safeColor}">`;
+  const span = highlightSpanAt(body, s, e);
+  if (span) {
+    const inner = body.slice(span.contentStart, span.closeStart);
+    const wholeSpanSelected = s === span.openStart && e === span.closeEnd;
+    const relativeStart = wholeSpanSelected ? 0 : s - span.contentStart;
+    const relativeEnd = wholeSpanSelected ? inner.length : e - span.contentStart;
+    return {
+      replaceStart: span.openStart,
+      replaceEnd: span.closeEnd,
+      insert: left + inner + HIGHLIGHT_CLOSE,
+      selStart: span.openStart + left.length + relativeStart,
+      selEnd: span.openStart + left.length + relativeEnd,
+    };
+  }
+
+  // A broad selection can include one or more already-highlighted fragments.
+  // Flatten those generated tags before wrapping so recoloring never nests marks.
+  const inner = stripHighlightTags(body.slice(s, e));
+  return {
+    replaceStart: s,
+    replaceEnd: e,
+    insert: left + inner + HIGHLIGHT_CLOSE,
+    selStart: s + left.length,
+    selEnd: s + left.length + inner.length,
+  };
+}
+
+function removeHighlightOne(body, s, e) {
+  const span = highlightSpanAt(body, s, e);
+  if (span) return unwrapHighlight(body, span, s, e);
+  const selected = body.slice(s, e);
+  const inner = stripHighlightTags(selected);
+  if (inner === selected) return null;
+  return { replaceStart: s, replaceEnd: e, insert: inner, selStart: s, selEnd: s + inner.length };
+}
+
+function toggleHighlightOne(body, s, e, color) {
+  const span = highlightSpanAt(body, s, e);
+  return span ? unwrapHighlight(body, span, s, e) : setHighlightOne(body, s, e, color);
+}
+
+// Set (or recolor) a highlight. Unlike the main toolbar toggle, choosing a
+// swatch never removes the highlight when the chosen color already matches.
+export function setHighlight(body, start, end, color = 'yellow') {
+  const [s, e] = clamp(body, start, end);
+  return applyPerSegment(body, s, e, (b, a, z) => setHighlightOne(b, a, z, color));
+}
+
+export function removeHighlight(body, start, end) {
+  const [s, e] = clamp(body, start, end);
+  return applyPerSegment(body, s, e, removeHighlightOne);
+}
+
+export function toggleHighlight(body, start, end, color = 'yellow') {
+  const [s, e] = clamp(body, start, end);
+  // A multi-segment selection reads as "highlight all of this": toggling off is
+  // decided per segment, so an already-marked cell clears while its neighbours
+  // gain the color, matching what each segment would do on its own.
+  return applyPerSegment(body, s, e, (b, a, z) => toggleHighlightOne(b, a, z, color));
+}
+
+const TEXT_COLOR_OPEN_RE = /<span\s+class=["']text-color-([a-z-]+)["']>/gi;
+const SPAN_TAG_RE = /<\/?span\b[^>]*>/gi;
+// Mirrors TEXT_COLORS in src/app/format-bar.js — the allow-list that keeps a
+// generated span on the audited palette. 'gold' stays accepted so notes written
+// before the palette was revised keep rendering their color.
+const TEXT_COLORS = new Set(['red', 'orange', 'green', 'teal', 'blue', 'purple', 'pink', 'gray', 'gold']);
+
+function matchingSpanClose(body, contentStart, limit = body.length) {
+  SPAN_TAG_RE.lastIndex = contentStart;
+  let depth = 1;
+  for (;;) {
+    const tag = SPAN_TAG_RE.exec(body);
+    if (!tag || tag.index > limit) return null;
+    depth += /^<span\b/i.test(tag[0]) ? 1 : -1;
+    if (depth === 0) return { start: tag.index, end: tag.index + tag[0].length };
+  }
+}
+
+function textColorSpanAt(body, s, e) {
+  const lineStart = s === 0 ? 0 : body.lastIndexOf('\n', s - 1) + 1;
+  let lineEnd = body.indexOf('\n', lineStart);
+  if (lineEnd === -1) lineEnd = body.length;
+  if (e > lineEnd) return null;
+
+  TEXT_COLOR_OPEN_RE.lastIndex = lineStart;
+  for (;;) {
+    const open = TEXT_COLOR_OPEN_RE.exec(body);
+    if (!open || open.index >= lineEnd) return null;
+    const contentStart = open.index + open[0].length;
+    const close = matchingSpanClose(body, contentStart, lineEnd);
+    if (!close) return null;
+    const closeEnd = close.end;
+    const selectionInside = contentStart <= s && e <= close.start;
+    const wholeSpanSelected = s === open.index && e === closeEnd;
+    if (selectionInside || wholeSpanSelected) {
+      return {
+        openStart: open.index,
+        contentStart,
+        closeStart: close.start,
+        closeEnd,
+      };
+    }
+    TEXT_COLOR_OPEN_RE.lastIndex = closeEnd;
+  }
+}
+
+function stripTextColorSpans(text) {
+  let out = text;
+  for (;;) {
+    TEXT_COLOR_OPEN_RE.lastIndex = 0;
+    const open = TEXT_COLOR_OPEN_RE.exec(out);
+    if (!open) return out;
+    const contentStart = open.index + open[0].length;
+    const close = matchingSpanClose(out, contentStart);
+    if (!close) return out;
+    out = out.slice(0, open.index) + out.slice(contentStart, close.start) + out.slice(close.end);
+  }
+}
+
+function setTextColorOne(body, s, e, color) {
+  const safeColor = TEXT_COLORS.has(color) ? color : 'red';
+  const left = `<span class="text-color-${safeColor}">`;
+  const right = '</span>';
+  const span = textColorSpanAt(body, s, e);
+  if (span) {
+    const inner = body.slice(span.contentStart, span.closeStart);
+    const wholeSpanSelected = s === span.openStart && e === span.closeEnd;
+    const relativeStart = wholeSpanSelected ? 0 : s - span.contentStart;
+    const relativeEnd = wholeSpanSelected ? inner.length : e - span.contentStart;
+    return {
+      replaceStart: span.openStart,
+      replaceEnd: span.closeEnd,
+      insert: left + inner + right,
+      selStart: span.openStart + left.length + relativeStart,
+      selEnd: span.openStart + left.length + relativeEnd,
+    };
+  }
+  const inner = stripTextColorSpans(body.slice(s, e));
+  return {
+    replaceStart: s,
+    replaceEnd: e,
+    insert: left + inner + right,
+    selStart: s + left.length,
+    selEnd: s + left.length + inner.length,
+  };
+}
+
+function removeTextColorOne(body, s, e) {
+  const span = textColorSpanAt(body, s, e);
+  if (span) {
+    const inner = body.slice(span.contentStart, span.closeStart);
+    const wholeSpanSelected = s === span.openStart && e === span.closeEnd;
+    const relativeStart = wholeSpanSelected ? 0 : s - span.contentStart;
+    const relativeEnd = wholeSpanSelected ? inner.length : e - span.contentStart;
+    return {
+      replaceStart: span.openStart,
+      replaceEnd: span.closeEnd,
+      insert: inner,
+      selStart: span.openStart + relativeStart,
+      selEnd: span.openStart + relativeEnd,
+    };
+  }
+  const selected = body.slice(s, e);
+  const inner = stripTextColorSpans(selected);
+  if (selected === inner) return null;
+  return { replaceStart: s, replaceEnd: e, insert: inner, selStart: s, selEnd: s + inner.length };
+}
+
+// Apply one of the fixed font colors. A palette pick is a setter rather than a
+// toggle: choosing a different swatch recolors an existing generated span.
+export function setTextColor(body, start, end, color = 'red') {
+  const [s, e] = clamp(body, start, end);
+  return applyPerSegment(body, s, e, (b, a, z) => setTextColorOne(b, a, z, color));
+}
+
+export function removeTextColor(body, start, end) {
+  const [s, e] = clamp(body, start, end);
+  return applyPerSegment(body, s, e, removeTextColorOne);
+}
+
+const WORD_CHAR_RE = /[\p{L}\p{M}\p{N}'’]/u;
+const LETTER_RE = /\p{L}/u;
+
+function wordAt(body, pos) {
+  let at = Math.max(0, Math.min(pos, body.length));
+  if (!WORD_CHAR_RE.test(body[at] || '') && at > 0 && WORD_CHAR_RE.test(body[at - 1])) at -= 1;
+  if (!WORD_CHAR_RE.test(body[at] || '')) return null;
+  let start = at;
+  let end = at + 1;
+  while (start > 0 && WORD_CHAR_RE.test(body[start - 1])) start -= 1;
+  while (end < body.length && WORD_CHAR_RE.test(body[end])) end += 1;
+  return [start, end];
+}
+
+// Word changes the case of what the reader sees; here the selection is Markdown
+// source, where the same transform would also rewrite the markup around it. A
+// re-cased tag name is harmless (HTML tag names are case-insensitive) but the
+// rest is not: `class="text-color-red"` becomes `class="TEXT-COLOR-RED"`, which
+// no longer matches the stylesheet, so the font color or highlight silently
+// disappears. Link targets and `owl-img:` attachment ids are case-sensitive too,
+// so UPPERCASE would break every link and orphan every image in the selection.
+// These runs are therefore copied through untouched.
+const CASE_PROTECTED_RE = /<[^>\n]*>|`+[^`]*`+|\]\([^)\n]*\)|\bhttps?:\/\/\S+|\bowl-[a-z]+:[A-Za-z0-9]+/gi;
+
+// Split `text` into [plain, markup, plain, markup, …] runs and re-case only the
+// plain ones. `transform` may be stateful (sentence case tracks whether the next
+// letter opens a sentence) and is called on the plain runs in order.
+function recaseAroundMarkup(text, transform) {
+  let out = '';
+  let last = 0;
+  CASE_PROTECTED_RE.lastIndex = 0;
+  for (;;) {
+    const markup = CASE_PROTECTED_RE.exec(text);
+    if (!markup) break;
+    out += transform(text.slice(last, markup.index)) + markup[0];
+    last = markup.index + markup[0].length;
+  }
+  return out + transform(text.slice(last));
+}
+
+function titleCase(text) {
+  return text.toLowerCase().replace(/\p{L}[\p{L}\p{M}'’]*/gu, (word) => word.replace(/^\p{L}/u, (letter) => letter.toUpperCase()));
+}
+
+function toggleCase(text) {
+  return Array.from(text, (char) => {
+    const lower = char.toLowerCase();
+    const upper = char.toUpperCase();
+    return char === lower && char !== upper ? upper : lower;
+  }).join('');
+}
+
+// Sentence case is the one stateful mode: it has to remember, across the markup
+// runs it skips, whether the next letter still opens a sentence.
+function sentenceCaser() {
+  let startsSentence = true;
+  return (text) => {
+    let out = '';
+    for (const char of text) {
+      if (LETTER_RE.test(char)) {
+        out += startsSentence ? char.toUpperCase() : char.toLowerCase();
+        startsSentence = false;
+      } else {
+        out += char;
+        if (/[.!?]/.test(char) || char === '\n') startsSentence = true;
+      }
+    }
+    return out;
+  };
+}
+
+const CASE_MODES = {
+  sentence: sentenceCaser,
+  lower: () => (text) => text.toLowerCase(),
+  upper: () => (text) => text.toUpperCase(),
+  title: () => titleCase,
+  toggle: () => toggleCase,
+};
+
+// Word-style Change Case. With no selection, act on the word under the caret so
+// the command remains useful without requiring a precise drag-selection first.
+export function changeCase(body, start, end, mode) {
+  const transform = CASE_MODES[mode]?.();
+  if (!transform) return null;
+  let [s, e] = clamp(body, start, end);
+  if (s === e) {
+    const word = wordAt(body, s);
+    if (!word) return null;
+    // The caret may be sitting inside a tag or a URL, where "the word under the
+    // caret" is markup (`red` in text-color-red). Re-casing that is the bug this
+    // guards against, so there is nothing safe to do.
+    if (insideMarkup(body, word[0], word[1])) return null;
+    [s, e] = word;
+  }
+  const insert = recaseAroundMarkup(body.slice(s, e), transform);
+  if (insert === body.slice(s, e)) return null;
+  return { replaceStart: s, replaceEnd: e, insert, selStart: s, selEnd: s + insert.length };
+}
+
+// True when [s, e) overlaps a protected markup run on its own line.
+function insideMarkup(body, s, e) {
+  const lineStart = s === 0 ? 0 : body.lastIndexOf('\n', s - 1) + 1;
+  let lineEnd = body.indexOf('\n', lineStart);
+  if (lineEnd === -1) lineEnd = body.length;
+  const line = body.slice(lineStart, lineEnd);
+  CASE_PROTECTED_RE.lastIndex = 0;
+  for (;;) {
+    const markup = CASE_PROTECTED_RE.exec(line);
+    if (!markup) return false;
+    const from = lineStart + markup.index;
+    if (from < e && s < from + markup[0].length) return true;
+  }
+}
+
+const ALIGNMENTS = new Set(['left', 'center', 'right']);
+const ALIGN_CLASS_RE = /\bclass=(["'])text-align-(?:left|center|right)\1/i;
+const FENCE_LINE_RE = /^\s*```/;
+const THEMATIC_BREAK_RE = /^\s{0,3}(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})$/;
+
+// Align every selected logical line while leaving Markdown's structural prefix
+// outside the generated span. That keeps headings/lists/quotes parseable; table
+// rows, thematic breaks and fenced code are intentionally left byte-identical.
+export function setAlignment(body, start, end, alignment) {
+  if (!ALIGNMENTS.has(alignment)) return null;
+  const [s, e] = clamp(body, start, end);
+  const [blockStart, blockEnd] = lineBlock(body, s, e);
+  const lines = body.slice(blockStart, blockEnd).split('\n');
+  let fenced = false;
+  for (const line of body.slice(0, blockStart).split('\n')) {
+    if (FENCE_LINE_RE.test(line)) fenced = !fenced;
+  }
+  const out = lines.map((line) => {
+    if (FENCE_LINE_RE.test(line)) { fenced = !fenced; return line; }
+    if (fenced || !line.trim() || isTableRowLine(line) || THEMATIC_BREAK_RE.test(line)) return line;
+    const prefix = BLOCK_PREFIX_RE.exec(line)?.[1] || '';
+    const content = line.slice(prefix.length);
+    if (ALIGN_CLASS_RE.test(content)) {
+      return prefix + content.replace(
+        ALIGN_CLASS_RE,
+        (_match, quote) => `class=${quote}text-align-${alignment}${quote}`,
+      );
+    }
+    return `${prefix}<span class="text-align-${alignment}">${content}</span>`;
+  });
+  const insert = out.join('\n');
+  if (insert === body.slice(blockStart, blockEnd)) return null;
+  return {
+    replaceStart: blockStart,
+    replaceEnd: blockEnd,
+    insert,
+    selStart: blockStart,
+    selEnd: blockStart + insert.length,
+  };
 }
 
 const HEADING_PREFIXES = ['', '# ', '## ', '### '];
@@ -384,6 +865,73 @@ export function insertTable(body, start, end) {
     ...rows.map((r) => tableRow(r.concat(Array(columns - r.length).fill('')))),
   ].join('\n');
   return { replaceStart: blockStart, replaceEnd: blockEnd, insert, selStart: blockStart, selEnd: blockStart + insert.length };
+}
+
+// The full line ending at `pos` (or the one `pos` sits inside), and the line
+// starting at `pos` — the neighbours a freshly inserted block has to clear.
+function lineBefore(body, pos) {
+  if (pos === 0) return '';
+  const end = body[pos - 1] === '\n' ? pos - 1 : pos;
+  const start = end === 0 ? 0 : body.lastIndexOf('\n', end - 1) + 1;
+  return body.slice(start, end);
+}
+
+function lineAfter(body, pos) {
+  const start = body[pos] === '\n' ? pos + 1 : pos;
+  let end = body.indexOf('\n', start);
+  if (end === -1) end = body.length;
+  return body.slice(start, end);
+}
+
+// A table pasted straight under one of these is absorbed by it.
+function needsBlankLine(line) {
+  return isTableRowLine(line) || /^\s*(?:[-*+]|\d+[.)])\s/.test(line) || /^\s*>/.test(line);
+}
+
+// Insert a blank table with an explicit Word-style grid size. `rows` counts
+// visible rows (the Markdown delimiter is structural and does not count), so a
+// 3 × 2 choice produces a three-cell header plus one editable body row.
+//
+// The size picker is an INSERT command rather than Convert Text to Table: if
+// text is selected, keep it intact and place the table immediately after it.
+// The main Table button remains the fast way to convert selected lines.
+export function insertSizedTable(body, start, end, columns, rows) {
+  const [s, e] = clamp(body, start, end);
+  const columnCount = Math.max(1, Math.min(20, Math.trunc(Number(columns)) || 1));
+  const rowCount = Math.max(1, Math.min(20, Math.trunc(Number(rows)) || 1));
+  let pos = e > s ? e : s;
+
+  // A table cannot be nested inside a GFM cell. If the caret is already in one,
+  // insert the new table after that block; the main button handles repair and
+  // adding a column to the existing table.
+  const existing = tableBlockAt(body, pos);
+  if (existing) pos = existing.blockEnd;
+
+  // Two table blocks that touch are ONE table to GFM: the new header becomes a
+  // body row of the old table and the new delimiter row renders as a row of
+  // literal '---' cells. A list or quote line directly above swallows the table
+  // the same way, through lazy continuation. A blank line keeps the blocks apart.
+  const previous = lineBefore(body, pos);
+  const next = lineAfter(body, pos);
+  let before = pos === 0 || body[pos - 1] === '\n' ? '' : '\n';
+  if (previous.trim() && needsBlankLine(previous)) before += '\n';
+  let after = pos === body.length || body[pos] === '\n' ? '' : '\n';
+  if (next.trim() && isTableRowLine(next)) after += '\n';
+  const emptyRow = () => tableRow(Array(columnCount).fill(''));
+  const lines = [
+    tableRow(tableHeader(columnCount)),
+    tableRow(Array(columnCount).fill('---')),
+    ...Array.from({ length: rowCount - 1 }, emptyRow),
+  ];
+  const insert = `${before}${lines.join('\n')}\n${after}`;
+  const selectionStart = pos + before.length + 2;
+  return {
+    replaceStart: pos,
+    replaceEnd: pos,
+    insert,
+    selStart: selectionStart,
+    selEnd: selectionStart + HEADER_PLACEHOLDER(0).length,
+  };
 }
 
 // A markdown link (or image) on one line: [text](target) with optional

@@ -205,12 +205,19 @@ export function renderEditor(
     phoneticsBtn.className = `phonetics-toggle${phonetics.enabled ? ' on' : ''}`;
     phoneticsBtn.textContent = 'ˈɑ';
     phoneticsBtn.disabled = !!phonetics.busy;
-    // Names the three languages AND says "only": the button gives no feedback on a note
-    // written in anything else, so the tooltip is the one place a reader can find out that
-    // silence is the feature working as intended rather than failing.
+    // "Pronunciation", not "readings": a reading is the term of art for a
+    // character's pronunciation, but it collides head-on with the "📖 Reading
+    // mode" hint a few pixels away, which is the preview-only LAYOUT and has
+    // nothing to do with this button.
+    //
+    // Says where it appears, then names the three languages AND says "only": the
+    // button gives no feedback on a note written in anything else, so the tooltip
+    // is the one place a reader can find out that silence is the feature working
+    // as intended rather than failing.
     phoneticsBtn.title = phonetics.busy
       ? 'Loading the pronunciation dictionary…'
-      : `${phonetics.enabled ? 'Hide' : 'Show'} readings in the preview — English (IPA), Japanese (hiragana) and Chinese (pinyin) only`;
+      : `${phonetics.enabled ? 'Hide' : 'Show'} pronunciation above each word in the preview`
+        + ' — English (IPA), Japanese (hiragana) and Chinese (pinyin) only';
     phoneticsBtn.addEventListener('click', () => {
       Promise.resolve(phonetics.onToggle?.()).catch((err) => console.warn('phonetics toggle failed', err));
     });
@@ -310,7 +317,7 @@ export function renderEditor(
     insertText(edit.insert, edit.replaceStart, edit.replaceEnd);
     ta.setSelectionRange(edit.selStart, edit.selEnd);
   };
-  renderFormatBar(formatBar, { apply: applyFormat, actions: fmtActions });
+  const cleanupFormatBar = renderFormatBar(formatBar, { apply: applyFormat, actions: fmtActions });
 
   // Compact current-note search lives at the right edge of the formatting row. It
   // highlights every body match without taking focus away while the user is typing;
@@ -1133,6 +1140,7 @@ export function renderEditor(
       document.removeEventListener('keydown', onLightboxKeydown);
       window.removeEventListener('resize', onLightboxResize);
       document.removeEventListener('click', closeShareMenu);
+      cleanupFormatBar?.();
     }, // cancel pending auto-save + stop observing on teardown
   };
 }

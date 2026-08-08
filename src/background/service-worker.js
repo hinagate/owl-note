@@ -238,11 +238,33 @@ async function showOverlay(tabId) {
   }
 }
 
-function updateOverlay(tabId, patch) {
+function sendToOverlay(tabId, message) {
   try {
-    const pending = chrome.tabs?.sendMessage?.(tabId, { type: 'owl-overlay-update', ...patch });
+    const pending = chrome.tabs?.sendMessage?.(tabId, message);
     pending?.catch?.(() => {});
   } catch { /* tab gone */ }
+}
+
+function updateOverlay(tabId, patch) {
+  sendToOverlay(tabId, { type: 'owl-overlay-update', ...patch });
+}
+
+// Full mode reads the whole session back, which is the one place the overlay
+// needs more than the live tail. Deliberately pull-based: pushing the full
+// transcript on every cue is the O(n)-per-cue write the block design exists to
+// avoid, and an hour-long capture would spend its last minutes re-serializing
+// everything once a second.
+async function sendTranscriptHistory() {
+  const session = await getSession();
+  if (!session) return null;
+  sendToOverlay(session.tabId, {
+    type: 'owl-overlay-history',
+    // Real markdown here, not the flattened pill text: full mode has the room to
+    // show the `## mm:ss` headings and paragraph breaks the note will carry.
+    text: cuesToMarkdown(session.cues),
+    cueCount: session.cueCount || session.cues.length,
+  });
+  return true;
 }
 
 function transcribeArmStore() {
@@ -617,6 +639,7 @@ export function handleCaptureMessage(message) {
     case 'owl-panel-save': return handleSaveTranscript();
     case 'owl-panel-discard': return handleDiscardTranscript();
     case 'owl-panel-resume': return handleResumeCapture();
+    case 'owl-panel-history': return sendTranscriptHistory();
     default: return undefined;
   }
 }

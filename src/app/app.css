@@ -630,19 +630,92 @@ body.resizing { user-select: none; cursor: col-resize; }
 }
 .draw-tool:hover, .draw-undo:hover, .draw-redo:hover, .draw-clear:hover { background: #f1f3f4; }
 .draw-tool.active { border-color: #1a73e8; background: #e8f0fe; }
+/* A tilted rubber with a worn band across it — the outline square this replaced
+   read as "blank", not "eraser". Drawn rather than set in a glyph because no
+   font ships a decent eraser; line-height goes to 0 alongside font-size or the
+   hidden fallback character still claims a full line box under the icon. */
+.draw-tool-erase {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0; line-height: 0;
+}
+.draw-tool-erase::before {
+  content: "";
+  display: block;
+  width: 17px; height: 11px;
+  box-sizing: border-box;
+  border: 1.5px solid currentColor;
+  border-radius: 2px 3px 3px 2px;
+  background: linear-gradient(to right, currentColor 0 38%, transparent 38%);
+  transform: rotate(-32deg);
+}
 .draw-undo:disabled, .draw-redo:disabled, .draw-clear:disabled { opacity: 0.4; cursor: default; }
+/* Paint's swatch grid: ten across, two down, so twenty colors cost one row of
+   toolbar height rather than twenty slots. */
+.draw-palette { display: grid; grid-template-columns: repeat(10, 17px); gap: 3px; }
 .draw-color {
-  width: 26px; height: 26px; padding: 0; border: 2px solid transparent;
-  border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(32, 33, 36, 0.16); cursor: pointer;
+  width: 17px; height: 17px; padding: 0; border: 1px solid transparent;
+  border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(32, 33, 36, 0.22); cursor: pointer;
 }
-.draw-color.active { border-color: #1a73e8; }
-.draw-width {
-  display: grid; place-items: center; width: 34px; height: 34px; padding: 0;
-  border: 1px solid #dadce0; border-radius: 8px; background: #fff;
-  color: var(--text); line-height: 1; cursor: pointer;
+.draw-color:hover { transform: scale(1.12); }
+.draw-color.active { border-color: #1a73e8; box-shadow: inset 0 0 0 1px #fff, 0 0 0 1px #1a73e8; }
+/* "Edit colors" — the native picker, wearing a swatch. */
+.draw-custom-color {
+  position: relative; display: grid; place-items: center;
+  width: 30px; height: 30px; border: 1px solid #dadce0; border-radius: 8px;
+  background: conic-gradient(#ed1c24, #fff200, #22b14c, #00a2e8, #3f48cc, #a349a4, #ed1c24);
+  cursor: pointer; overflow: hidden;
 }
-.draw-width.active { border-color: #1a73e8; background: #e8f0fe; }
+.draw-custom-color input { position: absolute; inset: 0; opacity: 0; cursor: pointer; border: 0; padding: 0; }
+.draw-custom-plus {
+  display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92); color: #202124; font-size: 13px; line-height: 1; font-weight: 700;
+  pointer-events: none;
+}
+/* The text toolbar only exists while the Text tool is live, the way Paint's does. */
+.draw-text-bar { display: flex; align-items: center; gap: 6px; margin: -4px 0 10px; }
+.draw-text-bar[hidden] { display: none; }
+.draw-font, .draw-text-size {
+  height: 30px; padding: 0 8px; border: 1px solid #dadce0; border-radius: 8px;
+  background: #fff; color: var(--text); font: inherit; font-size: 13px; cursor: pointer;
+}
+.draw-text-size { padding-right: 4px; font-variant-numeric: tabular-nums; }
+.draw-text-style {
+  width: 30px; height: 30px; padding: 0; border: 1px solid #dadce0; border-radius: 8px;
+  background: #fff; color: var(--text); font-size: 14px; line-height: 1; cursor: pointer;
+}
+.draw-text-style:hover { background: #f1f3f4; }
+.draw-text-style.active { border-color: #1a73e8; background: #e8f0fe; color: var(--accent-dark); }
+.draw-bold { font-weight: 700; }
+.draw-italic { font-style: italic; font-family: Georgia, serif; }
+.draw-underline { text-decoration: underline; }
 .draw-width-dot { display: block; border-radius: 50%; background: var(--text); }
+/* Fill toggle: the swatch is a ring when hollow and a solid disc when filled,
+   so the button previews the outcome instead of naming it. */
+.draw-fill {
+  display: grid; place-items: center; width: 34px; height: 34px; padding: 0;
+  border: 1px solid #dadce0; border-radius: 8px; background: #fff; cursor: pointer;
+}
+.draw-fill:hover:not(:disabled) { background: #f1f3f4; }
+.draw-fill.active { border-color: #1a73e8; background: #e8f0fe; }
+.draw-fill:disabled { opacity: 0.4; cursor: default; }
+.draw-fill-swatch { display: block; width: 15px; height: 15px; border: 2px solid var(--text); border-radius: 3px; }
+/* One dragged slider replaces the old Thin/Medium/Thick presets. The dot to its
+   left previews the width actually laid down, so the size is shown, not named. */
+.draw-size {
+  display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px;
+  border: 1px solid #dadce0; border-radius: 8px; background: #fff;
+}
+.draw-size .draw-width-dot { flex: none; min-width: 1px; min-height: 1px; }
+.draw-size-range { width: 96px; accent-color: #1a73e8; cursor: pointer; }
+.draw-size-value {
+  min-width: 34px; color: var(--muted); font-size: 11px;
+  font-variant-numeric: tabular-nums; text-align: right;
+}
+.draw-image { height: 34px; padding: 0 12px; border: 1px solid #dadce0; border-radius: 8px; background: #fff; color: var(--text); font-size: 13px; cursor: pointer; }
+.draw-image:hover { background: #f1f3f4; }
+/* The canvas and its text overlay share this frame so the editor can be placed
+   in canvas coordinates. */
+.draw-surface { position: relative; }
 .draw-canvas {
   display: block; width: 100%; height: min(58vh, 560px);
   border: 1px solid #dadce0; border-radius: 12px; background: #fff;
@@ -651,6 +724,15 @@ body.resizing { user-select: none; cursor: col-resize; }
 /* Brush tools draw their own size ring on the canvas, so the OS cursor is
    hidden — showing both would read as two pointers. */
 .draw-canvas.brush { cursor: none; }
+.draw-canvas.texting { cursor: text; }
+/* Styled to match what replay() paints, so committing the box is not a jump.
+   Transparent background: the strokes underneath stay visible while typing. */
+.draw-text-editor {
+  position: absolute; z-index: 2; margin: 0; padding: 0; overflow: hidden;
+  border: 1px dashed #1a73e8; border-radius: 2px; background: rgba(255, 255, 255, 0.72);
+  resize: none; outline: none; white-space: pre-wrap; word-break: break-word;
+}
+.draw-text-editor[hidden] { display: none; }
 .draw-hint { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
 .draw-status { min-height: 20px; margin-top: 4px; color: #b35900; font-size: 12px; }
 .draw-dialog footer { justify-content: flex-end; margin-top: 12px; padding-top: 12px; }
@@ -781,6 +863,121 @@ body.resizing { user-select: none; cursor: col-resize; }
 .format-bar .format-italic { font-style: italic; }
 .format-bar .format-underline { text-decoration: underline; }
 .format-bar .format-strike { text-decoration: line-through; }
+.format-bar .format-split { display: inline-flex; flex: none; }
+.format-bar .format-split > .format-btn { border-radius: 4px 0 0 4px; }
+.format-bar .format-drop-toggle {
+  width: 16px; height: 26px; padding: 0; margin-left: -1px; line-height: 23px;
+  border: 1px solid #d9dde3; border-radius: 0 4px 4px 0; background: #fff;
+  color: #68707c; font-size: 9px; cursor: pointer;
+}
+.format-bar .format-drop-toggle:hover,
+.format-bar .format-drop-toggle[aria-expanded="true"] { background: #f1f3f5; border-color: var(--accent); color: var(--accent-dark); }
+.format-bar .format-highlight { position: relative; padding-bottom: 3px; }
+.format-bar .format-highlight::after {
+  content: ""; position: absolute; left: 5px; right: 5px; bottom: 3px; height: 3px;
+  border-radius: 2px; background: var(--highlight-color, #fff176); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+.format-bar .format-font-color { position: relative; padding-bottom: 3px; font-weight: 700; }
+.format-bar .format-font-color::after {
+  content: ""; position: absolute; left: 5px; right: 5px; bottom: 3px; height: 3px;
+  border-radius: 2px; background: var(--font-color, #c43d3d);
+}
+/* The four rules are drawn as a background rather than set in a glyph, so the
+   button centers the ::before box itself: line-height must go to 0 alongside
+   font-size or the hidden "≡" label still claims a 24px line box under the
+   icon, and flex (not auto margins) is what actually centers a block vertically.
+   flex: none keeps the 14px icon from being shaved when the bar scrolls. */
+.format-bar .format-align-left,
+.format-bar .format-align-center,
+.format-bar .format-align-right {
+  display: flex; flex: none; align-items: center; justify-content: center;
+  width: 28px; padding: 0 4px; font-size: 0; line-height: 0;
+}
+.format-bar .format-align-left::before,
+.format-bar .format-align-center::before,
+.format-bar .format-align-right::before { content: ""; display: block; width: 14px; height: 12px; }
+.format-bar .format-align-left::before {
+  background: linear-gradient(currentColor, currentColor) left 0/14px 2px no-repeat, linear-gradient(currentColor, currentColor) left 3px/9px 2px no-repeat,
+    linear-gradient(currentColor, currentColor) left 6px/14px 2px no-repeat, linear-gradient(currentColor, currentColor) left 9px/7px 2px no-repeat;
+}
+.format-bar .format-align-center::before {
+  background: linear-gradient(currentColor, currentColor) center 0/14px 2px no-repeat, linear-gradient(currentColor, currentColor) center 3px/9px 2px no-repeat,
+    linear-gradient(currentColor, currentColor) center 6px/14px 2px no-repeat, linear-gradient(currentColor, currentColor) center 9px/7px 2px no-repeat;
+}
+.format-bar .format-align-right::before {
+  background: linear-gradient(currentColor, currentColor) right 0/14px 2px no-repeat, linear-gradient(currentColor, currentColor) right 3px/9px 2px no-repeat,
+    linear-gradient(currentColor, currentColor) right 6px/14px 2px no-repeat, linear-gradient(currentColor, currentColor) right 9px/7px 2px no-repeat;
+}
+
+/* The list buttons were the characters "•" and "1." — which read as a stray dot
+   and a stray numeral, not as lists. Real icons via the mask + currentColor
+   idiom used by .owl-cloud-ico, so they tint with the button and stay crisp.
+   line-height goes to 0 with font-size or the hidden label still claims a line
+   box under the icon and pushes it off centre. */
+.format-bar .format-bullet-list,
+.format-bar .format-ordered-list {
+  display: flex; flex: none; align-items: center; justify-content: center;
+  width: 28px; padding: 0 4px; font-size: 0; line-height: 0;
+}
+.format-bar .format-bullet-list::before,
+.format-bar .format-ordered-list::before {
+  content: ""; display: block; width: 15px; height: 15px;
+  background-color: currentColor;
+  -webkit-mask-size: contain; mask-size: contain;
+  -webkit-mask-position: center; mask-position: center;
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+}
+.format-bar .format-bullet-list::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='4' cy='6' r='2'/%3E%3Ccircle cx='4' cy='12' r='2'/%3E%3Ccircle cx='4' cy='18' r='2'/%3E%3Crect x='9' y='5' width='13' height='2' rx='1'/%3E%3Crect x='9' y='11' width='13' height='2' rx='1'/%3E%3Crect x='9' y='17' width='13' height='2' rx='1'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='4' cy='6' r='2'/%3E%3Ccircle cx='4' cy='12' r='2'/%3E%3Ccircle cx='4' cy='18' r='2'/%3E%3Crect x='9' y='5' width='13' height='2' rx='1'/%3E%3Crect x='9' y='11' width='13' height='2' rx='1'/%3E%3Crect x='9' y='17' width='13' height='2' rx='1'/%3E%3C/svg%3E");
+}
+.format-bar .format-ordered-list::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.6 4.4 L5 3.4 L5 9'/%3E%3Cpath d='M3.4 10.6 C3.6 9.3 6.3 9.3 6.3 11 C6.3 12.3 3.4 13.4 3.4 15 L6.5 15'/%3E%3Cpath d='M3.4 16.1 C4.3 15.2 6.4 15.5 6.4 16.8 C6.4 17.7 5.5 18.1 4.8 18.1 C5.7 18.1 6.6 18.5 6.6 19.5 C6.6 20.9 4.3 21.2 3.4 20.4'/%3E%3Cpath d='M10 6 H21.5 M10 12 H21.5 M10 18 H21.5' stroke-width='2'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.6 4.4 L5 3.4 L5 9'/%3E%3Cpath d='M3.4 10.6 C3.6 9.3 6.3 9.3 6.3 11 C6.3 12.3 3.4 13.4 3.4 15 L6.5 15'/%3E%3Cpath d='M3.4 16.1 C4.3 15.2 6.4 15.5 6.4 16.8 C6.4 17.7 5.5 18.1 4.8 18.1 C5.7 18.1 6.6 18.5 6.6 19.5 C6.6 20.9 4.3 21.2 3.4 20.4'/%3E%3Cpath d='M10 6 H21.5 M10 12 H21.5 M10 18 H21.5' stroke-width='2'/%3E%3C/svg%3E");
+}
+
+/* Formatting popovers use fixed positioning so the toolbar can keep its compact
+   horizontal scroll on narrow panes without clipping the palette or table grid. */
+.format-popup {
+  position: fixed; z-index: 60; box-sizing: border-box; padding: 7px;
+  color: var(--text); background: #fff; border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.16); user-select: none;
+}
+.format-popup[hidden] { display: none; }
+.format-popup-item {
+  display: block; width: 100%; padding: 7px 10px; border: 0; border-radius: 5px;
+  text-align: left; white-space: nowrap; color: var(--text); background: transparent;
+  font: inherit; font-size: 12px; cursor: pointer;
+}
+.format-popup-item:hover, .format-popup-item:focus-visible { outline: none; background: #f1f3f5; }
+.format-case-popup { min-width: 178px; }
+.highlight-palette { display: grid; grid-template-columns: repeat(4, 25px); gap: 5px; padding: 2px; }
+.highlight-swatch {
+  width: 25px; height: 25px; padding: 0; border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 4px; background: var(--swatch-color); cursor: pointer;
+}
+.highlight-swatch:hover, .highlight-swatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.remove-highlight { margin-top: 6px; border-top: 1px solid var(--border); border-radius: 0 0 5px 5px; }
+.font-color-palette { display: grid; grid-template-columns: repeat(4, 25px); gap: 5px; padding: 2px; }
+.font-color-swatch {
+  position: relative; width: 25px; height: 25px; padding: 0 0 3px; border: 1px solid #d9dde3;
+  border-radius: 4px; color: var(--swatch-color); background: #fff; font-weight: 700; cursor: pointer;
+}
+.font-color-swatch::after {
+  content: ""; position: absolute; left: 4px; right: 4px; bottom: 3px; height: 3px;
+  border-radius: 2px; background: var(--swatch-color);
+}
+.font-color-swatch:hover, .font-color-swatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.automatic-font-color { margin-top: 6px; border-top: 1px solid var(--border); border-radius: 0 0 5px 5px; }
+.format-table-popup { padding: 10px; }
+.table-grid-label { display: block; min-height: 18px; margin: 0 0 7px; font-size: 12px; }
+.table-size-grid { display: grid; grid-template-columns: repeat(10, 18px); gap: 3px; touch-action: none; }
+.table-size-cell {
+  width: 18px; height: 17px; padding: 0; border: 1px solid #aeb4bd; border-radius: 1px;
+  background: #fff; cursor: crosshair;
+}
+.table-size-cell:hover, .table-size-cell:focus-visible { outline: 1px solid var(--accent); outline-offset: 0; }
+.table-size-cell.selected { border-color: var(--accent-dark); background: rgba(45, 190, 96, 0.22); }
 .format-bar .note-search {
   display: inline-flex; align-items: center; gap: 4px; margin-left: auto; min-width: 145px; max-width: 210px;
   height: 27px; padding: 0 7px; border: 1px solid rgba(217, 221, 227, 0.75); border-radius: 999px;
@@ -794,8 +991,30 @@ body.resizing { user-select: none; cursor: col-resize; }
 .note-search-count { flex: none; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
 .note-body-highlights mark.note-search-hit { background: rgba(255, 213, 79, 0.42); box-shadow: 0 0 0 1px rgba(226, 174, 0, 0.18); }
 .note-body-highlights mark.note-search-hit.active { background: rgba(255, 174, 0, 0.68); box-shadow: 0 0 0 1px rgba(190, 120, 0, 0.42); }
-/* Highlight (<mark>) in the rendered preview — softer than the browser default. */
+/* Highlight (<mark>) in the rendered preview — generated palette classes keep
+   author-controlled style text out of the note while plain legacy marks stay yellow. */
 .preview mark { background: rgba(255, 213, 79, 0.45); color: inherit; padding: 0 1px; border-radius: 2px; }
+.preview mark.highlight-yellow { background: #fff176; }
+.preview mark.highlight-green { background: #a9dc76; }
+.preview mark.highlight-cyan { background: #78d9d2; }
+.preview mark.highlight-blue { background: #90caf9; }
+.preview mark.highlight-pink { background: #f3a6c8; }
+.preview mark.highlight-orange { background: #ffb66d; }
+.preview mark.highlight-purple { background: #c4a7e7; }
+.preview mark.highlight-gray { background: #cfd4dc; }
+.preview .text-color-red { color: #c0392b; }
+.preview .text-color-orange { color: #b45309; }
+.preview .text-color-green { color: #177245; }
+.preview .text-color-teal { color: #0f766e; }
+.preview .text-color-blue { color: #2563b8; }
+.preview .text-color-purple { color: #7c3fad; }
+.preview .text-color-pink { color: #b02a7a; }
+.preview .text-color-gray { color: #5b6472; }
+/* Retired from the picker, kept so existing notes still render their color. */
+.preview .text-color-gold { color: #8a6a00; }
+.preview .text-align-left { display: block; text-align: left; }
+.preview .text-align-center { display: block; text-align: center; }
+.preview .text-align-right { display: block; text-align: right; }
 
 /* ── Phonetics reader (M10) ───────────────────────────────────────────────────
    Readings sit above every word, so the preview needs extra leading or the rt of

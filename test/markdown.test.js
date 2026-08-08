@@ -121,6 +121,11 @@ describe('format-bar inline HTML (underline / highlight)', () => {
     expect(html).toContain('<mark>c</mark>');
   });
 
+  it('keeps the fixed highlight color class through sanitization', () => {
+    const html = renderMarkdown('<mark class="highlight-green">safe</mark>');
+    expect(html).toContain('<mark class="highlight-green">safe</mark>');
+  });
+
   it('still strips a script smuggled next to allowed inline HTML', () => {
     const html = renderMarkdown('<u>ok</u><script>alert(1)</script>');
     expect(html).toContain('<u>ok</u>');

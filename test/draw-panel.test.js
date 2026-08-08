@@ -87,20 +87,21 @@ describe('draw panel', () => {
     expect(saveButton.disabled).toBe(true);
   });
 
-  it('selects tools, colors, and widths', () => {
+  it('selects tools, colors, and the stroke size', () => {
     showDrawPanel({});
     const eraser = document.querySelector('.draw-tool-erase');
     click(eraser);
     expect(eraser.classList.contains('active')).toBe(true);
     expect(document.querySelector('.draw-tool-pen').classList.contains('active')).toBe(false);
 
-    const red = document.querySelector('.draw-color[data-color="#d93025"]');
+    const red = document.querySelector('.draw-color[data-color="#ed1c24"]');
     click(red);
     expect(red.classList.contains('active')).toBe(true);
 
-    const thick = document.querySelector('.draw-width[data-width="8"]');
-    click(thick);
-    expect(thick.classList.contains('active')).toBe(true);
+    const size = document.querySelector('.draw-size-range');
+    size.value = '8';
+    size.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(document.querySelector('.draw-size-value').textContent).toBe('8');
   });
 
   it('undo re-disables Save once the canvas is empty again', () => {
@@ -283,35 +284,57 @@ describe('draw panel shape tools', () => {
   });
 });
 
+// The width is dragged on one slider now, not picked from three presets.
+function setSize(value) {
+  const input = document.querySelector('.draw-size-range');
+  input.value = String(value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 describe('draw panel brush sizing', () => {
-  it('lays down the selected width', () => {
+  it('lays down the width dragged on the slider', () => {
     const { canvas, state } = showDrawPanel({});
-    click(document.querySelector('.draw-width[data-width="8"]'));
+    setSize(8);
     draw(canvas, [[0, 0], [10, 10]]);
     expect(state.items[0].width).toBe(8);
+  });
+
+  it('offers the full continuous range, not three steps', () => {
+    showDrawPanel({});
+    const input = document.querySelector('.draw-size-range');
+    expect(input.type).toBe('range');
+    expect(Number(input.min)).toBe(1);
+    expect(Number(input.max)).toBe(40);
+    setSize(17); // a value no preset button ever offered
+    const { canvas, state } = showDrawPanel({});
+    setSize(17);
+    draw(canvas, [[0, 0], [10, 10]]);
+    expect(state.items[0].width).toBe(17);
   });
 
   it('scales the eraser and the highlighter past the nominal width', () => {
     const eraser = showDrawPanel({});
     pickTool('erase');
-    click(document.querySelector('.draw-width[data-width="4"]'));
+    setSize(4);
     draw(eraser.canvas, [[0, 0], [10, 10]]);
     expect(eraser.state.items[0].width).toBe(12); // 4 x 3
 
     const marker = showDrawPanel({});
     pickTool('highlight');
-    click(document.querySelector('.draw-width[data-width="4"]'));
+    setSize(4);
     draw(marker.canvas, [[0, 0], [10, 10]]);
     expect(marker.state.items[0].width).toBe(20); // 4 x 5
     expect(marker.state.items[0].mode).toBe('highlight');
   });
 
-  it('shows the width swatch at the real stroke size', () => {
+  it('previews the real laid-down width in the slider dot', () => {
     showDrawPanel({});
-    for (const value of ['2', '4', '8']) {
-      const dot = document.querySelector(`.draw-width[data-width="${value}"] .draw-width-dot`);
-      expect(dot.style.width).toBe(`${value}px`);
-    }
+    const dot = document.querySelector('.draw-size .draw-width-dot');
+    setSize(6);
+    expect(dot.style.width).toBe('6px');
+    pickTool('erase'); // eraser lays down 3x, and the dot must not lie about it
+    setSize(6);
+    expect(dot.style.width).toBe('18px');
   });
 
   // The reported bug: changing the size gave no feedback at the pointer. The

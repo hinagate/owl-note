@@ -378,3 +378,65 @@ describe('Chrome-native capture', () => {
     expect((await getSession()).cues[0].videoTime).toBe(12);
   });
 });
+
+// Full mode reads the whole session back. The live overlay only ever receives a
+// TAIL (one sealed block plus the open one), so anything older is unreachable
+// from the pill — which is exactly what scrolling back has to recover.
+describe('full-mode transcript history', () => {
+  it('returns cues the live tail has already dropped', async () => {
+    const { overlayMessages } = stubTranscribeApis();
+    await armAndStart();
+    await sw.handleCaptureMessage({
+      type: 'owl-native-speech-ready',
+      lang: 'en-US',
+      sessionToken: tokenFor(await getSession()),
+    });
+
+    // Past two sealed blocks, so block 0 falls out of the tail entirely.
+    const many = Array.from({ length: 401 }, (_, i) => cue(`line ${i}`, 1000 + i * 10));
+    await sw.handleCaptureMessage({ type: 'owl-cue', cues: many });
+
+    const tail = [...overlayMessages].reverse()
+      .find((m) => m.message.type === 'owl-overlay-update' && typeof m.message.text === 'string');
+    expect(tail.message.text).not.toContain('line 0 ');
+
+    await sw.handleCaptureMessage({ type: 'owl-panel-history' });
+    const history = [...overlayMessages].reverse()
+      .find((m) => m.message.type === 'owl-overlay-history');
+    expect(history).toBeTruthy();
+    expect(history.tabId).toBe(TAB.id);
+    expect(history.message.text).toContain('line 0');
+    expect(history.message.text).toContain('line 400');
+    expect(history.message.cueCount).toBe(401);
+  });
+
+  // The pill flattens newlines to keep three lines readable; full mode has the
+  // room for the structure the saved note will carry.
+  it('keeps paragraph and timestamp structure the pill flattens away', async () => {
+    const { overlayMessages } = stubTranscribeApis();
+    await armAndStart();
+    await sw.handleCaptureMessage({
+      type: 'owl-native-speech-ready',
+      lang: 'en-US',
+      sessionToken: tokenFor(await getSession()),
+    });
+    await sw.handleCaptureMessage({
+      type: 'owl-cue',
+      cues: [
+        { text: 'opening remarks', videoTime: 0, at: 1000 },
+        { text: 'much later on', videoTime: 600, at: 900000 },
+      ],
+    });
+
+    await sw.handleCaptureMessage({ type: 'owl-panel-history' });
+    const history = [...overlayMessages].reverse()
+      .find((m) => m.message.type === 'owl-overlay-history');
+    expect(history.message.text).toContain('\n\n'); // a real paragraph break
+    expect(history.message.text).toMatch(/## \d+:\d\d/);
+  });
+
+  it('is a no-op when there is no session rather than throwing', async () => {
+    stubTranscribeApis();
+    await expect(sw.handleCaptureMessage({ type: 'owl-panel-history' })).resolves.toBeNull();
+  });
+});

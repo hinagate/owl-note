@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { toggleInline, cycleHeading, toggleLinePrefix, toggleOrderedList, insertLink, insertTable, nextTableRow } from '../src/lib/format.js';
+import {
+  toggleInline, toggleHighlight, setHighlight, removeHighlight, changeCase,
+  setTextColor, removeTextColor, setAlignment,
+  cycleHeading, toggleLinePrefix, toggleOrderedList, insertLink, insertTable,
+  insertSizedTable, nextTableRow,
+} from '../src/lib/format.js';
 import { renderMarkdown } from '../src/lib/markdown.js';
 
 // Apply an edit object to a body string — the same splice editor.js performs.
@@ -95,6 +100,276 @@ describe('toggleInline', () => {
   it('picks the correct span when the line has several', () => {
     const e = toggleInline('**a** b **c**', 10, 10, BOLD); // caret inside 'c'
     expect(applyEdit('**a** b **c**', e)).toBe('**a** b c');
+  });
+});
+
+describe('colored highlights', () => {
+  it('keeps legacy yellow markup compact and adds a fixed class for other colors', () => {
+    expect(applyEdit('term', setHighlight('term', 0, 4, 'yellow'))).toBe('<mark>term</mark>');
+    expect(applyEdit('term', setHighlight('term', 0, 4, 'green')))
+      .toBe('<mark class="highlight-green">term</mark>');
+  });
+
+  it('recolors an existing highlight without nesting marks', () => {
+    const body = '<mark class="highlight-green">term</mark>';
+    const start = body.indexOf('term');
+    const out = applyEdit(body, setHighlight(body, start, start + 4, 'pink'));
+    expect(out).toBe('<mark class="highlight-pink">term</mark>');
+    expect(out.match(/<mark/g)).toHaveLength(1);
+  });
+
+  it('normalizes a pasted mark with arbitrary attributes to the fixed palette', () => {
+    const body = '<mark style="background:red" data-note="x">term</MARK>';
+    const start = body.indexOf('term');
+    expect(applyEdit(body, setHighlight(body, start, start + 4, 'blue')))
+      .toBe('<mark class="highlight-blue">term</mark>');
+  });
+
+  it('the main highlighter toggles any current color off', () => {
+    const body = '<mark class="highlight-blue">term</mark>';
+    const caret = body.indexOf('term') + 2;
+    expect(applyEdit(body, toggleHighlight(body, caret, caret, 'yellow'))).toBe('term');
+  });
+
+  it('No color removes highlights across a broad selection', () => {
+    const body = '<mark>a</mark> and <mark class="highlight-pink">b</mark>';
+    expect(applyEdit(body, removeHighlight(body, 0, body.length))).toBe('a and b');
+  });
+
+  it('falls back to yellow for an unknown color name', () => {
+    expect(applyEdit('x', setHighlight('x', 0, 1, 'url-javascript'))).toBe('<mark>x</mark>');
+  });
+});
+
+// One <mark> stretched over a cell boundary or a blank line is unbalanced HTML:
+// the renderer closes it at the block edge and the sanitizer drops the orphan,
+// so everything past the first cell/paragraph silently loses its highlight.
+describe('highlighting across block boundaries', () => {
+  const TABLE_BODY = '| Name | Qty |\n| --- | --- |\n| apple | 3 |\n';
+
+  it('marks each table cell separately instead of straddling the pipe', () => {
+    const from = TABLE_BODY.indexOf('apple');
+    const out = applyEdit(TABLE_BODY, toggleHighlight(TABLE_BODY, from, from + 9, 'yellow'));
+    expect(out).toContain('| <mark>apple</mark> | <mark>3</mark> |');
+    const cells = renderMarkdown(out).match(/<td><mark>[^<]*<\/mark><\/td>/g);
+    expect(cells).toHaveLength(2);
+  });
+
+  it('never formats the delimiter row, which would break the table', () => {
+    const out = applyEdit(TABLE_BODY, toggleHighlight(TABLE_BODY, 0, TABLE_BODY.length, 'yellow'));
+    expect(out).toContain('| --- | --- |');
+    expect(renderMarkdown(out)).toContain('<table>');
+  });
+
+  it('marks each paragraph of a selection that spans a blank line', () => {
+    const body = 'one\n\ntwo';
+    const out = applyEdit(body, toggleHighlight(body, 0, body.length, 'yellow'));
+    expect(out).toBe('<mark>one</mark>\n\n<mark>two</mark>');
+    expect(renderMarkdown(out).match(/<mark>/g)).toHaveLength(2);
+  });
+
+  it('flattens marks already inside a broad selection rather than nesting them', () => {
+    const body = 'a <mark>b</mark>\nc';
+    expect(applyEdit(body, setHighlight(body, 0, body.length, 'green')))
+      .toBe('<mark class="highlight-green">a b</mark>\n<mark class="highlight-green">c</mark>');
+  });
+
+  it('removes a highlight the selection covers on every line', () => {
+    const body = '<mark>a</mark>\n<mark class="highlight-pink">b</mark>';
+    expect(applyEdit(body, removeHighlight(body, 0, body.length))).toBe('a\nb');
+  });
+
+  // `<mark>- a</mark>` is not a list item any more, so the marker has to stay
+  // outside the wrapper or highlighting a list flattens it into a paragraph.
+  it('keeps list, quote and heading markers outside the wrapper', () => {
+    const list = '- a\n- b';
+    const out = applyEdit(list, toggleHighlight(list, 0, list.length, 'green'));
+    expect(out).toBe('- <mark class="highlight-green">a</mark>\n- <mark class="highlight-green">b</mark>');
+    expect(renderMarkdown(out).match(/<li>/g)).toHaveLength(2);
+
+    const quote = '> quoted';
+    expect(applyEdit(quote, toggleHighlight(quote, 0, quote.length, 'yellow'))).toBe('> <mark>quoted</mark>');
+
+    const heading = '## Title';
+    expect(applyEdit(heading, toggleHighlight(heading, 0, heading.length, 'yellow'))).toBe('## <mark>Title</mark>');
+  });
+
+  it('applies the same rule to bold and the other inline markers', () => {
+    const from = TABLE_BODY.indexOf('apple');
+    const out = applyEdit(TABLE_BODY, toggleInline(TABLE_BODY, from, from + 9, { left: '**', right: '**' }));
+    expect(out).toContain('| **apple** | **3** |');
+    expect(renderMarkdown(out).match(/<strong>/g)).toHaveLength(2);
+  });
+});
+
+describe('changeCase', () => {
+  it('offers Word-style sentence, lower, upper, title and toggle modes', () => {
+    const body = 'hELLO WORLD. tHIS is OWL';
+    expect(applyEdit(body, changeCase(body, 0, body.length, 'sentence'))).toBe('Hello world. This is owl');
+    expect(applyEdit('Owl Note', changeCase('Owl Note', 0, 8, 'lower'))).toBe('owl note');
+    expect(applyEdit('Owl Note', changeCase('Owl Note', 0, 8, 'upper'))).toBe('OWL NOTE');
+    expect(applyEdit('owl NOTE', changeCase('owl NOTE', 0, 8, 'title'))).toBe('Owl Note');
+    expect(applyEdit('Owl 123', changeCase('Owl 123', 0, 7, 'toggle'))).toBe('oWL 123');
+  });
+
+  it('changes the word under a collapsed caret and selects the result', () => {
+    const body = 'hello world';
+    const edit = changeCase(body, 8, 8, 'upper');
+    expect(applyEdit(body, edit)).toBe('hello WORLD');
+    expect([edit.selStart, edit.selEnd]).toEqual([6, 11]);
+  });
+
+  it('is a no-op when a collapsed caret is not on a word', () => {
+    expect(changeCase('hello   world', 6, 6, 'upper')).toBeNull();
+  });
+
+  // The selection is Markdown source, so a naive re-case rewrites the markup
+  // too — and class names, link targets and owl-img ids are all case-sensitive.
+  it('leaves the generated color classes alone so the color survives', () => {
+    const body = '<span class="text-color-red">red</span> and <mark class="highlight-green">green</mark>';
+    const out = applyEdit(body, changeCase(body, 0, body.length, 'upper'));
+    expect(out).toBe('<span class="text-color-red">RED</span> AND <mark class="highlight-green">GREEN</mark>');
+    expect(renderMarkdown(out)).toContain('class="text-color-red"');
+    expect(renderMarkdown(out)).toContain('class="highlight-green"');
+  });
+
+  it('re-cases link text but never the target', () => {
+    const body = '[owl docs](https://Example.com/Path)';
+    expect(applyEdit(body, changeCase(body, 0, body.length, 'upper')))
+      .toBe('[OWL DOCS](https://Example.com/Path)');
+  });
+
+  it('keeps attachment references resolvable', () => {
+    const body = '![shot](owl-img:aB12cD)';
+    expect(applyEdit(body, changeCase(body, 0, body.length, 'upper')))
+      .toBe('![SHOT](owl-img:aB12cD)');
+  });
+
+  it('leaves inline code untouched', () => {
+    const body = 'run `npm test` now';
+    expect(applyEdit(body, changeCase(body, 0, body.length, 'upper'))).toBe('RUN `npm test` NOW');
+  });
+
+  it('carries sentence case across the markup it skips', () => {
+    const body = '<mark>hello there. how ARE you?</mark>';
+    expect(applyEdit(body, changeCase(body, 0, body.length, 'sentence')))
+      .toBe('<mark>Hello there. How are you?</mark>');
+  });
+
+  it('is a no-op when the caret sits inside markup rather than prose', () => {
+    const body = '<span class="text-color-red">red</span>';
+    expect(changeCase(body, body.indexOf('text-color') + 2, body.indexOf('text-color') + 2, 'upper')).toBeNull();
+  });
+});
+
+describe('font color', () => {
+  it('wraps selected text in a fixed font-color class', () => {
+    const edit = setTextColor('owl note', 0, 3, 'blue');
+    expect(applyEdit('owl note', edit)).toBe('<span class="text-color-blue">owl</span> note');
+    expect([edit.selStart, edit.selEnd]).toEqual([30, 33]);
+  });
+
+  it('recolors an existing span instead of nesting it', () => {
+    const body = '<span class="text-color-blue">owl</span>';
+    const start = body.indexOf('owl');
+    const out = applyEdit(body, setTextColor(body, start, start + 3, 'red'));
+    expect(out).toBe('<span class="text-color-red">owl</span>');
+    expect(out.match(/<span/g)).toHaveLength(1);
+  });
+
+  it('Automatic removes the generated font color', () => {
+    const body = '<span class="text-color-purple">owl</span>';
+    const caret = body.indexOf('owl') + 1;
+    expect(applyEdit(body, removeTextColor(body, caret, caret))).toBe('owl');
+  });
+
+  it('removes an outer font color without damaging a nested alignment span', () => {
+    const body = '<span class="text-color-red"><span class="text-align-center">owl</span></span>';
+    const caret = body.indexOf('owl') + 1;
+    expect(applyEdit(body, removeTextColor(body, caret, caret)))
+      .toBe('<span class="text-align-center">owl</span>');
+  });
+
+  it('falls back to the fixed red class for unknown colors', () => {
+    expect(applyEdit('x', setTextColor('x', 0, 1, 'expression')))
+      .toBe('<span class="text-color-red">x</span>');
+  });
+
+  it('renders colored Markdown content and preserves inline formatting', () => {
+    const html = renderMarkdown('<span class="text-color-green">**bold**</span>');
+    expect(html).toContain('class="text-color-green"');
+    expect(html).toContain('<strong>bold</strong>');
+  });
+
+  it('colors each table cell separately instead of straddling the pipe', () => {
+    const body = '| Name | Qty |\n| --- | --- |\n| apple | 3 |\n';
+    const from = body.indexOf('apple');
+    const out = applyEdit(body, setTextColor(body, from, from + 9, 'blue'));
+    expect(out).toContain('| <span class="text-color-blue">apple</span> | <span class="text-color-blue">3</span> |');
+    expect(renderMarkdown(out).match(/class="text-color-blue"/g)).toHaveLength(2);
+  });
+
+  it('colors each paragraph of a selection that spans a blank line', () => {
+    const body = 'one\n\ntwo';
+    const out = applyEdit(body, setTextColor(body, 0, body.length, 'teal'));
+    expect(renderMarkdown(out).match(/class="text-color-teal"/g)).toHaveLength(2);
+  });
+});
+
+describe('setAlignment', () => {
+  it('aligns each selected line and switches alignment without nesting', () => {
+    const centered = applyEdit('one\ntwo', setAlignment('one\ntwo', 0, 7, 'center'));
+    expect(centered).toBe([
+      '<span class="text-align-center">one</span>',
+      '<span class="text-align-center">two</span>',
+    ].join('\n'));
+    expect(applyEdit(centered, setAlignment(centered, 0, centered.length, 'right'))).toBe([
+      '<span class="text-align-right">one</span>',
+      '<span class="text-align-right">two</span>',
+    ].join('\n'));
+  });
+
+  it('switches alignment through an outer font-color span', () => {
+    const body = '<span class="text-color-red"><span class="text-align-center">one</span></span>';
+    expect(applyEdit(body, setAlignment(body, 0, body.length, 'right')))
+      .toBe('<span class="text-color-red"><span class="text-align-right">one</span></span>');
+  });
+
+  it('keeps heading, list and quote prefixes parseable', () => {
+    const body = '# Heading\n- item\n> quote';
+    expect(applyEdit(body, setAlignment(body, 0, body.length, 'center'))).toBe([
+      '# <span class="text-align-center">Heading</span>',
+      '- <span class="text-align-center">item</span>',
+      '> <span class="text-align-center">quote</span>',
+    ].join('\n'));
+  });
+
+  it('does not modify tables, thematic breaks, blank lines or fenced code', () => {
+    const body = [
+      '| a | b |',
+      '| --- | --- |',
+      '',
+      '---',
+      '```js',
+      'const x = 1;',
+      '```',
+      'after',
+    ].join('\n');
+    const out = applyEdit(body, setAlignment(body, 0, body.length, 'right'));
+    expect(out).toContain('| a | b |\n| --- | --- |\n\n---\n```js\nconst x = 1;\n```');
+    expect(out.endsWith('<span class="text-align-right">after</span>')).toBe(true);
+  });
+
+  it('aligns the caret line when there is no selection', () => {
+    const body = 'first\nsecond';
+    expect(applyEdit(body, setAlignment(body, 8, 8, 'left')))
+      .toBe('first\n<span class="text-align-left">second</span>');
+  });
+
+  it('renders aligned inline Markdown content', () => {
+    const html = renderMarkdown('<span class="text-align-center">**bold**</span>');
+    expect(html).toContain('class="text-align-center"');
+    expect(html).toContain('<strong>bold</strong>');
   });
 });
 
@@ -392,6 +667,48 @@ describe('nextTableRow (Enter inside a table)', () => {
 
   it('ignores Enter when there is a selection', () => {
     expect(nextTableRow(TABLE, 0, 10)).toBeNull();
+  });
+});
+
+describe('insertSizedTable', () => {
+  it('creates the chosen visible column × row dimensions', () => {
+    const edit = insertSizedTable('', 0, 0, 3, 4);
+    const lines = applyEdit('', edit).trimEnd().split('\n');
+    expect(lines).toEqual([
+      '| title 1 | title 2 | title 3 |',
+      '| --- | --- | --- |',
+      '|  |  |  |',
+      '|  |  |  |',
+      '|  |  |  |',
+    ]);
+    expect(applyEdit('', edit).slice(edit.selStart, edit.selEnd)).toBe('title 1');
+  });
+
+  it('keeps selected text intact and inserts immediately after it', () => {
+    const body = 'keep me';
+    const out = applyEdit(body, insertSizedTable(body, 0, body.length, 2, 2));
+    expect(out.startsWith('keep me\n| title 1 | title 2 |')).toBe(true);
+  });
+
+  // Butted straight against the previous table, the new header would parse as
+  // one more body row of it and the delimiter row as literal '---' cells.
+  it('inserts a separated table after an existing one instead of nesting inside a cell', () => {
+    const caret = TABLE.indexOf('walk');
+    const out = applyEdit(TABLE, insertSizedTable(TABLE, caret, caret, 1, 1));
+    expect(out).toBe(`${TABLE}\n\n| title 1 |\n| --- |\n`);
+    expect(renderMarkdown(out).match(/<table>/g)).toHaveLength(2);
+  });
+
+  it('separates the new table from a list or quote line above it', () => {
+    const list = applyEdit('- item', insertSizedTable('- item', 6, 6, 1, 1));
+    expect(list).toBe('- item\n\n| title 1 |\n| --- |\n');
+    expect(renderMarkdown(list)).toContain('<table>');
+  });
+
+  it('clamps unreasonable dimensions to the supported 1–20 range', () => {
+    const lines = applyEdit('', insertSizedTable('', 0, 0, 99, -2)).trimEnd().split('\n');
+    expect(lines).toHaveLength(2); // one visible row + delimiter
+    expect((lines[0].match(/title /g) || [])).toHaveLength(20);
   });
 });
 

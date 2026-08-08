@@ -53,6 +53,152 @@ describe('format bar in the editor', () => {
     expect(document.querySelector('.preview-body').innerHTML).toContain('<mark>hello</mark>');
   });
 
+  it('picks a highlight color without losing the textarea selection', () => {
+    render();
+    const ta = document.querySelector('textarea.note-body');
+    ta.setSelectionRange(0, 5);
+    const arrow = document.querySelector('.format-highlight-menu');
+    arrow.dispatchEvent(mousedown());
+    arrow.click();
+    const green = document.querySelector('.highlight-swatch[data-color="green"]');
+    green.dispatchEvent(mousedown());
+    green.click();
+    expect(ta.value).toBe('<mark class="highlight-green">hello</mark> world');
+    expect(document.querySelector('.preview-body').innerHTML).toContain('class="highlight-green"');
+  });
+
+  it('picks a font color without losing the textarea selection', () => {
+    render();
+    const ta = document.querySelector('textarea.note-body');
+    ta.setSelectionRange(0, 5);
+    const arrow = document.querySelector('.format-font-color-menu');
+    arrow.dispatchEvent(mousedown());
+    arrow.click();
+    const blue = document.querySelector('.font-color-swatch[data-color="blue"]');
+    blue.dispatchEvent(mousedown());
+    blue.click();
+    expect(ta.value).toBe('<span class="text-color-blue">hello</span> world');
+    expect(document.querySelector('.preview-body').innerHTML).toContain('class="text-color-blue"');
+  });
+
+  it('aligns the current line left, center or right', () => {
+    render();
+    const ta = document.querySelector('textarea.note-body');
+    ta.setSelectionRange(2, 2);
+    document.querySelector('.format-align-center').dispatchEvent(mousedown());
+    expect(ta.value).toBe('<span class="text-align-center">hello world</span>');
+    expect(document.querySelector('.preview-body').innerHTML).toContain('class="text-align-center"');
+
+    document.querySelector('.format-align-right').dispatchEvent(mousedown());
+    expect(ta.value).toBe('<span class="text-align-right">hello world</span>');
+  });
+
+  it('changes case from the Aa menu', () => {
+    render();
+    const ta = document.querySelector('textarea.note-body');
+    ta.setSelectionRange(0, 5);
+    const caseButton = document.querySelector('.format-case');
+    caseButton.dispatchEvent(mousedown());
+    caseButton.click();
+    const upper = [...document.querySelectorAll('.format-case-popup .format-popup-item')]
+      .find((item) => item.textContent === 'UPPERCASE');
+    upper.dispatchEvent(mousedown());
+    upper.click();
+    expect(ta.value).toBe('HELLO world');
+    expect([ta.selectionStart, ta.selectionEnd]).toEqual([0, 5]);
+  });
+
+  it('inserts the table dimensions chosen from the grid', () => {
+    render({ body: '' });
+    const arrow = document.querySelector('.format-table-menu');
+    arrow.dispatchEvent(mousedown());
+    arrow.click();
+    const cell = document.querySelector('.table-size-cell[data-column="3"][data-row="2"]');
+    cell.dispatchEvent(mousedown());
+    cell.click();
+    const ta = document.querySelector('textarea.note-body');
+    expect(ta.value.trimEnd().split('\n')).toEqual([
+      '| title 1 | title 2 | title 3 |',
+      '| --- | --- | --- |',
+      '|  |  |  |',
+    ]);
+  });
+
+  // The reported breakages, driven end to end through the real toolbar and
+  // checked in the rendered preview rather than in the Markdown source: a
+  // wrapper that crosses a cell boundary looks plausible in the textarea and
+  // only falls apart once the renderer and sanitizer have had their say.
+  const TABLE = '| Name | Qty |\n| --- | --- |\n| apple | 3 |\n';
+
+  it('highlights every selected table cell, not just the first', () => {
+    render({ body: TABLE });
+    const ta = document.querySelector('textarea.note-body');
+    const from = TABLE.indexOf('apple');
+    ta.setSelectionRange(from, from + 9); // "apple | 3" — spans the cell boundary
+    document.querySelector('.format-highlight').dispatchEvent(mousedown());
+    const cells = [...document.querySelectorAll('.preview-body td')];
+    expect(cells.map((td) => td.innerHTML)).toEqual(['<mark>apple</mark>', '<mark>3</mark>']);
+  });
+
+  it('keeps the delimiter row intact when the whole table is highlighted', () => {
+    render({ body: TABLE });
+    const ta = document.querySelector('textarea.note-body');
+    ta.setSelectionRange(0, TABLE.length);
+    document.querySelector('.format-highlight').dispatchEvent(mousedown());
+    expect(document.querySelector('.preview-body table')).not.toBeNull();
+    expect(ta.value).toContain('| --- | --- |');
+  });
+
+  it('colors every selected table cell, not just the first', () => {
+    render({ body: TABLE });
+    const ta = document.querySelector('textarea.note-body');
+    const from = TABLE.indexOf('apple');
+    ta.setSelectionRange(from, from + 9);
+    document.querySelector('.format-font-color').dispatchEvent(mousedown());
+    const colored = document.querySelectorAll('.preview-body td .text-color-red');
+    expect(colored).toHaveLength(2);
+  });
+
+  it('highlights both paragraphs when the selection crosses a blank line', () => {
+    render({ body: 'one\n\ntwo' });
+    const ta = document.querySelector('textarea.note-body');
+    ta.setSelectionRange(0, 8);
+    document.querySelector('.format-highlight').dispatchEvent(mousedown());
+    expect(document.querySelectorAll('.preview-body mark')).toHaveLength(2);
+  });
+
+  it('UPPERCASE does not strip the color off already-formatted text', () => {
+    render({ body: 'hello world' });
+    const ta = document.querySelector('textarea.note-body');
+    ta.setSelectionRange(0, 5);
+    document.querySelector('.format-font-color').dispatchEvent(mousedown());
+    ta.setSelectionRange(0, ta.value.length);
+    const caseButton = document.querySelector('.format-case');
+    caseButton.dispatchEvent(mousedown());
+    caseButton.click();
+    const upper = [...document.querySelectorAll('.format-case-popup .format-popup-item')]
+      .find((item) => item.textContent === 'UPPERCASE');
+    upper.dispatchEvent(mousedown());
+    upper.click();
+    const colored = document.querySelector('.preview-body .text-color-red');
+    expect(colored).not.toBeNull();
+    expect(colored.textContent).toBe('HELLO');
+  });
+
+  it('inserts a size-picked table below an existing one as a second table', () => {
+    render({ body: TABLE });
+    const ta = document.querySelector('textarea.note-body');
+    const caret = TABLE.indexOf('apple');
+    ta.setSelectionRange(caret, caret);
+    const arrow = document.querySelector('.format-table-menu');
+    arrow.dispatchEvent(mousedown());
+    arrow.click();
+    const cell = document.querySelector('.table-size-cell[data-column="2"][data-row="2"]');
+    cell.dispatchEvent(mousedown());
+    cell.click();
+    expect(document.querySelectorAll('.preview-body table')).toHaveLength(2);
+  });
+
   it('Ctrl+B applies bold from the keyboard and eats the event', () => {
     render();
     const ta = document.querySelector('textarea.note-body');
