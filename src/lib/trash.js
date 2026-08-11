@@ -65,6 +65,9 @@ export async function deleteForever(notes) {
   try {
     const root = await bm.ensureRoot();
     for (const r of await bm.allNotes(root)) {
+      // Skipping is fail-SAFE here, unlike the same pattern in drive-gc: `collect` builds the
+      // set of files to DELETE, so a note we cannot read simply leaves its files in Drive.
+      // An undecryptable note therefore leaks storage, never loses it — no rethrow needed.
       let note; try { note = await decode(r.payload); } catch { continue; }
       if (deletedIds.has(note.id)) collect(note);
     }

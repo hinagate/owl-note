@@ -5,6 +5,7 @@
 import * as bm from './bookmarks.js';
 import * as mirror from './mirror.js';
 import { decode } from './codec.js';
+import { isMissingKeyError } from './note-key.js';
 import { deleteFile } from './drive/client.js';
 import { loadNoteBody } from './note-drive.js';
 
@@ -78,7 +79,13 @@ async function runDeleteUnreferencedFiles(candidateFileIds, { stubBodyFileIds = 
   try {
     const root = await bm.ensureRoot();
     for (const r of await bm.allNotes(root)) { // every synced note (all folders incl. Trash)
-      let note; try { note = await decode(r.payload); } catch { continue; }
+      // A note we cannot decode is a note whose attachment ids we cannot see, so skipping it
+      // leaves its files looking unreferenced and deletes them. That risk was negligible while
+      // the only cause was a corrupt payload; an encrypted note whose key has not reached this
+      // device yet hits the same branch for the WHOLE corpus. Rethrow so the enclosing catch
+      // aborts the entire pass — leak, never lose, exactly as the stub-body loop below does.
+      let note;
+      try { note = await decode(r.payload); } catch (err) { if (isMissingKeyError(err)) throw err; continue; }
       for (const f of driveFileIdsOf(note)) referenced.add(f);
       if (note._driveBody) stubBodies.push(note._driveBody);
     }

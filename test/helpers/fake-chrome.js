@@ -124,14 +124,15 @@ export function installFakeChrome(opts = {}) {
     },
   };
 
-  const store = new Map();
-  const onStorageChanged = makeHub(); // chrome.storage.onChanged (area === 'local')
+  const onStorageChanged = makeHub(); // chrome.storage.onChanged (fires with the area name)
   // Real chrome isolates onChanged listener exceptions from the writer (and fires async);
   // swallow here so a throwing listener can't reject the set/remove/clear promise.
-  const emitStorage = (changes) => { try { onStorageChanged.dispatch(changes, 'local'); } catch { /* isolate listener throws */ } };
-  const storage = {
-    onChanged: onStorageChanged,
-    local: {
+  const emitStorage = (changes, area) => { try { onStorageChanged.dispatch(changes, area); } catch { /* isolate listener throws */ } };
+
+  function makeArea(areaName, backing = new Map()) {
+    const store = backing;
+    return {
+      _store: store, // tests reach in to seed/inspect an area directly
       async get(keys) {
         if (keys == null) return Object.fromEntries(store);
         const list = Array.isArray(keys) ? keys : [keys];
@@ -146,20 +147,29 @@ export function installFakeChrome(opts = {}) {
           changes[k] = oldValue === undefined ? { newValue: v } : { oldValue, newValue: v };
           store.set(k, v);
         }
-        emitStorage(changes);
+        emitStorage(changes, areaName);
       },
       async remove(keys) {
         const changes = {};
         (Array.isArray(keys) ? keys : [keys]).forEach((k) => { if (store.has(k)) { changes[k] = { oldValue: store.get(k) }; store.delete(k); } });
-        if (Object.keys(changes).length) emitStorage(changes);
+        if (Object.keys(changes).length) emitStorage(changes, areaName);
       },
       async clear() {
         const changes = {};
         for (const [k, v] of store) changes[k] = { oldValue: v };
         store.clear();
-        if (Object.keys(changes).length) emitStorage(changes);
+        if (Object.keys(changes).length) emitStorage(changes, areaName);
       },
-    },
+    };
+  }
+
+  const storage = {
+    onChanged: onStorageChanged,
+    local: makeArea('local', opts.localStore),
+    // A profile with extension sync switched off still exposes chrome.storage.sync,
+    // it just never propagates. `syncEnabled: false` drops the area entirely to
+    // exercise the "key can't be distributed" path.
+    ...(opts.syncEnabled === false ? {} : { sync: makeArea('sync', opts.syncStore) }),
   };
 
   const extId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';

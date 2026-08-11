@@ -1,5 +1,52 @@
 // src/lib/codec.js
 import { bytesToBase64url, base64urlToBytes } from './base64url.js';
+import { activeKey, keyById } from './note-key.js';
+
+const IV_BYTES = 12; // AES-GCM standard nonce length
+
+// Encryption is on for every write. Notes in bookmark URLs are readable by any
+// extension holding the "bookmarks" permission, so the payload is ciphertext.
+export const ENCRYPT_WRITES = true;
+
+// THE ENVELOPE IS A LOAD-BEARING SAFETY DEVICE, not packaging.
+//
+// Extensions update per device, so the moment this build starts writing
+// encrypted notes, some devices are still running an older one. The obvious
+// format — a marker prefix the old decoder cannot parse — makes decode() THROW
+// there, and older builds treat a throwing payload as a corrupt note: deleting
+// a notebook skips such notes when moving them to Trash and then hard-deletes
+// them with the folder, and Drive GC deletes their attachments. Those bugs are
+// fixed here but cannot be fixed retroactively in a build already installed.
+//
+// So the ciphertext travels INSIDE an ordinary, fully valid note. An older
+// build inflates it, parses it, finds a normal note object, and renders the
+// upgrade notice as the body — no throw, no destructive path, attachments still
+// enumerable so its GC spares the files. A current build sees `_enc` and
+// decrypts the real note out of it.
+//
+// Cost is roughly the notice text per note. Base64 wastes 25% of each byte, and
+// deflating the envelope wins most of that back, so the ciphertext itself is
+// near break-even despite being encoded twice.
+const ENC_FIELD = '_enc';
+
+// Kept deliberately short. This text is carried by EVERY encrypted note, so each
+// line spends part of the 8 KB bookmark budget for every note the user owns.
+export const LOCKED_NOTE_BODY = [
+  '# 🔒 Encrypted — update OWL-Note to read this note',
+  '',
+  'This version is too old to open it. The contents are intact.',
+  '',
+  '**Update OWL-Note to 2.3.24 or later, then reopen this note.**',
+  'To force it now: `chrome://extensions` → Developer mode → Update.',
+  '',
+  '**Do not edit, save, or delete this note in this version — that destroys its contents.**',
+].join('\n');
+
+// True for a payload this build wrote encrypted. Takes the decoded object, not
+// the string, because the marker lives inside the envelope by design.
+export function isEncryptedNote(obj) {
+  return !!obj && typeof obj[ENC_FIELD] === 'string';
+}
 
 export function compressionAvailable() {
   return typeof CompressionStream !== 'undefined' && typeof DecompressionStream !== 'undefined';
@@ -29,14 +76,59 @@ async function inflateRaw(bytes) {
   return new TextDecoder().decode(buf);
 }
 
-export async function encode(note) {
+// Compress FIRST, then encrypt. The order is not interchangeable: ciphertext is
+// high-entropy by construction and does not compress, so encrypting first would
+// forfeit the deflate ratio that keeps notes under MAX_URL_BYTES and push
+// ordinary notes onto the Drive-offload path. Compress-then-encrypt leaks the
+// compressed length (the CRIME/BREACH class), which needs a chosen-plaintext
+// oracle to exploit; a bookmark reader gets one static snapshot per note, so
+// the length alone discloses nothing useful.
+export async function encode(note, { encrypt = ENCRYPT_WRITES } = {}) {
   const bytes = await deflateRaw(JSON.stringify(note));
-  return bytesToBase64url(bytes);
+  if (!encrypt) return bytesToBase64url(bytes);
+
+  const { id, key } = await activeKey();
+  const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, bytes));
+  const joined = new Uint8Array(iv.length + ct.length);
+  joined.set(iv, 0);
+  joined.set(ct, iv.length);
+
+  // The envelope must satisfy an older build's idea of a note. `id` keeps trash,
+  // dedupe and citation lookups keying correctly there; `attachments` keeps its
+  // Drive GC from deleting files this note still owns. The title is already
+  // stored in the clear on the bookmark itself, so repeating it leaks nothing new.
+  const envelope = {
+    id: note.id,
+    title: note.title,
+    body: LOCKED_NOTE_BODY,
+    attachments: (note.attachments || []).map((a) => ({ id: a.id, driveFileId: a.driveFileId })),
+    created: note.created,
+    updated: note.updated,
+    version: note.version,
+    [ENC_FIELD]: `${id}.${bytesToBase64url(joined)}`,
+  };
+  return bytesToBase64url(await deflateRaw(JSON.stringify(envelope)));
 }
 
 export async function decode(payload) {
-  const json = await inflateRaw(base64urlToBytes(payload));
-  return JSON.parse(json);
+  const outer = JSON.parse(await inflateRaw(base64urlToBytes(payload)));
+  if (!isEncryptedNote(outer)) return outer; // written before encryption, or by an older build
+
+  const sealed = outer[ENC_FIELD];
+  const sep = sealed.indexOf('.');
+  if (sep < 0) throw new Error('malformed encrypted note: no key id separator');
+  const raw = base64urlToBytes(sealed.slice(sep + 1));
+  // Throws MissingKeyError when this device has not received the key yet — a
+  // transient state, NOT a corrupt note. Callers on destructive paths must tell
+  // the two apart; see isMissingKeyError in note-key.js.
+  const key = await keyById(sealed.slice(0, sep));
+  const plain = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: raw.subarray(0, IV_BYTES) },
+    key,
+    raw.subarray(IV_BYTES),
+  );
+  return JSON.parse(await inflateRaw(new Uint8Array(plain)));
 }
 
 export async function selfTest(note) {

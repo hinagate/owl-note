@@ -1,10 +1,30 @@
 # OWL-Note privacy policy
 
-_Last updated: 2026-07-30_
+_Last updated: 2026-08-11_
 
-OWL-Note stores your notes **as bookmarks in your own browser**. A note's text
-is compressed and placed inside the bookmark's URL. A local backup copy is kept
-in the extension's `chrome.storage.local` on each device.
+OWL-Note stores your notes **as bookmarks in your own browser**. A note's text is
+compressed, **encrypted**, and only then placed inside the bookmark's URL. A local
+backup copy is kept in the extension's `chrome.storage.local` on each device.
+
+## How note encryption works
+
+Every note is encrypted with **AES-256-GCM** before it is written to a bookmark.
+
+- **The key is generated on your device**, never by us, and is stored in the
+  extension's own `chrome.storage`. No other extension can read that storage —
+  Chrome provides no API for one extension to read another's — so an extension
+  holding the "Read and change your bookmarks" permission now sees only
+  ciphertext where it used to see your notes.
+- **The key reaches your other devices through your browser account**, the same
+  way your bookmarks already sync, so notes open normally everywhere you use
+  OWL-Note. Because both the key and the notes travel through your browser
+  account, this protects your notes from *other software*, not from your browser
+  vendor — set a Chrome sync passphrase if that matters to you.
+- **Bookmark titles are stored as plain text** so your notes stay recognizable in
+  the bookmark manager and address bar. Avoid putting sensitive detail in a title.
+- **Keep your backups.** Your notes remain in your bookmarks if OWL-Note is ever
+  removed, but they can only be read with the key. `Export` includes the key for
+  exactly this reason — keep an export somewhere safe.
 
 - **We do not run any server.** Your notes never leave your browser through us.
 - **Syncing** happens only via *your own* Chrome Sync / Microsoft account, under

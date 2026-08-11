@@ -135,6 +135,7 @@ export const WELCOME_NOTE_BODY = [
   '- No separate OWL-Note account',
   '- No subscription, OWL-Note backend, telemetry, or advertising',
   '- Notes stored in browser bookmarks when within sync limits',
+  '- Note contents encrypted with AES-256-GCM before they enter a bookmark, so other extensions cannot read them',
   '- Capture, drawing, conversion, retrieval, and AI processing run locally',
   '- Content sent to Google Drive only when Drive sync or Drive sharing is explicitly enabled',
   '- Oversized content kept safely on the current device when Drive sync is off',

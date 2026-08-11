@@ -1,4 +1,6 @@
 // src/lib/mirror.js
+import { exportKeyring, importKeyring } from './note-key.js';
+
 const KEY = (id) => `note:${id}`;
 
 export async function saveBackup(note, opts = {}) {
@@ -30,15 +32,24 @@ export async function healMissing(existingIds) {
   return (await allBackups()).filter((n) => !existingIds.has(n.id));
 }
 
+// The keyring rides along in the backup. Before encryption, wiping the extension lost
+// nothing — the notes were still sitting in the bookmark tree, readable on reinstall.
+// Now those surviving bookmarks are ciphertext, so the key is the difference between a
+// recoverable profile and an unreadable one. Re-importing the notes alone would create
+// fresh duplicates beside bookmarks that stay locked; the keys unlock them in place.
+// This adds no exposure: the file already contains every note in plaintext.
 export async function exportAll() {
-  return JSON.stringify({ version: 1, notes: await allBackups() }, null, 2);
+  return JSON.stringify({ version: 1, notes: await allBackups(), keyring: await exportKeyring() }, null, 2);
 }
 
 export async function importAll(jsonString) {
   const data = JSON.parse(jsonString);
   const notes = (Array.isArray(data.notes) ? data.notes : []).filter((n) => n && typeof n.id === 'string');
   for (const n of notes) await saveBackup(n);
-  return { imported: notes.length, notes };
+  // Older backups predate the keyring; a missing field is normal, not an error.
+  let keysAdded = 0;
+  if (data.keyring) { try { keysAdded = await importKeyring(data.keyring); } catch { /* never fail an import over keys */ } }
+  return { imported: notes.length, notes, keysAdded };
 }
 
 export async function localOnlyBackups(folderId) {

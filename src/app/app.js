@@ -1,6 +1,7 @@
 import * as bm from '../lib/bookmarks.js';
 import * as mirror from '../lib/mirror.js';
 import { encode, decode, selfTest } from '../lib/codec.js';
+import { isMissingKeyError, ensureDistributed, watchKeyChanges } from '../lib/note-key.js';
 import { createNote, withUpdatedContent, contentHash, extractTitle, withPinned, orderNotes } from '../lib/note.js';
 import { renderSidebar } from './sidebar.js';
 import { renderNoteList } from './note-list.js';
@@ -1500,7 +1501,18 @@ export async function deleteNotebook(id) {
   subtree.add(id);
   const targets = [];
   for (const n of await bm.allNotes(id)) {
-    try { targets.push({ id: (await decode(n.payload)).id, bookmarkId: n.bookmarkId, folderId: n.folderId }); } catch { /* skip malformed */ }
+    // bm.deleteFolder() below is a removeTree: any note NOT moved to Trash first is destroyed
+    // outright, with no recovery path. A note whose key has not reached this device yet is
+    // unreadable but completely intact — skipping it here would hard-delete a healthy note.
+    // Refuse the whole operation; it succeeds normally once the key lands.
+    try { targets.push({ id: (await decode(n.payload)).id, bookmarkId: n.bookmarkId, folderId: n.folderId }); }
+    catch (err) {
+      if (isMissingKeyError(err)) {
+        toast('Can’t delete this notebook yet — some notes are still waiting for their encryption key');
+        return;
+      }
+      /* genuinely malformed payload — skip it as before */
+    }
   }
   for (const ln of await mirror.allLocalOnly()) {
     if (subtree.has(ln.folderId)) targets.push({ id: ln.id, bookmarkId: null, folderId: ln.folderId, localOnly: true });
@@ -1999,6 +2011,11 @@ export async function boot() {
     toast('Encoding self-test failed — saving disabled', true);
     return;
   }
+  // Re-upload any key that was minted while sync was unavailable, and pick up keys
+  // arriving from another device mid-session so their notes become readable without
+  // a reload. Both are best-effort: neither may block boot.
+  try { await ensureDistributed(); } catch { /* offline / sync off — local copy still works */ }
+  watchKeyChanges(() => { refreshPanes().catch(() => {}); });
   const root = await bm.ensureRoot();
   await initUI(root);
 }

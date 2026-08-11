@@ -4,6 +4,7 @@ import * as bm from '../src/lib/bookmarks.js';
 import * as mirror from '../src/lib/mirror.js';
 import * as client from '../src/lib/drive/client.js';
 import { encode } from '../src/lib/codec.js';
+import { _resetCache } from '../src/lib/note-key.js';
 import {
   DRIVE_CLEANUP_PENDING_KEY,
   deleteUnreferencedFiles,
@@ -29,6 +30,31 @@ describe('drive-gc', () => {
     expect(client.deleteFile).toHaveBeenCalledWith('ORPHAN');
     expect(client.deleteFile).not.toHaveBeenCalledWith('KEEP');
     expect(client.deleteFile).toHaveBeenCalledTimes(1);
+  });
+
+  // Regression: an undecryptable note hides its attachment ids, so treating it as
+  // "malformed, skip" would leave its live files looking unreferenced and delete them.
+  // On a device still waiting for its key that is the ENTIRE corpus, so the pass must
+  // abort outright — leak, never lose.
+  it('aborts the pass when a note cannot be decrypted, instead of deleting its files', async () => {
+    const sealed = await encode({ id: 'k', attachments: [{ id: 'x', driveFileId: 'KEEP' }] }, { encrypt: true });
+    installFakeChrome(); // another device: the bookmark synced, the key has not
+    _resetCache();
+    client.deleteFile.mockClear();
+    const root = await bm.ensureRoot();
+    await bm.createNote(root, 'K', sealed);
+
+    const res = await deleteUnreferencedFiles(['KEEP', 'ORPHAN']);
+    expect(client.deleteFile).not.toHaveBeenCalled(); // KEEP would have been lost
+    expect(res.deleted).toBe(0);
+    expect(res.pending).toBe(2); // both stay queued for a retry once the key lands
+  });
+
+  it('still skips a genuinely corrupt note rather than stalling cleanup forever', async () => {
+    const root = await bm.ensureRoot();
+    await bm.createNote(root, 'bad', 'not-a-decodable-payload');
+    await deleteUnreferencedFiles(['ORPHAN']);
+    expect(client.deleteFile).toHaveBeenCalledWith('ORPHAN');
   });
 
   it('deleteUnreferencedFiles also spares a file referenced only by a local-mirror note', async () => {
