@@ -41,6 +41,15 @@ export function renderNoteList(container, { notes, activeHandle, onOpen = () => 
       const handle = n.bookmarkId ?? n.id;
       const card = document.createElement('div');
       card.className = 'item card trashed';
+      // Trashed cards used to render with no click handler at all, so a note in Trash
+      // could only ever be judged by its title and a 100-character snippet — not enough
+      // to choose between Restore and Delete forever. Opening is read-only (app.js).
+      card.tabIndex = 0;
+      card.setAttribute('role', 'button');
+      card.addEventListener('click', () => onOpen(handle));
+      card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(handle); }
+      });
       const title = document.createElement('div');
       title.className = 'card-title';
       title.textContent = n.title || 'Untitled';

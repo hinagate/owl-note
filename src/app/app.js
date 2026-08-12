@@ -57,8 +57,12 @@ export { saveNote, MAX_URL_BYTES, WARN_URL_BYTES }; // moved to ../lib/save-note
 // The bytes a note WOULD occupy in its bookmark, after Drive offload. With sync on,
 // attachments become small references, so the meter reflects what actually syncs.
 // Uses the PURE offloadShape (no upload) — this runs on every keystroke.
-export async function measuredBytes(note) {
-  const enabled = (await chrome.storage.local.get('drive:enabled'))['drive:enabled'];
+export async function measuredBytes(note, driveEnabled = null) {
+  // Callers that already know the flag pass it in, so the live meter reads storage
+  // once per keystroke instead of twice.
+  const enabled = driveEnabled === null
+    ? (await chrome.storage.local.get('drive:enabled'))['drive:enabled']
+    : driveEnabled;
   const toSave = enabled ? offloadShape(note) : note;
   return urlByteLength(await encode(toSave));
 }
@@ -66,10 +70,21 @@ export async function measuredBytes(note) {
 // Measure what this note will actually cost in its bookmark URL — the same
 // compressed bytes the save path caps — so the editor can show it live.
 async function measureNoteSize({ title, body, attachments = [] }) {
+  const driveEnabled = !!(await chrome.storage.local.get('drive:enabled'))['drive:enabled'];
   const note = ui.current && ui.activeBookmarkId
     ? withUpdatedContent(ui.current, { title, body, attachments })
     : createNote({ title, body, attachments });
-  return { bytes: await measuredBytes(note), warn: WARN_URL_BYTES, max: MAX_URL_BYTES };
+  // Exactly the condition behind the note list's Drive chip, so the badge and the chip
+  // can never disagree: this note keeps its body and/or its attachments in Drive, and a
+  // byte count of the bookmark payload would not describe it.
+  const usesDrive = !!(ui.current && ui.current._driveBody)
+    || (attachments || []).some((a) => a.driveFileId);
+  return {
+    bytes: await measuredBytes(note, driveEnabled),
+    warn: WARN_URL_BYTES,
+    max: MAX_URL_BYTES,
+    usesDrive,
+  };
 }
 
 export async function dropNote(handle, folderId) {
@@ -1355,7 +1370,13 @@ function renderCurrentEditor(opts = {}) {
   // A note switch can bring a script whose table isn't in memory yet — opening a Japanese
   // note with phonetics already on pulls the kana table here.
   syncPhoneticsTables(ui.current ? ui.current.body : '');
+  // A note in Trash opens as a reading view: you need to see what it is to choose
+  // between Restore and Delete forever, but editing something already deleted (and
+  // autosaving it back) would be a trap.
+  const inTrash = !!ui.trashId && noteFolderId === ui.trashId;
   ui.editor = renderEditor(document.getElementById('editor'), {
+    readOnly: inTrash,
+    readOnlyNotice: inTrash ? 'In Trash — read only. Restore this note to edit it.' : '',
     title: ui.current ? ui.current.title : '',
     body: ui.current ? ui.current.body : '',
     attachments: ui.current ? (ui.current.attachments || []) : [],

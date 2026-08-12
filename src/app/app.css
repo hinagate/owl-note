@@ -262,6 +262,20 @@ body.resizing { user-select: none; cursor: col-resize; }
 .editor-split.edit-collapsed .edit-pane { display: none; }
 .editor-split.edit-collapsed .splitter-edit { display: none; }
 .editor-split.edit-collapsed .preview { width: 100%; height: 100%; }
+
+/* Read-only note (in Trash): the same single-pane reading layout as edit-collapsed,
+   but driven by the editor's own class so it never touches the user's saved pane
+   preference — leaving Trash must not leave the editor collapsed. */
+.editor-readonly .editor-split { display: block; }
+.editor-readonly .edit-pane,
+.editor-readonly .splitter-edit { display: none; }
+.editor-readonly .preview { width: 100%; height: 100%; }
+.editor-readonly .editor-bar { min-height: 0; }
+/* The size badge reports remaining bookmark-sync budget — an editing concern with
+   no meaning for a note you are only deciding whether to restore. */
+.editor-readonly .preview-size { display: none; }
+.editor-readonly textarea.note-title { cursor: default; }
+.readonly-notice { color: var(--muted); font-size: 13px; padding: 4px 2px; }
 /* A flex column so the zoom bar can be pushed to the foot of the pane by margin-top:auto
    even when the note is too short to fill it. The content keeps `flex: 1 0 auto` so it
    still grows past the pane and scrolls normally. */

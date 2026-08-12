@@ -13,7 +13,7 @@ import { createZoomBar } from './preview-zoom.js';
 
 export function renderEditor(
   container,
-  { title = '', body = '', attachments = [], created = null, updated = null, onChange = () => {}, onSave = () => {}, onDelete = null, focusTitle = false, measure = null, breadcrumb = [], onNavigate = () => {}, onSuggestTitle = null, shareActions = [], recoverAttachments = null, loadImageBytes = getBytes, phonetics = null, previewZoom = null },
+  { title = '', body = '', attachments = [], created = null, updated = null, onChange = () => {}, onSave = () => {}, onDelete = null, focusTitle = false, measure = null, breadcrumb = [], onNavigate = () => {}, onSuggestTitle = null, shareActions = [], recoverAttachments = null, loadImageBytes = getBytes, phonetics = null, previewZoom = null, readOnly = false, readOnlyNotice = '' },
 ) {
   container.innerHTML = '';
   // Images live in `atts` (as data: URIs); the body only carries short owl-img refs.
@@ -612,6 +612,29 @@ export function renderEditor(
   });
 
   container.append(crumbs, bar, remoteBar, split, lightbox);
+
+  // Read-only view (a note in Trash). Strip the editing affordances rather than
+  // disabling them one by one: whatever the toolbar grows later, none of it can
+  // apply here. doSave() is guarded independently, so nothing can be written back
+  // even through a keyboard shortcut or the autosave timer.
+  // toggle, never add: `container` is the persistent #editor element and renderEditor
+  // only clears its CHILDREN (innerHTML = ''), so a class added here outlives the
+  // render. Leaving it set kept the editor stuck in the collapsed reading layout for
+  // every note opened after one was viewed in Trash.
+  container.classList.toggle('editor-readonly', !!readOnly);
+  if (readOnly) {
+    bar.replaceChildren(); // no Save, Share, Delete, or insert controls
+    if (readOnlyNotice) {
+      const notice = document.createElement('div');
+      notice.className = 'readonly-notice';
+      notice.textContent = readOnlyNotice;
+      bar.appendChild(notice);
+    }
+    titleInput.readOnly = true;
+    ta.readOnly = true;
+    ta.hidden = true; // preview takes the full pane — this is a reading view
+  }
+
   growTitle(); // size the title to its content now that it's in the DOM
   // Recompute the auto-grown title height when the edit pane's width changes (pane drag /
   // window resize): a title that now wraps to more lines would otherwise clip (UI audit).
@@ -629,9 +652,21 @@ export function renderEditor(
     // Measure what would actually be saved — prune attachments whose owl-img ref is no
     // longer in the body, so the meter drops when an image is removed (matches onSave).
     Promise.resolve(measure({ title: titleInput.value, body: ta.value, attachments: pruneAttachments(ta.value, atts) }))
-      .then(({ bytes, warn, max }) => {
+      .then(({ bytes, warn, max, usesDrive = false }) => {
         if (seq !== sizeSeq) return;
+        // A note that keeps anything in Drive — its body, its attachments, or both —
+        // has no meaningful bookmark size to report, because the parts that make it big
+        // are not in the bookmark. Say where it lives. Same condition as the note list's
+        // Drive chip, so a note showing the chip always shows this too.
+        if (usesDrive) {
+          sizeBadge.textContent = 'Syncs with Drive';
+          sizeBadge.title = 'This note keeps its contents in your Google Drive, so the bookmark size limit does not apply.';
+          sizeBadge.classList.remove('over', 'warn');
+          return;
+        }
+        // Everything else lives entirely in its bookmark URL, so the cap is real.
         sizeBadge.textContent = `${(bytes / 1024).toFixed(1)} / ${Math.round(max / 1024)} KB`;
+        sizeBadge.title = "This note's compressed size inside its bookmark URL. Over the cap it won't sync across devices.";
         sizeBadge.classList.toggle('over', bytes > max);
         sizeBadge.classList.toggle('warn', bytes > warn && bytes <= max);
       })
@@ -880,6 +915,10 @@ export function renderEditor(
   }
   async function doSave({ auto }) {
     clearTimeout(saveTimer);
+    // A read-only note (currently: anything in Trash) must never be written back.
+    // Guarding here rather than only hiding the Save button closes the autosave
+    // timer and every keyboard path in one place.
+    if (readOnly) return;
     const title = titleInput.value;
     const body = ta.value;
     if (auto && !title.trim() && !body.trim()) { setStatus(''); return; } // never auto-create an empty note
