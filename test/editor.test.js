@@ -18,6 +18,21 @@ describe('editor', () => {
     expect(api.getBody()).toBe('# Changed');
   });
 
+  it('reports one change when a typed header cell auto-aligns a table', () => {
+    const onChange = vi.fn();
+    const el = document.getElementById('editor');
+    renderEditor(el, { body: '| a | b |\n| --- | --- |\n| 1 | 2 |', onChange });
+    const ta = el.querySelector('textarea.note-body');
+    ta.value = '| a | b | c |\n| --- | --- |\n| 1 | 2 |';
+    ta.setSelectionRange(ta.value.indexOf('c') + 1, ta.value.indexOf('c') + 1);
+
+    ta.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: 'c' }));
+
+    expect(ta.value).toBe('| a | b | c |\n| --- | --- | --- |\n| 1 | 2 |  |');
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ body: ta.value }));
+  });
+
   it('shows the title in its own field and in the preview, and includes it in onSave', () => {
     const onSave = vi.fn();
     const el = document.getElementById('editor');

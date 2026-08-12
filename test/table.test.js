@@ -188,6 +188,18 @@ describe('alignTableAt (rewrites the note while typing)', () => {
     expect(alignTableAt('| a | b |\n| --- | --- |\n| 1 | 2 |', 3)).toBeNull();
   });
 
+  it('does not rewrite a structurally valid table when typing in cell padding', () => {
+    const body = '| a | b |\n| --- | --- |\n| 1 | typed beside the pipe x|';
+    expect(alignTableAt(body, body.indexOf('x') + 1)).toBeNull();
+  });
+
+  it('can still normalize padding after an editor-generated insertion', () => {
+    const body = '| a | b |\n| --- | --- |\n| 1 |  attachment|';
+    const edit = alignTableAt(body, body.indexOf('attachment') + 10, { normalizeSpacing: true });
+    const out = body.slice(0, edit.replaceStart) + edit.insert + body.slice(edit.replaceEnd);
+    expect(out).toBe('| a | b |\n| --- | --- |\n| 1 | attachment |');
+  });
+
   it('is null outside a table', () => {
     expect(alignTableAt('plain prose', 4)).toBeNull();
   });

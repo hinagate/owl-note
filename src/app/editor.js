@@ -767,15 +767,22 @@ export function renderEditor(
   // Insert text over [start,end] while PRESERVING the textarea's native undo stack — assigning
   // ta.value directly wipes Ctrl+Z. Uses execCommand('insertText') where available (all
   // Chromium browsers); falls back to a manual splice (loses undo) e.g. under jsdom.
+  let insertingText = false;
   function insertText(text, start, end) {
-    ta.focus();
-    ta.setSelectionRange(start, end);
-    let ok = false;
-    try { ok = !!(document.execCommand && document.execCommand('insertText', false, text)); } catch { ok = false; }
-    if (!ok) {
-      ta.value = ta.value.slice(0, start) + text + ta.value.slice(end);
-      ta.selectionStart = ta.selectionEnd = start + text.length;
-      ta.dispatchEvent(new Event('input', { bubbles: true }));
+    const wasInsertingText = insertingText;
+    insertingText = true;
+    try {
+      ta.focus();
+      ta.setSelectionRange(start, end);
+      let ok = false;
+      try { ok = !!(document.execCommand && document.execCommand('insertText', false, text)); } catch { ok = false; }
+      if (!ok) {
+        ta.value = ta.value.slice(0, start) + text + ta.value.slice(end);
+        ta.selectionStart = ta.selectionEnd = start + text.length;
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    } finally {
+      insertingText = wasInsertingText;
     }
   }
 
@@ -960,7 +967,11 @@ export function renderEditor(
   let aligningTable = false;
   const alignTable = () => {
     if (aligningTable) return;
-    const edit = alignTableAt(ta.value, ta.selectionStart ?? 0);
+    // Editor-generated insertions (attachments, formatting, table controls) keep
+    // the canonical cell padding they have always produced. Native typing only
+    // requests structural column repair, so typing beside a pipe remains one
+    // untouched browser undo transaction.
+    const edit = alignTableAt(ta.value, ta.selectionStart ?? 0, { normalizeSpacing: insertingText });
     if (!edit) return;
     aligningTable = true;
     try {
@@ -972,6 +983,11 @@ export function renderEditor(
   };
 
   const fireChange = () => {
+    // Replacing a multi-line table through execCommand can emit one nested input
+    // event per inserted line. The outer event performs the single refresh/save
+    // notification after alignment finishes; handling the nested events would
+    // rerender a large preview dozens of times for one keystroke.
+    if (aligningTable) return;
     linkedRange = null; // offsets are stale the moment the text moves under them
     alignTable();
     refresh();

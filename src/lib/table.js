@@ -188,7 +188,7 @@ export function tableBlockAt(body, pos) {
 // Only whole trailing cells are added or removed, so nothing before the caret on
 // its own line ever moves and the caret remap below stays exact.
 // Returns null when the table already matches its header.
-export function alignTableAt(body, pos) {
+export function alignTableAt(body, pos, { normalizeSpacing = false } = {}) {
   const found = tableBlockAt(body, pos);
   if (!found) return null;
   const { blockStart, blockEnd } = found;
@@ -196,6 +196,22 @@ export function alignTableAt(body, pos) {
   // Same conservative rule as normalizeTables: a delimiter row in second
   // position is what marks this block as a table someone is building.
   if (lines.length < 2 || !isSeparatorRow(lines[1])) return null;
+
+  // This is a structural repair, not a table formatter. In particular, typing in
+  // the padding just before a closing pipe temporarily changes `| text |` into
+  // `| text x|`. Rebuilding a large table merely to restore that space replaces
+  // the textarea's whole table through execCommand, which is slow and puts a
+  // replacement barrier in front of the character in Chromium's undo history.
+  // Only run when a row really needs to gain or lose trailing cells.
+  const rows = lines.map(splitTableRow);
+  const columns = rows[0].length;
+  const needsStructuralRepair = rows.some((cells, index) => {
+    if (index === 1) return cells.length !== columns; // delimiter follows the header exactly
+    if (cells.length < columns) return true;
+    return cells.length > columns && cells[cells.length - 1] === ''; // removable trailing cell
+  });
+  if (!needsStructuralRepair && !normalizeSpacing) return null;
+
   const widened = alignTableLines(lines);
   const insert = widened.join('\n');
   if (insert === lines.join('\n')) return null;
