@@ -203,6 +203,24 @@ export function renderNoteList(container, { notes, activeHandle, onOpen = () => 
       card.appendChild(snippet);
     }
 
+    // When the note was last touched, as its own quiet line under the snippet. A live
+    // card has room for it and recency is how people scan their own notes; the trashed
+    // card puts the same fact in a title chip instead, because there it sits beside
+    // Restore / Delete forever and needs to read at a glance, not as prose.
+    // Skipped for the unsaved draft, which has no timestamp to speak of yet.
+    if (!n.draft) {
+      const stamp = n.updated ?? n.created ?? n.dateAdded;
+      const age = relativeTime(stamp, Date.now(), { maxUnit: 'year' });
+      if (age) {
+        const when = document.createElement('div');
+        when.className = 'card-when';
+        when.textContent = `Edited ${age}`;
+        const exact = new Date(stamp);
+        if (!Number.isNaN(exact.getTime())) when.title = `Last edited ${exact.toLocaleString()}`;
+        card.appendChild(when);
+      }
+    }
+
     if (!n.draft) {
       const pin = document.createElement('button');
       pin.type = 'button';

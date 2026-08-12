@@ -950,6 +950,11 @@ body.resizing { user-select: none; cursor: col-resize; }
 #note-list .trash-bar { display: flex; justify-content: flex-end; padding: 6px; }
 #note-list .empty-trash { border: 1px solid var(--border); background: #fff; border-radius: 8px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
 #note-list .empty-trash:disabled { opacity: 0.5; cursor: default; }
+/* Last-edited line on a live card, under the snippet. Quieter than the snippet so it
+   reads as metadata rather than content, and right-aligned so it forms its own column
+   down the list instead of trailing off the ragged end of each snippet. */
+#note-list .card-when { color: var(--muted); font-size: 12px; margin-top: 4px; text-align: right; }
+
 /* Staleness chip on a trashed card — the "is this safe to delete?" cue. Same shape and
    placement as the Drive chip, in a neutral grey so it reads as metadata, not status. */
 .badge-age { margin-left: 6px; padding: 1px 6px; font-size: 10px; border-radius: 8px; background: var(--chip-bg, #eceef1); color: var(--muted); vertical-align: middle; white-space: nowrap; }
