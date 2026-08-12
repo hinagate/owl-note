@@ -1112,6 +1112,9 @@ body.resizing { user-select: none; cursor: col-resize; }
 .note-search-input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: 12px; line-height: 1.4; }
 .note-search-input::-webkit-search-cancel-button { opacity: 0.55; }
 .note-search-count { flex: none; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+/* The source behind the current preview selection. Distinct from a search hit — this
+   is a live mirror, not a result — and blue to read as "the same thing, over there". */
+.note-body-highlights mark.note-linked-hit { background: rgba(90, 150, 245, 0.34); box-shadow: 0 0 0 1px rgba(50, 110, 210, 0.28); }
 .note-body-highlights mark.note-search-hit { background: rgba(255, 213, 79, 0.42); box-shadow: 0 0 0 1px rgba(226, 174, 0, 0.18); }
 .note-body-highlights mark.note-search-hit.active { background: rgba(255, 174, 0, 0.68); box-shadow: 0 0 0 1px rgba(190, 120, 0, 0.42); }
 /* Highlight (<mark>) in the rendered preview — generated palette classes keep

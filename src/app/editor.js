@@ -375,12 +375,19 @@ export function renderEditor(
   // Select [start,end] and bring it into view. Counts hard newlines, so a long
   // soft-wrapped paragraph lands near rather than exactly on the target — good
   // enough to orient by, and the behaviour find-in-note has always had.
-  function scrollToOffset(start, end = start) {
-    ta.setSelectionRange(start, end);
+  // Scroll only. Kept separate from selecting because mirroring a preview selection
+  // must not touch the textarea's own selection — that would need focus, which would
+  // collapse the selection the reader is copying from.
+  function scrollOffsetIntoView(start) {
     const line = ta.value.slice(0, start).split('\n').length - 1;
     const lineHeight = Number.parseFloat(getComputedStyle(ta).lineHeight) || 24;
     ta.scrollTop = Math.max(0, line * lineHeight - ta.clientHeight / 3);
     backdrop.scrollTop = ta.scrollTop;
+  }
+
+  function scrollToOffset(start, end = start) {
+    ta.setSelectionRange(start, end);
+    scrollOffsetIntoView(start);
   }
 
   function scrollToSearchMatch() {
@@ -575,6 +582,38 @@ export function renderEditor(
     if (!img || !content.contains(img) || (e.key !== 'Enter' && e.key !== ' ')) return;
     e.preventDefault();
     openLightbox(img);
+  });
+
+  // The source range currently mirrored from a preview selection, or null.
+  let linkedRange = null;
+  const clearLinked = () => { if (linkedRange) { linkedRange = null; renderHighlights(); } };
+
+  // Selecting in the preview mirrors that text in the source, side by side. The
+  // textarea is deliberately NOT focused: the reader is usually selecting in order
+  // to copy, and taking focus would collapse their selection and make Ctrl+C copy
+  // the wrong pane. The mirrored range is painted into the highlight backdrop
+  // instead, which is visible whether or not the textarea has focus.
+  // Bound to the preview element, not to document's `selectionchange`: a document
+  // listener outlives the editor that added it, and the app renders a new editor per
+  // note, so every selection anywhere would re-lex the note once per editor ever
+  // created. mouseup is where a drag-select finishes anyway.
+  content.addEventListener('mouseup', () => {
+    if (destroyed || readOnly) return;
+    const sel = window.getSelection?.();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) { clearLinked(); return; }
+    const bodyEl = content.querySelector('.preview-body');
+    const domRange = sel.getRangeAt(0);
+    if (!bodyEl || !bodyEl.contains(domRange.commonAncestorContainer)) { clearLinked(); return; }
+    const anchor = domRange.startContainer.nodeType === 3
+      ? domRange.startContainer.parentElement : domRange.startContainer;
+    const index = blockIndexOf(bodyEl, anchor);
+    const block = index < 0 ? null : blockRanges(ta.value)[index];
+    if (!block) { clearLinked(); return; }
+    const spot = refineOffset(ta.value, block, sel.toString());
+    if (!spot) { clearLinked(); return; }
+    linkedRange = spot;
+    renderHighlights();
+    scrollOffsetIntoView(spot.start);
   });
 
   // Reverse sync: click the rendered text, land on the source that produced it.
@@ -864,12 +903,18 @@ export function renderEditor(
     const ranges = [];
     for (const m of text.matchAll(HL_RE)) ranges.push({ start: m.index, end: m.index + m[0].length, kind: 'attachment' });
     searchMatches.forEach((m, index) => ranges.push({ ...m, kind: index === activeSearchMatch ? 'search-active' : 'search' }));
+    // The source behind whatever is selected in the preview. Painted here rather
+    // than selected in the textarea because the textarea would have to be focused
+    // for its own selection to show — and focusing it would drop the preview
+    // selection the reader is about to copy. This shows both at once.
+    if (linkedRange) ranges.push({ ...linkedRange, kind: 'linked' });
     ranges.sort((a, b) => a.start - b.start || (a.kind.startsWith('search') ? -1 : 1));
     let html = '';
     let last = 0;
     for (const range of ranges) {
       if (range.start < last) continue;
       const cls = range.kind === 'attachment' ? 'attachment-ref'
+        : range.kind === 'linked' ? 'note-linked-hit'
         : (range.kind === 'search-active' ? 'note-search-hit active' : 'note-search-hit');
       html += escHtml(text.slice(last, range.start)) + `<mark class="${cls}">` + escHtml(text.slice(range.start, range.end)) + '</mark>';
       last = range.end;
@@ -933,6 +978,7 @@ export function renderEditor(
   };
 
   const fireChange = () => {
+    linkedRange = null; // offsets are stale the moment the text moves under them
     alignTable();
     refresh();
     onChange({ title: titleInput.value, body: ta.value, attachments: atts });
