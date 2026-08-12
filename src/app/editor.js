@@ -385,6 +385,24 @@ export function renderEditor(
     backdrop.scrollTop = ta.scrollTop;
   }
 
+  // Scroll a rendered <mark> into view by MEASURING it.
+  //
+  // Counting hard newlines and multiplying by line-height is wrong whenever a source
+  // line wraps, and in a table-heavy note every row is one enormous line: a mark 1876px
+  // down was being scrolled to 836px, i.e. a whole screen short, so the highlight was
+  // real but off-screen. The backdrop is a pixel-exact mirror of the textarea — same
+  // text, same font, same wrapping — so the mark's own geometry is the true answer.
+  function scrollMarkIntoView(selector) {
+    const mark = backdrop.querySelector(selector);
+    if (!mark) return false;
+    const markRect = mark.getBoundingClientRect();
+    const baseRect = backdrop.getBoundingClientRect();
+    const top = (markRect.top - baseRect.top) + backdrop.scrollTop;
+    ta.scrollTop = Math.max(0, top - ta.clientHeight / 3);
+    backdrop.scrollTop = ta.scrollTop;
+    return true;
+  }
+
   function scrollToOffset(start, end = start) {
     ta.setSelectionRange(start, end);
     scrollOffsetIntoView(start);
@@ -393,7 +411,10 @@ export function renderEditor(
   function scrollToSearchMatch() {
     if (!searchMatches.length) return;
     const match = searchMatches[activeSearchMatch];
-    scrollToOffset(match.start, match.end);
+    ta.setSelectionRange(match.start, match.end);
+    // Measure the rendered hit; fall back to line counting only if it is not
+    // painted yet (callers render highlights first, so that is the rare path).
+    if (!scrollMarkIntoView('mark.note-search-hit.active')) scrollOffsetIntoView(match.start);
   }
 
   function updateNoteSearch({ reset = false, scroll = false } = {}) {
@@ -615,7 +636,7 @@ export function renderEditor(
     if (!spot) { clearLinked(); return; }
     linkedRange = spot;
     renderHighlights();
-    scrollOffsetIntoView(spot.start);
+    if (!scrollMarkIntoView('mark.note-linked-hit')) scrollOffsetIntoView(spot.start);
   });
 
   lightboxClose.addEventListener('click', closeLightbox);
