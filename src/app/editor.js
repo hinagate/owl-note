@@ -4,7 +4,7 @@ import { imageFileToDataUri } from '../lib/image-downscale.js';
 import { extractImages, inlineImages, pruneAttachments, attachFile, listFileRefs, linkifyFileRefs } from '../lib/note-images.js';
 import { getBytes } from '../lib/attachment-store.js';
 import { relativeTime } from '../lib/relative-time.js';
-import { blockRanges, refineOffset, blockIndexOf } from '../lib/source-map.js';
+import { blockRanges, locateSelection, blockIndexOf } from '../lib/source-map.js';
 import * as panes from './panes.js';
 import { renderFormatBar, formatActions } from './format-bar.js';
 import { nextTableRow } from '../lib/format.js';
@@ -609,42 +609,15 @@ export function renderEditor(
     const index = blockIndexOf(bodyEl, anchor);
     const block = index < 0 ? null : blockRanges(ta.value)[index];
     if (!block) { clearLinked(); return; }
-    const spot = refineOffset(ta.value, block, sel.toString());
+    // Exact or nothing. A highlight on merely similar text cannot be told apart
+    // from a correct one by looking, so a miss must stay silent.
+    const spot = locateSelection(ta.value, block, sel.toString());
     if (!spot) { clearLinked(); return; }
     linkedRange = spot;
     renderHighlights();
     scrollOffsetIntoView(spot.start);
   });
 
-  // Reverse sync: click the rendered text, land on the source that produced it.
-  // In a long note the two panes drift far apart and finding the paragraph you are
-  // reading, in the Markdown, is pure eye-work. Registered on `content`, which
-  // survives every refresh, so it needs no re-binding.
-  content.addEventListener('click', (e) => {
-    if (readOnly) return; // reading view: there is no source pane to jump to
-    // A drag that selected text is a copy, not a request to navigate.
-    const sel = window.getSelection?.();
-    if (sel && !sel.isCollapsed) return;
-    // Anything already interactive keeps its own behaviour.
-    if (e.target.closest?.('a, button, input, textarea, img, .owl-image-placeholder')) return;
-    const bodyEl = content.querySelector('.preview-body');
-    const index = blockIndexOf(bodyEl, e.target);
-    if (index < 0) return;
-    const range = blockRanges(ta.value)[index];
-    if (!range) return;
-    // Aim at the words under the pointer rather than the top of the block, so
-    // clicking deep inside a long paragraph lands there.
-    let needle = '';
-    try {
-      const caret = document.caretRangeFromPoint?.(e.clientX, e.clientY);
-      const node = caret && caret.startContainer;
-      if (node && node.nodeType === 3) needle = node.textContent.slice(caret.startOffset, caret.startOffset + 60);
-    } catch { /* no caret API — fall back to the block's own text */ }
-    if (!needle.trim()) needle = e.target.textContent || '';
-    const spot = refineOffset(ta.value, range, needle);
-    if (!panes.isEditCollapsed()) ta.focus(); // don't focus a pane the reader has hidden
-    scrollToOffset(spot.start, spot.end);
-  });
   lightboxClose.addEventListener('click', closeLightbox);
   lightbox.addEventListener('click', (e) => { if (e.target === lightbox) closeLightbox(); });
   lightbox.addEventListener('wheel', (e) => {

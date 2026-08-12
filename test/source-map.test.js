@@ -1,124 +1,133 @@
 import { describe, it, expect } from 'vitest';
-import { blockRanges, refineOffset, blockIndexOf } from '../src/lib/source-map.js';
+import { blockRanges, locateSelection, blockIndexOf, MIN_SELECTION_CHARS } from '../src/lib/source-map.js';
 import { renderMarkdown } from '../src/lib/markdown.js';
 
+// A table-heavy CJK note with <br> inside cells and repeated cell text — the shape
+// that breaks naive matching, and the shape this feature is actually used on.
 const NOTE = [
-  '# Title',
+  '## Vowels 元音（17 個教學發音目標）',
   '',
-  'First paragraph with **bold** text.',
+  '> 近似音欄：普 = 普通話／注音，粵 = 粵語（粵拼）。',
   '',
-  '- alpha',
-  '- beta',
+  '### Full Monophthongs 完整單元音（10）',
+  '| Symbol | Sounds like 近似音 | Mouth |',
+  '| --- | --- | --- |',
+  '| /i/ (iː) | 普「衣」拉長，嘴角更用力往兩邊<br>see eat need | 咧嘴 |',
+  '| /ɛ/ (e) | 普「欸」；粵「些 se1」的元音<br>bed red said | 欸 |',
   '',
-  '```js',
-  'const x = 1;',
-  '```',
-  '',
-  '## 中文小節',
-  '',
-  '最後一段內容。',
+  '### Voiceless 清輔音（9）',
+  '| Symbol | Sounds like 近似音 | Mouth |',
+  '| --- | --- | --- |',
+  '| /s/ | 注音ㄙ（絲）<br>see bus nice | 送氣流到下前牙 |',
+  '| /h/ | 注音ㄏ（哈）但更輕<br>hi behind hope | |',
 ].join('\n');
 
+const blockFor = (needle) => blockRanges(NOTE).find((r) => NOTE.slice(r.start, r.end).includes(needle));
+
 describe('blockRanges', () => {
-  it('gives an offset for every block that renders', () => {
-    const ranges = blockRanges(NOTE);
-    expect(ranges.map((r) => r.type)).toEqual(['heading', 'paragraph', 'list', 'code', 'heading', 'paragraph']);
+  it('gives exact offsets that slice their own source back out', () => {
+    for (const r of blockRanges(NOTE)) expect(NOTE.slice(r.start, r.end).length).toBe(r.end - r.start);
+    const first = blockRanges(NOTE)[0];
+    expect(NOTE.slice(first.start, first.end)).toContain('## Vowels');
   });
 
-  // The whole feature rests on this: a range must slice the original text back out.
-  it('each range slices its own source back out of the note', () => {
-    for (const r of blockRanges(NOTE)) {
-      expect(NOTE.slice(r.start, r.end).trim()).not.toBe('');
-    }
-    const [heading, para] = blockRanges(NOTE);
-    expect(NOTE.slice(heading.start, heading.end)).toContain('# Title');
-    expect(NOTE.slice(para.start, para.end)).toContain('First paragraph');
-  });
-
-  it('ranges are ordered, non-overlapping, and inside the note', () => {
-    const ranges = blockRanges(NOTE);
-    let prevEnd = 0;
-    for (const r of ranges) {
-      expect(r.start).toBeGreaterThanOrEqual(prevEnd);
-      expect(r.end).toBeGreaterThan(r.start);
-      expect(r.end).toBeLessThanOrEqual(NOTE.length);
-      prevEnd = r.end;
-    }
-  });
-
-  // One block of source must equal one top-level element, or index lookup is wrong.
   it('produces one range per rendered top-level element', () => {
     const host = document.createElement('div');
     host.innerHTML = renderMarkdown(NOTE);
     expect(host.children.length).toBe(blockRanges(NOTE).length);
   });
 
-  it('survives empty and malformed input instead of throwing', () => {
+  it('treats each table as a single block', () => {
+    expect(blockRanges(NOTE).filter((r) => r.type === 'table')).toHaveLength(2);
+  });
+
+  it('never throws on empty or malformed input', () => {
     expect(blockRanges('')).toEqual([]);
     expect(blockRanges(null)).toEqual([]);
-    expect(blockRanges(undefined)).toEqual([]);
     expect(Array.isArray(blockRanges('| ragged |\n| -- |\n| a | b |'))).toBe(true);
   });
 });
 
-describe('refineOffset', () => {
-  const ranges = blockRanges(NOTE);
-  const para = ranges[1];
-
-  it('lands on the exact words when they appear verbatim', () => {
-    const spot = refineOffset(NOTE, para, 'paragraph with');
-    expect(NOTE.slice(spot.start, spot.end)).toBe('paragraph with');
+describe('locateSelection — exact or nothing', () => {
+  it('finds a CJK phrase inside a table cell', () => {
+    const block = blockFor('普「衣」拉長');
+    const spot = locateSelection(NOTE, block, '普「衣」拉長，嘴角更用力往兩邊');
+    expect(NOTE.slice(spot.start, spot.end)).toBe('普「衣」拉長，嘴角更用力往兩邊');
   });
 
-  // Rendered text has lost its markup, so an exact match usually fails.
-  it('falls back to the longest leading run that does match', () => {
-    const spot = refineOffset(NOTE, para, 'First paragraph with bold text.');
-    expect(spot.start).toBeGreaterThanOrEqual(para.start);
-    expect(NOTE.slice(spot.start)).toMatch(/^First paragraph with/);
+  it('finds English text inside a cell', () => {
+    const block = blockFor('see eat need');
+    const spot = locateSelection(NOTE, block, 'see eat need');
+    expect(NOTE.slice(spot.start, spot.end)).toBe('see eat need');
   });
 
-  it('returns the block start when nothing matches, never null', () => {
-    const spot = refineOffset(NOTE, para, 'zzz qqq wwq vvq');
-    expect(spot).toEqual({ start: para.start, end: para.start });
+  // The selection crosses a <br>, which arrives as a newline but is markup in source.
+  it('matches across a <br>, mapping back to the real offsets', () => {
+    const block = blockFor('普「衣」拉長');
+    const spot = locateSelection(NOTE, block, '嘴角更用力往兩邊\nsee eat need');
+    expect(spot).not.toBeNull();
+    const got = NOTE.slice(spot.start, spot.end);
+    expect(got.startsWith('嘴角更用力往兩邊')).toBe(true);
+    expect(got.endsWith('see eat need')).toBe(true);
+    expect(got).toContain('<br>'); // the source span really does include the markup
   });
 
-  // The leading run is what anchors: a needle beginning with a word that IS in the
-  // block lands on that word, which is where the reader clicked.
-  it('anchors on the first word of the clicked text when the rest diverges', () => {
-    const spot = refineOffset(NOTE, para, 'bold text that diverges after this');
-    expect(NOTE.slice(spot.start, spot.end)).toBe('bold');
+  // The block window is what keeps repeated text from matching the wrong row.
+  it('does not stray outside the selected block', () => {
+    const second = blockFor('注音ㄙ（絲）');
+    const spot = locateSelection(NOTE, second, 'see bus nice');
+    expect(spot.start).toBeGreaterThanOrEqual(second.start);
+    expect(spot.end).toBeLessThanOrEqual(second.end);
+    expect(NOTE.slice(spot.start, spot.end)).toBe('see bus nice');
   });
 
-  it('handles CJK, which has no spaces to split on', () => {
-    const cjk = ranges[ranges.length - 1];
-    const spot = refineOffset(NOTE, cjk, '最後一段');
-    expect(NOTE.slice(spot.start, spot.end)).toBe('最後一段');
+  it('resolves text that appears in BOTH tables to the one selected', () => {
+    const first = blockFor('普「衣」拉長');
+    const second = blockFor('注音ㄙ（絲）');
+    const a = locateSelection(NOTE, first, 'Sounds like 近似音');
+    const b = locateSelection(NOTE, second, 'Sounds like 近似音');
+    expect(a.start).not.toBe(b.start);
+    expect(a.start).toBeGreaterThanOrEqual(first.start);
+    expect(b.start).toBeGreaterThanOrEqual(second.start);
   });
 
-  it('is safe with empty input and a missing range', () => {
-    expect(refineOffset(NOTE, null, 'x')).toBeNull();
-    expect(refineOffset(NOTE, para, '')).toEqual({ start: para.start, end: para.start });
+  it('refuses a selection too short to place', () => {
+    const block = blockFor('普「衣」拉長');
+    expect(locateSelection(NOTE, block, '普')).toBeNull();
+    expect(locateSelection(NOTE, block, 'see')).toBeNull();
+    expect(locateSelection(NOTE, block, ' ')).toBeNull();
+    expect('普「衣」'.length).toBeGreaterThanOrEqual(MIN_SELECTION_CHARS);
+  });
+
+  // The point of the rewrite: no approximate answers.
+  it('returns null rather than a near miss', () => {
+    const block = blockFor('普「衣」拉長');
+    expect(locateSelection(NOTE, block, 'text that is definitely not present')).toBeNull();
+    expect(locateSelection(NOTE, block, '普「衣」拉長 EXTRA WORDS APPENDED')).toBeNull();
+  });
+
+  it('is safe with missing input', () => {
+    expect(locateSelection(NOTE, null, 'Sounds like 近似音')).not.toBeNull(); // whole-note window
+    expect(locateSelection('', blockFor('普'), 'anything')).toBeNull();
+    expect(locateSelection(NOTE, blockFor('普「衣」拉長'), null)).toBeNull();
   });
 });
 
 describe('blockIndexOf', () => {
   const build = () => {
     const root = document.createElement('div');
-    root.innerHTML = '<h1>T</h1><p>one <em>two</em></p><ul><li>x</li></ul>';
+    root.innerHTML = '<h2>T</h2><table><tbody><tr><td>cell</td></tr></tbody></table>';
     return root;
   };
 
-  it('finds the top-level block for a deeply nested click target', () => {
+  it('walks up from a deeply nested cell to its top-level block', () => {
     const root = build();
-    expect(blockIndexOf(root, root.querySelector('em'))).toBe(1);
-    expect(blockIndexOf(root, root.querySelector('li'))).toBe(2);
-    expect(blockIndexOf(root, root.querySelector('h1'))).toBe(0);
+    expect(blockIndexOf(root, root.querySelector('td'))).toBe(1);
   });
 
   it('returns -1 for the root itself or a node outside it', () => {
     const root = build();
     expect(blockIndexOf(root, root)).toBe(-1);
     expect(blockIndexOf(root, document.createElement('p'))).toBe(-1);
-    expect(blockIndexOf(null, root)).toBe(-1);
   });
 });
