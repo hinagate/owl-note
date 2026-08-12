@@ -4,6 +4,7 @@ import { imageFileToDataUri } from '../lib/image-downscale.js';
 import { extractImages, inlineImages, pruneAttachments, attachFile, listFileRefs, linkifyFileRefs } from '../lib/note-images.js';
 import { getBytes } from '../lib/attachment-store.js';
 import { relativeTime } from '../lib/relative-time.js';
+import { blockRanges, refineOffset, blockIndexOf } from '../lib/source-map.js';
 import * as panes from './panes.js';
 import { renderFormatBar, formatActions } from './format-bar.js';
 import { nextTableRow } from '../lib/format.js';
@@ -371,14 +372,21 @@ export function renderEditor(
     }
   }
 
-  function scrollToSearchMatch() {
-    if (!searchMatches.length) return;
-    const match = searchMatches[activeSearchMatch];
-    ta.setSelectionRange(match.start, match.end);
-    const line = ta.value.slice(0, match.start).split('\n').length - 1;
+  // Select [start,end] and bring it into view. Counts hard newlines, so a long
+  // soft-wrapped paragraph lands near rather than exactly on the target — good
+  // enough to orient by, and the behaviour find-in-note has always had.
+  function scrollToOffset(start, end = start) {
+    ta.setSelectionRange(start, end);
+    const line = ta.value.slice(0, start).split('\n').length - 1;
     const lineHeight = Number.parseFloat(getComputedStyle(ta).lineHeight) || 24;
     ta.scrollTop = Math.max(0, line * lineHeight - ta.clientHeight / 3);
     backdrop.scrollTop = ta.scrollTop;
+  }
+
+  function scrollToSearchMatch() {
+    if (!searchMatches.length) return;
+    const match = searchMatches[activeSearchMatch];
+    scrollToOffset(match.start, match.end);
   }
 
   function updateNoteSearch({ reset = false, scroll = false } = {}) {
@@ -567,6 +575,36 @@ export function renderEditor(
     if (!img || !content.contains(img) || (e.key !== 'Enter' && e.key !== ' ')) return;
     e.preventDefault();
     openLightbox(img);
+  });
+
+  // Reverse sync: click the rendered text, land on the source that produced it.
+  // In a long note the two panes drift far apart and finding the paragraph you are
+  // reading, in the Markdown, is pure eye-work. Registered on `content`, which
+  // survives every refresh, so it needs no re-binding.
+  content.addEventListener('click', (e) => {
+    if (readOnly) return; // reading view: there is no source pane to jump to
+    // A drag that selected text is a copy, not a request to navigate.
+    const sel = window.getSelection?.();
+    if (sel && !sel.isCollapsed) return;
+    // Anything already interactive keeps its own behaviour.
+    if (e.target.closest?.('a, button, input, textarea, img, .owl-image-placeholder')) return;
+    const bodyEl = content.querySelector('.preview-body');
+    const index = blockIndexOf(bodyEl, e.target);
+    if (index < 0) return;
+    const range = blockRanges(ta.value)[index];
+    if (!range) return;
+    // Aim at the words under the pointer rather than the top of the block, so
+    // clicking deep inside a long paragraph lands there.
+    let needle = '';
+    try {
+      const caret = document.caretRangeFromPoint?.(e.clientX, e.clientY);
+      const node = caret && caret.startContainer;
+      if (node && node.nodeType === 3) needle = node.textContent.slice(caret.startOffset, caret.startOffset + 60);
+    } catch { /* no caret API — fall back to the block's own text */ }
+    if (!needle.trim()) needle = e.target.textContent || '';
+    const spot = refineOffset(ta.value, range, needle);
+    if (!panes.isEditCollapsed()) ta.focus(); // don't focus a pane the reader has hidden
+    scrollToOffset(spot.start, spot.end);
   });
   lightboxClose.addEventListener('click', closeLightbox);
   lightbox.addEventListener('click', (e) => { if (e.target === lightbox) closeLightbox(); });

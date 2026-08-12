@@ -87,6 +87,15 @@ if (typeof DOMPurify.addHook === 'function') {
   });
 }
 
+// Top-level block tokens for `body`, from the SAME marked instance that renders it,
+// so the token sequence cannot drift from the elements the preview produces. Used by
+// source-map.js to turn a clicked preview block back into a source offset; every
+// token carries the exact source text in `.raw`. Deliberately lexes the note's own
+// text, not the normalizeTables output below — the offsets have to index the note.
+export function lexBlocks(body) {
+  return marked.lexer(String(body ?? ''));
+}
+
 export function renderMarkdown(body) {
   // Render forgivingly: a table whose rows disagree on cell count does not parse
   // as a table AT ALL in GFM — adding one header cell by hand silently demotes
