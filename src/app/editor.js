@@ -3,7 +3,7 @@ import { renderMarkdown } from '../lib/markdown.js';
 import { imageFileToDataUri } from '../lib/image-downscale.js';
 import { extractImages, inlineImages, pruneAttachments, attachFile, listFileRefs, linkifyFileRefs } from '../lib/note-images.js';
 import { getBytes } from '../lib/attachment-store.js';
-import { relativeTime, msUntilRelativeTimeChanges } from '../lib/relative-time.js';
+import { relativeTime } from '../lib/relative-time.js';
 import * as panes from './panes.js';
 import { renderFormatBar, formatActions } from './format-bar.js';
 import { nextTableRow } from '../lib/format.js';
@@ -123,9 +123,6 @@ export function renderEditor(
       timeStyle: 'short',
     }).format(date);
   const formatFullDate = (date) => date ? date.toLocaleString() : 'Not recorded';
-  // A relative label goes stale on its own, so re-render it exactly when it would
-  // change (the next minute boundary, then the next hour) rather than polling.
-  let relativeTimer = null;
   const setTimestamps = ({ created: nextCreated = createdValue, updated: nextUpdated = updatedValue } = {}) => {
     createdValue = nextCreated;
     updatedValue = nextUpdated;
@@ -133,8 +130,6 @@ export function renderEditor(
     const editedDate = asValidDate(updatedValue);
     const visibleDate = editedDate || createdDate; // legacy notes use their best known time
     updatedLabel.hidden = !visibleDate;
-    clearTimeout(relativeTimer);
-    relativeTimer = null;
     if (visibleDate) {
       updatedTime.dateTime = visibleDate.toISOString();
       // Under a day, how long ago beats a wall-clock time; past that the date is
@@ -144,10 +139,6 @@ export function renderEditor(
         `Created: ${formatFullDate(createdDate)}`,
         `Updated: ${editedDate ? formatFullDate(editedDate) : 'Not recorded (showing created time)'}`,
       ].join('\n');
-      const refreshIn = msUntilRelativeTimeChanges(visibleDate);
-      if (refreshIn != null) {
-        relativeTimer = setTimeout(() => { if (!destroyed) setTimestamps(); }, refreshIn);
-      }
     } else {
       updatedTime.removeAttribute('datetime');
       updatedTime.textContent = '';
@@ -156,6 +147,14 @@ export function renderEditor(
     statusRow.hidden = !visibleDate && !status.textContent;
   };
   setTimestamps();
+  // "5 minutes ago" goes stale where a wall-clock time would not. Refresh it when the
+  // user comes back rather than on a timer: a note left open overnight is the case
+  // that actually misleads, and a per-editor timeout leaks into every test that
+  // renders an editor without tearing it down — this suite already runs serially in
+  // release to avoid timer starvation, so adding more timers here is the wrong shape.
+  const refreshRelative = () => { if (!destroyed && document.visibilityState !== 'hidden') setTimestamps(); };
+  document.addEventListener('visibilitychange', refreshRelative);
+  window.addEventListener('focus', refreshRelative);
 
   const codeBtn = document.createElement('button');
   codeBtn.className = 'code-block';
@@ -1186,7 +1185,8 @@ export function renderEditor(
     destroy: () => {
       destroyed = true;
       clearTimeout(saveTimer);
-      clearTimeout(relativeTimer); // stop the "x minutes ago" refresh
+      document.removeEventListener('visibilitychange', refreshRelative);
+      window.removeEventListener('focus', refreshRelative);
       zoomBar.destroy();
       titleRO?.disconnect();
       document.removeEventListener('keydown', onLightboxKeydown);

@@ -49,15 +49,3 @@ export function relativeTime(value, now = Date.now(), { maxUnit = 'hour' } = {})
   if (elapsed < YEAR) return formatter().format(-Math.floor(elapsed / MONTH), 'month');
   return formatter().format(-Math.floor(elapsed / YEAR), 'year');
 }
-
-// How long until the label above would change, so a caller can wake exactly then
-// instead of polling. Minute-by-minute for the first hour, hourly after that.
-export function msUntilRelativeTimeChanges(value, now = Date.now()) {
-  const then = value instanceof Date ? value.getTime() : Number(value);
-  if (!Number.isFinite(then)) return null;
-  const elapsed = now - then;
-  if (elapsed < 0) return -elapsed + MINUTE; // future stamp: recheck once it is past
-  if (elapsed < HOUR) return MINUTE - (elapsed % MINUTE);
-  if (elapsed < DAY) return HOUR - (elapsed % HOUR);
-  return null; // absolute date from here on — nothing left to refresh
-}

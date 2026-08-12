@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { relativeTime, msUntilRelativeTimeChanges, DAY } from '../src/lib/relative-time.js';
+import { relativeTime, DAY } from '../src/lib/relative-time.js';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -80,35 +80,5 @@ describe('relativeTime', () => {
     expect(relativeTime(null, NOW)).toBeNull();
     expect(relativeTime('not a date', NOW)).toBeNull();
     expect(relativeTime(NaN, NOW)).toBeNull();
-  });
-});
-
-describe('msUntilRelativeTimeChanges', () => {
-  it('wakes on the next minute boundary within the first hour', () => {
-    expect(msUntilRelativeTimeChanges(ago(0), NOW)).toBe(MINUTE);
-    expect(msUntilRelativeTimeChanges(ago(90_000), NOW)).toBe(30_000); // 1m30s in -> 30s to "2 minutes"
-  });
-
-  it('wakes on the next hour boundary after that', () => {
-    expect(msUntilRelativeTimeChanges(ago(HOUR), NOW)).toBe(HOUR);
-    expect(msUntilRelativeTimeChanges(ago(HOUR + 20 * MINUTE), NOW)).toBe(40 * MINUTE);
-  });
-
-  // Once it is an absolute date there is nothing left to tick, so no timer is armed.
-  it('stops scheduling once the label is a fixed date', () => {
-    expect(msUntilRelativeTimeChanges(ago(DAY), NOW)).toBeNull();
-    expect(msUntilRelativeTimeChanges(ago(30 * DAY), NOW)).toBeNull();
-  });
-
-  it('never returns zero or negative, which would spin a timer', () => {
-    for (const offset of [0, 1, 999, MINUTE, HOUR - 1, HOUR, DAY - 1]) {
-      const wait = msUntilRelativeTimeChanges(ago(offset), NOW);
-      if (wait !== null) expect(wait).toBeGreaterThan(0);
-    }
-  });
-
-  it('rejects junk the same way', () => {
-    expect(msUntilRelativeTimeChanges(null, NOW)).toBeNull();
-    expect(msUntilRelativeTimeChanges('nope', NOW)).toBeNull();
   });
 });
