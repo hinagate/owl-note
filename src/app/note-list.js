@@ -1,4 +1,6 @@
 // src/app/note-list.js
+import { relativeTime } from '../lib/relative-time.js';
+
 export function renderNoteList(container, { notes, activeHandle, onOpen = () => {}, onTogglePin = () => {}, onNew = () => {}, trashView = false, onRestore = () => {}, onDeleteForever = () => {}, onEmptyTrash = () => {}, selected = new Set(), focusIndex = -1, onCardClick = null, onMove = () => {}, onSelectAll = () => {}, onClearSelection = () => {}, onOpenFocused = () => {}, onBatchDelete = () => {}, driveEnabled = false, query = '', onAsk = null }) {
   // Fall back to onOpen for plain clicks when no modifier-aware handler is provided
   // (maintains backward compat with unit tests that pass onOpen directly).
@@ -52,7 +54,27 @@ export function renderNoteList(container, { notes, activeHandle, onOpen = () => 
       });
       const title = document.createElement('div');
       title.className = 'card-title';
-      title.textContent = n.title || 'Untitled';
+      // Same structure as a live card: the text truncates in its own span so the age
+      // chip beside it (flex:none) can never be clipped away by a long title.
+      const titleText = document.createElement('span');
+      titleText.className = 'card-title-text';
+      titleText.textContent = n.title || 'Untitled';
+      title.appendChild(titleText);
+      // How stale the note is — the question behind "can I delete this forever?".
+      // Runs to years, unlike the editor's stamp: here "8 months ago" is the answer,
+      // where a date would have to be worked out against today.
+      const stamp = n.updated ?? n.created ?? n.dateAdded;
+      const age = relativeTime(stamp, Date.now(), { maxUnit: 'year' });
+      if (age) {
+        const badge = document.createElement('span');
+        badge.className = 'badge-age';
+        const ico = document.createElement('span');
+        ico.className = 'owl-clock-ico';
+        badge.append(ico, document.createTextNode(' ' + age));
+        const exact = new Date(stamp);
+        if (!Number.isNaN(exact.getTime())) badge.title = `Last edited ${exact.toLocaleString()}`;
+        title.appendChild(badge);
+      }
       card.appendChild(title);
       if (n.body) {
         const snip = document.createElement('div');

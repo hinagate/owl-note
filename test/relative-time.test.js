@@ -36,6 +36,35 @@ describe('relativeTime', () => {
     expect(relativeTime(ago(400 * DAY), NOW)).toBeNull();
   });
 
+  // The Trash list asks a different question — how stale is this — so it keeps going.
+  describe("with maxUnit: 'year', for the Trash list", () => {
+    const opts = { maxUnit: 'year' };
+
+    it('still uses minutes and hours for recent notes', () => {
+      expect(relativeTime(ago(5 * MINUTE), NOW, opts)).toBe('5 minutes ago');
+      expect(relativeTime(ago(7 * HOUR), NOW, opts)).toBe('7 hours ago');
+    });
+
+    it('counts days, and calls a single one "yesterday"', () => {
+      expect(relativeTime(ago(DAY), NOW, opts)).toBe('yesterday');
+      expect(relativeTime(ago(3 * DAY), NOW, opts)).toBe('3 days ago');
+      expect(relativeTime(ago(29 * DAY), NOW, opts)).toBe('29 days ago');
+    });
+
+    it('rolls up to months, then years', () => {
+      expect(relativeTime(ago(30 * DAY), NOW, opts)).toBe('last month');
+      expect(relativeTime(ago(8 * 30 * DAY), NOW, opts)).toBe('8 months ago');
+      expect(relativeTime(ago(365 * DAY), NOW, opts)).toBe('last year');
+      expect(relativeTime(ago(3 * 365 * DAY), NOW, opts)).toBe('3 years ago');
+    });
+
+    it('never returns null, so a card always has something to show', () => {
+      for (const age of [0, MINUTE, HOUR, DAY, 45 * DAY, 500 * DAY, 5000 * DAY]) {
+        expect(relativeTime(ago(age), NOW, opts)).toBeTruthy();
+      }
+    });
+  });
+
   it('holds the boundaries exactly', () => {
     expect(relativeTime(ago(HOUR - 1), NOW)).toBe('59 minutes ago');
     expect(relativeTime(ago(DAY - 1), NOW)).toBe('23 hours ago');

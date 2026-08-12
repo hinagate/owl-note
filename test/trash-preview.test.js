@@ -31,6 +31,51 @@ describe('previewing a note in Trash', () => {
     expect(onOpen).toHaveBeenCalledWith('b1');
   });
 
+  // Deciding to delete something forever needs to know how stale it is.
+  describe('the staleness chip', () => {
+    const DAY = 86_400_000;
+    const withAge = (ms) => {
+      const el = trashList([{ bookmarkId: 'b1', title: 'Old note', body: 'x', updated: Date.now() - ms }], () => {});
+      return el.querySelector('.badge-age');
+    };
+
+    it('shows just the age, with no "Edited" prefix', () => {
+      expect(withAge(3 * DAY).textContent.trim()).toBe('3 days ago');
+      expect(withAge(240 * DAY).textContent.trim()).toBe('8 months ago');
+    });
+
+    it('sits in the title row like the Drive chip, not on its own line', () => {
+      const el = trashList([{ bookmarkId: 'b1', title: 'Old', body: 'x', updated: Date.now() - DAY }], () => {});
+      expect(el.querySelector('.card-title > .badge-age')).toBeTruthy();
+      expect(el.querySelector('.card-when')).toBeNull(); // the old standalone line is gone
+    });
+
+    // The title has to be able to truncate without pushing the chip out of view.
+    it('keeps the title text in its own truncating span', () => {
+      const el = trashList([{ bookmarkId: 'b1', title: 'A very long title', body: 'x', updated: Date.now() - DAY }], () => {});
+      expect(el.querySelector('.card-title-text').textContent).toBe('A very long title');
+    });
+
+    it('carries the exact time in a tooltip', () => {
+      expect(withAge(3 * DAY).title).toContain('Last edited');
+    });
+
+    it('falls back to created, then dateAdded, for notes with no updated stamp', () => {
+      const el = trashList([
+        { bookmarkId: 'b1', title: 'A', body: 'x', created: Date.now() - 2 * DAY },
+        { bookmarkId: 'b2', title: 'B', body: 'x', dateAdded: Date.now() - 5 * DAY },
+      ], () => {});
+      const chips = [...el.querySelectorAll('.badge-age')].map((n) => n.textContent.trim());
+      expect(chips).toEqual(['2 days ago', '5 days ago']);
+    });
+
+    it('is omitted when the note carries no usable timestamp', () => {
+      const el = trashList([{ bookmarkId: 'b1', title: 'A', body: 'x' }], () => {});
+      expect(el.querySelector('.badge-age')).toBeNull();
+      expect(el.querySelector('.card-title-text').textContent).toBe('A'); // title still renders
+    });
+  });
+
   it('does not open the note when Restore or Delete forever is clicked', () => {
     const onOpen = vi.fn();
     const onRestore = vi.fn();

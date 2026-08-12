@@ -11,6 +11,10 @@
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 export const DAY = 24 * HOUR;
+// Calendar-approximate on purpose. These drive a coarse "8 months ago" label, never
+// a calculation, so month-length drift is invisible at the granularity shown.
+const MONTH = 30 * DAY;
+const YEAR = 365 * DAY;
 
 let cached = null;
 function formatter() {
@@ -20,10 +24,15 @@ function formatter() {
   return cached;
 }
 
-// A localized "x ago" for anything under 24h, or null when the caller should show
-// an absolute date instead. Null is the signal, not an error — it keeps the choice
-// of absolute format with the caller that already owns one.
-export function relativeTime(value, now = Date.now()) {
+// A localized "x ago".
+//
+// `maxUnit` decides what happens once the note is over a day old, because the two
+// callers want opposite things. The editor stops at 'hour' and gets null, so it can
+// fall back to the exact date it already formats — beside an open note, "31 hours
+// ago" is worse than a timestamp. The Trash list keeps going ('year'), because there
+// the only question is how stale this is, and "8 months ago" answers it at a glance
+// where a date would have to be worked out.
+export function relativeTime(value, now = Date.now(), { maxUnit = 'hour' } = {}) {
   const then = value instanceof Date ? value.getTime() : Number(value);
   if (!Number.isFinite(then)) return null;
 
@@ -33,7 +42,12 @@ export function relativeTime(value, now = Date.now()) {
   if (elapsed < MINUTE) return formatter().format(0, 'second'); // "now"
   if (elapsed < HOUR) return formatter().format(-Math.floor(elapsed / MINUTE), 'minute');
   if (elapsed < DAY) return formatter().format(-Math.floor(elapsed / HOUR), 'hour');
-  return null; // older than a day — the caller shows the date
+  if (maxUnit === 'hour') return null; // caller shows an absolute date from here
+
+  // numeric:'auto' turns a single day into "yesterday", which reads better than "1 day ago".
+  if (elapsed < MONTH) return formatter().format(-Math.floor(elapsed / DAY), 'day');
+  if (elapsed < YEAR) return formatter().format(-Math.floor(elapsed / MONTH), 'month');
+  return formatter().format(-Math.floor(elapsed / YEAR), 'year');
 }
 
 // How long until the label above would change, so a caller can wake exactly then
