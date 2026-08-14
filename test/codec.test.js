@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { encode, decode, selfTest, compressionAvailable, isEncryptedNote, ENCRYPT_WRITES, LOCKED_NOTE_BODY } from '../src/lib/codec.js';
+import { encode, decode, selfTest, compressionAvailable, isEncryptedNote, ENCRYPT_WRITES, LOCKED_NOTE_BODY, LOCKED_NO_KEY_BODY } from '../src/lib/codec.js';
 import { createNote } from '../src/lib/note.js';
 import { installFakeChrome } from './helpers/fake-chrome.js';
 import { activeKey, MissingKeyError, _resetCache } from '../src/lib/note-key.js';
@@ -167,5 +167,48 @@ describe('codec encryption', () => {
     const note = createNote({ body: 'hello' });
     expect(await decode(await encode(note, { encrypt: true }))).toEqual(note);
     expect(await selfTest(note)).toBe(true);
+  });
+
+  // A missing key is not a corrupt note. The error carries the envelope so the app
+  // can still list the note by its real title instead of dropping it, which made a
+  // keyless profile look empty.
+  describe('when the key is absent', () => {
+    const sealAndForget = async (note) => {
+      const payload = await encode(note, { encrypt: true });
+      installFakeChrome(); // another install: same bookmark, its own empty storage
+      _resetCache();
+      return payload;
+    };
+
+    it('attaches the envelope to the error', async () => {
+      const note = createNote({ title: 'Q3 plan', body: 'secret' });
+      const payload = await sealAndForget(note);
+      const err = await decode(payload).catch((e) => e);
+      expect(err).toBeInstanceOf(MissingKeyError);
+      expect(err.envelope).toBeTruthy();
+      expect(err.envelope.id).toBe(note.id);
+      expect(err.envelope.title).toBe('Q3 plan');
+    });
+
+    it('the envelope body explains a missing key, not an out-of-date build', async () => {
+      const payload = await sealAndForget(createNote({ title: 'T', body: 'secret' }));
+      const err = await decode(payload).catch((e) => e);
+      expect(err.envelope.body).toBe(LOCKED_NO_KEY_BODY);
+      expect(err.envelope.body).toContain('locked');
+      expect(err.envelope.body).not.toContain('2.3.24 or later'); // that is the old-build message
+    });
+
+    it('the envelope still hides the note contents', async () => {
+      const payload = await sealAndForget(createNote({ title: 'T', body: 'sk-live-SUPERSECRET' }));
+      const err = await decode(payload).catch((e) => e);
+      expect(JSON.stringify(err.envelope)).not.toContain('SUPERSECRET');
+    });
+
+    it('keeps attachment ids, so GC still sees the files as referenced', async () => {
+      const note = createNote({ title: 'T', body: 'x', attachments: [{ id: 'a1', driveFileId: 'KEEP1' }] });
+      const payload = await sealAndForget(note);
+      const err = await decode(payload).catch((e) => e);
+      expect(err.envelope.attachments[0].driveFileId).toBe('KEEP1');
+    });
   });
 });

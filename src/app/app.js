@@ -1,7 +1,7 @@
 import * as bm from '../lib/bookmarks.js';
 import * as mirror from '../lib/mirror.js';
 import { encode, decode, selfTest } from '../lib/codec.js';
-import { isMissingKeyError, ensureDistributed, watchKeyChanges } from '../lib/note-key.js';
+import { isMissingKeyError, ensureDistributed, watchKeyChanges, importKeyring } from '../lib/note-key.js';
 import { createNote, withUpdatedContent, contentHash, extractTitle, withPinned, orderNotes } from '../lib/note.js';
 import { renderSidebar } from './sidebar.js';
 import { renderNoteList } from './note-list.js';
@@ -931,7 +931,18 @@ export async function loadNotes(folderId) {
       }
       decoded.push({ ...note, body, bookmarkId: r.bookmarkId, folderId: r.folderId || folderId, dateAdded: r.dateAdded });
       if (note.id) seen.add(note.id);
-    } catch { /* skip malformed */ }
+    } catch (err) {
+      // A note whose key is missing is intact, not corrupt. Dropping it made a
+      // profile without the key look empty — the worst possible way to say "you
+      // are missing a key". List it under its real title, marked locked, so the
+      // state is visible and explains itself when opened.
+      const env = isMissingKeyError(err) && err.envelope;
+      if (env) {
+        decoded.push({ ...env, locked: true, bookmarkId: r.bookmarkId, folderId: r.folderId || folderId, dateAdded: r.dateAdded });
+        if (env.id) seen.add(env.id);
+      }
+      /* anything else really is malformed — skip it */
+    }
   }
   for (const ln of await mirror.localOnlyBackups(folderId)) {
     if (!seen.has(ln.id)) { decoded.push(ln); seen.add(ln.id); }
@@ -1374,9 +1385,14 @@ function renderCurrentEditor(opts = {}) {
   // between Restore and Delete forever, but editing something already deleted (and
   // autosaving it back) would be a trap.
   const inTrash = !!ui.trashId && noteFolderId === ui.trashId;
+  // A locked note is ciphertext we cannot read. It MUST be read-only: saving would
+  // write the placeholder over the encrypted contents and destroy them for good.
+  const isLocked = !!(ui.current && ui.current.locked);
   ui.editor = renderEditor(document.getElementById('editor'), {
-    readOnly: inTrash,
-    readOnlyNotice: inTrash ? 'In Trash — read only. Restore this note to edit it.' : '',
+    readOnly: inTrash || isLocked,
+    readOnlyNotice: isLocked
+      ? 'Locked — the key for this note is not on this device.'
+      : (inTrash ? 'In Trash — read only. Restore this note to edit it.' : ''),
     title: ui.current ? ui.current.title : '',
     body: ui.current ? ui.current.body : '',
     attachments: ui.current ? (ui.current.attachments || []) : [],
@@ -1948,6 +1964,14 @@ export async function importFiles(files, onProgress) {
         step();
       } else if (name.endsWith('.json')) {
         const data = JSON.parse(await file.text());
+        // A backup carries the keys that were protecting its notes, and restoring
+        // them FIRST can unlock notes already sitting in this profile — the ones
+        // another install wrote into the shared bookmark tree. Without this the
+        // keyring was exported and then thrown away on the way back in, so the
+        // notes had to be re-imported as duplicates instead of simply opening.
+        if (data.keyring) {
+          try { await importKeyring(data.keyring); } catch { /* keys are a bonus; never fail an import over them */ }
+        }
         const notes = Array.isArray(data.notes) ? data.notes : [];
         discover(notes.length); step();
         for (const n of notes) {

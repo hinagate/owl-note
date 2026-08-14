@@ -42,6 +42,24 @@ export const LOCKED_NOTE_BODY = [
   '**Do not edit, save, or delete this note in this version — that destroys its contents.**',
 ].join('\n');
 
+// Shown by a CURRENT build that understands the format but does not hold the key.
+// Distinct from LOCKED_NOTE_BODY above, which tells an out-of-date build to update:
+// telling someone to update when they are already current would send them chasing
+// the wrong problem. The real causes are a key still in flight, or a note written
+// by a different install — chrome.storage is per-extension, so an unpacked build
+// and a Web Store build never share keys even on the same machine.
+export const LOCKED_NO_KEY_BODY = [
+  '# 🔒 This note is locked',
+  '',
+  'Its contents are encrypted and the key is not on this device.',
+  '',
+  '- Just installed OWL-Note here? The key may still be syncing. Reopen in a moment.',
+  '- Written by a different OWL-Note install (a developer build, say)? Export a backup',
+  '  from that install and import it here — the backup carries the key.',
+  '',
+  '**Do not edit this note.** Saving would overwrite the encrypted contents.',
+].join('\n');
+
 // True for a payload this build wrote encrypted. Takes the decoded object, not
 // the string, because the marker lives inside the envelope by design.
 export function isEncryptedNote(obj) {
@@ -122,7 +140,17 @@ export async function decode(payload) {
   // Throws MissingKeyError when this device has not received the key yet — a
   // transient state, NOT a corrupt note. Callers on destructive paths must tell
   // the two apart; see isMissingKeyError in note-key.js.
-  const key = await keyById(sealed.slice(0, sep));
+  //
+  // The envelope rides along on the error. Without it a caller can only drop the
+  // note, which is what made a keyless profile look like it had lost everything;
+  // with it, the note can still be listed by its real title and opened locked.
+  let key;
+  try {
+    key = await keyById(sealed.slice(0, sep));
+  } catch (err) {
+    if (err && err.name === 'MissingKeyError') err.envelope = { ...outer, body: LOCKED_NO_KEY_BODY };
+    throw err;
+  }
   const plain = await crypto.subtle.decrypt(
     { name: 'AES-GCM', iv: raw.subarray(0, IV_BYTES) },
     key,
