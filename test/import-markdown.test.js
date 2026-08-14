@@ -2,12 +2,16 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { installFakeChrome } from './helpers/fake-chrome.js';
 import * as bm from '../src/lib/bookmarks.js';
-import { decode } from '../src/lib/codec.js';
+import * as mirror from '../src/lib/mirror.js';
+import { decode, encryptionKeyId } from '../src/lib/codec.js';
 import { zipFiles } from '../src/lib/zip.js';
-import { importFiles } from '../src/app/app.js';
+import { importFiles, loadNotes, resetUI } from '../src/app/app.js';
 import { buildOwlNotePackage } from '../src/lib/owl-note-package.js';
+import { createNote } from '../src/lib/note.js';
+import { saveNote } from '../src/lib/save-note.js';
+import { activeKey, _resetCache } from '../src/lib/note-key.js';
 
-beforeEach(() => installFakeChrome());
+beforeEach(() => { installFakeChrome(); _resetCache(); resetUI(); });
 
 const md = (fm, body) => `---\n${fm}\n---\n\n${body}`;
 
@@ -128,6 +132,39 @@ describe('importFiles', () => {
     expect(imported.folderId).toBe(root);
     expect(imported.created).toBe(100);
     expect(imported.updated).toBe(200);
+  });
+
+  it('restores keys before deduping a shared bookmark and keeps its originating key', async () => {
+    // Extension A writes a note and exports its ordinary plaintext backup + keyring.
+    const source = chrome;
+    const root = await bm.ensureRoot();
+    const original = createNote({ title: 'Cross-extension', body: 'source plaintext' });
+    const saved = await saveNote(original, root, undefined);
+    const sourceRow = (await bm.allNotes(root))[0];
+    const sourceKeyId = await encryptionKeyId(sourceRow.payload);
+    const backup = await mirror.exportAll();
+
+    // Extension B has its own storage and has already minted its own active key,
+    // exactly as a booted Store/dev build would, but sees A's shared bookmarks.
+    const target = installFakeChrome({ extensionId: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' });
+    target.bookmarks = source.bookmarks;
+    _resetCache();
+    resetUI();
+    expect((await activeKey()).id).not.toBe(sourceKeyId);
+    expect((await loadNotes(root))[0].locked).toBe(true);
+
+    const tally = await importFiles([textFile('owl-note-backup.json', backup)]);
+    const rows = await bm.allNotes(root);
+    expect(tally).toMatchObject({ created: 0, updated: 1 });
+    expect(rows).toHaveLength(1);                    // no duplicate bookmark
+    expect(rows[0].bookmarkId).toBe(saved.bookmarkId);
+    expect(await encryptionKeyId(rows[0].payload)).toBe(sourceKeyId); // no key rotation
+    expect((await decode(rows[0].payload)).body).toBe('source plaintext');
+
+    // Switching back to Extension A proves B's import/update did not lock A out.
+    globalThis.chrome = source;
+    _resetCache();
+    expect((await decode(rows[0].payload)).body).toBe('source plaintext');
   });
 
   it('strips angle brackets from imported ids so note content cannot forge the Ask <<<NOTE>>> marker', async () => {

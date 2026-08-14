@@ -36,4 +36,14 @@ describe('saveNote (lib)', () => {
     expect(res.status).toBe('capped');
     expect(await bm.listNotes(root)).toHaveLength(0); // no masquerading bookmark
   });
+
+  it('refuses to persist a locked placeholder over an existing bookmark', async () => {
+    const root = await bm.ensureRoot();
+    const note = createNote({ title: 'Intact', body: 'real content' });
+    const saved = await saveNote(note, root, undefined);
+    const before = await bm.payloadAt(saved.bookmarkId);
+    await expect(saveNote({ ...note, body: 'locked placeholder', locked: true }, root, saved.bookmarkId)).rejects.toThrow('Cannot save a locked note');
+    expect(await bm.payloadAt(saved.bookmarkId)).toBe(before);
+    expect((await decode(before)).body).toBe('real content');
+  });
 });

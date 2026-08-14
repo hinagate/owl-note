@@ -177,6 +177,12 @@ describe('renderNoteList pin button', () => {
     renderNoteList(c, { notes: [{ bookmarkId: '__draft__', title: 'New', body: '', draft: true }], activeHandle: '__draft__', onOpen: () => {} });
     expect(c.querySelector('.pin')).toBeNull();
   });
+
+  it('does not render a pin button on a locked card', () => {
+    const c = container();
+    renderNoteList(c, { notes: [{ id: 'N1', bookmarkId: 'bm1', title: 'Locked', body: 'key missing', locked: true }], activeHandle: null, onOpen: () => {} });
+    expect(c.querySelector('.pin')).toBeNull();
+  });
 });
 
 describe('renderNoteList new-note button', () => {

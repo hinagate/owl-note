@@ -171,8 +171,15 @@ describe('note-key', () => {
   });
 
   it('ignores malformed entries in an imported keyring', async () => {
-    useDevice();
-    expect(await importKeyring({ keys: { a: 123, b: null } })).toBe(0);
+    const { local } = useDevice();
+    expect(await importKeyring({ keys: {
+      a: 123,
+      b: null,
+      shortkey: 'AA',
+      'not-a-valid-key-id': 'A'.repeat(43),
+      badbytes: '*'.repeat(43),
+    } })).toBe(0);
+    expect([...local.keys()].filter((key) => key.startsWith('owl:key:'))).toHaveLength(0);
     expect(await importKeyring({})).toBe(0);
     expect(await importKeyring(null)).toBe(0);
   });

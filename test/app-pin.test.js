@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { installFakeChrome } from './helpers/fake-chrome.js';
 import { decode } from '../src/lib/codec.js';
+import { _resetCache } from '../src/lib/note-key.js';
 
 // The UI save/pin handlers are async (encode -> saveNote -> re-render) and can
 // take longer than a fixed delay under parallel test load — which made this
@@ -16,6 +17,7 @@ async function waitFor(predicate, timeout = 2000, step = 10) {
 
 beforeEach(async () => {
   installFakeChrome();
+  _resetCache();
   document.body.innerHTML =
     '<div id="toolbar"></div><aside id="sidebar"></aside><section id="note-list"></section><main id="editor"></main><div id="toast" hidden></div>';
   const app = await import('../src/app/app.js');
@@ -96,5 +98,28 @@ describe('pin + new-note-on-top', () => {
     const locals = await mirror.allLocalOnly();
     expect(locals).toHaveLength(1);
     expect(locals[0].pinned).toBe(true);
+  });
+
+  it('does not offer or perform Pin on a note whose key belongs to another extension', async () => {
+    const app = await import('../src/app/app.js');
+    const bm = await import('../src/lib/bookmarks.js');
+    const source = chrome;
+    const root = await bm.ensureRoot();
+    const saved = await app.saveNote({ id: 'locked-1', title: 'Locked', body: 'secret', attachments: [], created: 1, updated: 1, version: 1, hash: 'h' }, root, undefined);
+
+    const target = installFakeChrome({ extensionId: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' });
+    target.bookmarks = source.bookmarks;
+    _resetCache();
+    app.resetUI();
+    await app.initUI(root);
+
+    const card = [...document.querySelectorAll('#note-list .item.card')].find((el) => el.textContent.includes('Locked'));
+    expect(card).toBeTruthy();
+    expect(card.querySelector('.pin')).toBeNull();
+    expect(document.querySelector('#editor .readonly-notice')?.textContent).toContain('key for this note is not on this device');
+
+    const before = await bm.payloadAt(saved.bookmarkId);
+    await app.togglePin(saved.bookmarkId); // defense in depth for stale/keyboard callers
+    expect(await bm.payloadAt(saved.bookmarkId)).toBe(before);
   });
 });

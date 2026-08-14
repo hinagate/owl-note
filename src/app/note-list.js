@@ -221,7 +221,7 @@ export function renderNoteList(container, { notes, activeHandle, onOpen = () => 
       }
     }
 
-    if (!n.draft) {
+    if (!n.draft && !n.locked) {
       const pin = document.createElement('button');
       pin.type = 'button';
       pin.className = 'pin' + (n.pinned ? ' pinned' : '');

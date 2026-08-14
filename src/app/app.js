@@ -1637,7 +1637,10 @@ async function openLatestNote() {
 
 export async function togglePin(handle) {
   const note = (ui.notes || []).find((n) => (n.bookmarkId ?? n.id) === handle);
-  if (!note) return;
+  // The locked card contains an explanatory placeholder plus the still-encrypted
+  // envelope. Re-encoding it would replace the only normally-readable path to the
+  // real note. The UI hides Pin as well; this guard protects stale/keyboard calls.
+  if (!note || note.locked) return;
   // Strip device-local UI fields so they are not baked into the synced note payload;
   // loadNotes re-attaches bookmarkId/folderId on read.
   const { bookmarkId, folderId, localOnly, draft, ...clean } = note;
@@ -1653,12 +1656,23 @@ export async function openByHash() {
   const payload = location.hash.replace(/^#/, '');
   if (!payload) return;
   try {
-    const note = await decode(payload);
+    let note;
+    try {
+      note = await decode(payload);
+    } catch (err) {
+      const env = isMissingKeyError(err) && err.envelope;
+      if (!env) throw err;
+      // A direct bookmark click must open THIS locked note. Falling through left
+      // ui.current empty, after which boot opened an unrelated latest note and made
+      // the requested bookmark appear to have vanished.
+      note = { ...env, locked: true };
+    }
     // The decoded payload carries no folderId/bookmarkId. Resolve them from the real
     // bookmark so the breadcrumb shows the right path and edits update it (not duplicate it).
     let match = null;
     try { match = (await bm.allNotes(ui.rootId)).find((r) => r.payload === payload); } catch { /* tree read failed */ }
-    ui.current = await resolveNote(match ? { ...note, folderId: match.folderId, bookmarkId: match.bookmarkId } : note);
+    const matched = match ? { ...note, folderId: match.folderId, bookmarkId: match.bookmarkId } : note;
+    ui.current = note.locked ? matched : await resolveNote(matched);
     ui.activeBookmarkId = match ? match.bookmarkId : null;
     ui.activeLocalId = null;
     ui.isNew = false; // an opened note is not a new-note draft
@@ -1915,10 +1929,30 @@ async function importMarkdown(text, path, fromZip, ctx) {
 // {done, total} ticks and always ends with done === total, even on unreadable files.
 export async function importFiles(files, onProgress) {
   const root = ui.rootId ?? (await bm.ensureRoot());
-  const ctx = { root, idMap: await buildIdMap(root), nbCache: new Map(), tally: { created: 0, updated: 0, skipped: 0, tooLarge: 0 }, touched: new Set() };
   const progress = { done: 0, total: files.length };
   const report = () => { if (onProgress) onProgress({ ...progress }); };
   report();
+
+  // JSON backups may carry keys for bookmarks already in the shared tree. Parse
+  // and restore every keyring before buildIdMap: otherwise those bookmarks are
+  // still undecodable during deduplication and importing their plaintext backup
+  // creates a second copy. Cache the parse result so every file is read once.
+  const parsedJson = new Map();
+  for (const file of files) {
+    const name = String(file && file.name || '').toLowerCase();
+    if (!name.endsWith('.json')) continue;
+    try {
+      const data = JSON.parse(await file.text());
+      parsedJson.set(file, { data });
+      if (data.keyring) {
+        try { await importKeyring(data.keyring); } catch { /* keys are a bonus; continue with the normal note import */ }
+      }
+    } catch (error) {
+      parsedJson.set(file, { error });
+    }
+  }
+
+  const ctx = { root, idMap: await buildIdMap(root), nbCache: new Map(), tally: { created: 0, updated: 0, skipped: 0, tooLarge: 0 }, touched: new Set() };
   for (const file of files) {
     const name = (file.name || '').toLowerCase();
     let pending = 1; // this file's unfinished units: its own parse + discovered notes
@@ -1963,15 +1997,9 @@ export async function importFiles(files, onProgress) {
         }
         step();
       } else if (name.endsWith('.json')) {
-        const data = JSON.parse(await file.text());
-        // A backup carries the keys that were protecting its notes, and restoring
-        // them FIRST can unlock notes already sitting in this profile — the ones
-        // another install wrote into the shared bookmark tree. Without this the
-        // keyring was exported and then thrown away on the way back in, so the
-        // notes had to be re-imported as duplicates instead of simply opening.
-        if (data.keyring) {
-          try { await importKeyring(data.keyring); } catch { /* keys are a bonus; never fail an import over them */ }
-        }
+        const parsed = parsedJson.get(file);
+        if (parsed && parsed.error) throw parsed.error;
+        const data = parsed ? parsed.data : JSON.parse(await file.text());
         const notes = Array.isArray(data.notes) ? data.notes : [];
         discover(notes.length); step();
         for (const n of notes) {

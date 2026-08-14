@@ -172,7 +172,7 @@ export function installFakeChrome(opts = {}) {
     ...(opts.syncEnabled === false ? {} : { sync: makeArea('sync', opts.syncStore) }),
   };
 
-  const extId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const extId = opts.extensionId || 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
   const chrome = {
     runtime: {
       id: extId,

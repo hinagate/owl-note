@@ -1,7 +1,7 @@
 // src/lib/save-note.js — persist a note to its bookmark (capping oversized notes to device-local).
 import * as bm from './bookmarks.js';
 import * as mirror from './mirror.js';
-import { encode, decode } from './codec.js';
+import { encode, decode, encryptionKeyId } from './codec.js';
 import { offloadNote } from './attachment-store.js';
 import { stubForBigNote, deleteNoteBody } from './note-drive.js';
 import { deleteUnreferencedFiles } from './drive-gc.js';
@@ -27,22 +27,31 @@ function attachmentFileIds(note) {
 }
 
 export async function saveNote(note, folderId, existingBookmarkId, offload = offloadNote, bigNote = stubForBigNote, resolveAttachments = resolveReferencedAttachments) {
+  // `locked` is attached only to an envelope whose ciphertext this installation
+  // cannot open. No caller may turn that placeholder back into note content.
+  if (note && note.locked) throw new Error('Cannot save a locked note without its encryption key');
+
   // A copied owl-img/owl-file reference contains only an id. Recover its matching
   // attachment from another note before mirroring, pruning, or Drive offload.
   const completeNote = await resolveAttachments(note);
   // Capture the note's previously-synced attachment files BEFORE the bookmark is overwritten,
   // so we can delete from Drive any the user has since removed (see the cleanup at the end).
   let prevAtt = [];
+  let existingKeyId = null;
   if (existingBookmarkId) {
     const prevPayload = await bm.payloadAt(existingBookmarkId);
-    if (prevPayload) { try { prevAtt = attachmentFileIds(await decode(prevPayload)); } catch { /* unreadable */ } }
+    if (prevPayload) {
+      try { existingKeyId = await encryptionKeyId(prevPayload); } catch { /* malformed legacy payload: save with the active key */ }
+      try { prevAtt = attachmentFileIds(await decode(prevPayload)); } catch { /* unreadable */ }
+    }
   }
 
   await mirror.saveBackup(completeNote); // durability first — always, with full inline bytes
   const toSave = await offload(completeNote); // best-effort Drive offload of attachments (no-op when sync off / on failure)
   const prevFileId = completeNote._driveBody || null; // a prior Drive-backed body, if this note had one
   const { _driveBody, ...content } = toSave; // the stored payload never carries the body-pointer
-  const payload = await encode(content);
+  const encodeOpts = existingKeyId ? { keyId: existingKeyId } : undefined;
+  const payload = await encode(content, encodeOpts);
   const bytes = urlByteLength(payload);
 
   let result;
@@ -51,7 +60,7 @@ export async function saveNote(note, folderId, existingBookmarkId, offload = off
     // and keep a small stub bookmark; otherwise fall back to device-local (today's behavior).
     const big = await bigNote(content, payload, prevFileId);
     if (big) {
-      const stubPayload = await encode(big.stub);
+      const stubPayload = await encode(big.stub, encodeOpts);
       let bookmarkId = existingBookmarkId;
       if (bookmarkId) await bm.updateNote(bookmarkId, content.title, stubPayload);
       else bookmarkId = await bm.createNote(folderId, content.title, stubPayload);

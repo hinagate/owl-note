@@ -101,11 +101,17 @@ async function inflateRaw(bytes) {
 // compressed length (the CRIME/BREACH class), which needs a chosen-plaintext
 // oracle to exploit; a bookmark reader gets one static snapshot per note, so
 // the length alone discloses nothing useful.
-export async function encode(note, { encrypt = ENCRYPT_WRITES } = {}) {
+export async function encode(note, { encrypt = ENCRYPT_WRITES, keyId = null } = {}) {
   const bytes = await deflateRaw(JSON.stringify(note));
   if (!encrypt) return bytesToBase64url(bytes);
 
-  const { id, key } = await activeKey();
+  // Existing notes keep the key they were originally written with. This matters
+  // when two OWL-Note installations share the bookmark tree but have distinct
+  // extension storage: once an installation imports the other one's key, editing
+  // that note must not rotate it back to its own key and lock the origin out again.
+  const { id, key } = keyId
+    ? { id: keyId, key: await keyById(keyId) }
+    : await activeKey();
   const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
   const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, bytes));
   const joined = new Uint8Array(iv.length + ct.length);
@@ -129,8 +135,24 @@ export async function encode(note, { encrypt = ENCRYPT_WRITES } = {}) {
   return bytesToBase64url(await deflateRaw(JSON.stringify(envelope)));
 }
 
+async function decodeOuter(payload) {
+  return JSON.parse(await inflateRaw(base64urlToBytes(payload)));
+}
+
+// Return the key id named by an encrypted payload without decrypting its note.
+// Save paths use this to keep an existing bookmark on the same key. Legacy
+// plaintext payloads return null and are upgraded with this installation's key.
+export async function encryptionKeyId(payload) {
+  const outer = await decodeOuter(payload);
+  if (!isEncryptedNote(outer)) return null;
+  const sealed = outer[ENC_FIELD];
+  const sep = sealed.indexOf('.');
+  if (sep <= 0) throw new Error('malformed encrypted note: no key id separator');
+  return sealed.slice(0, sep);
+}
+
 export async function decode(payload) {
-  const outer = JSON.parse(await inflateRaw(base64urlToBytes(payload)));
+  const outer = await decodeOuter(payload);
   if (!isEncryptedNote(outer)) return outer; // written before encryption, or by an older build
 
   const sealed = outer[ENC_FIELD];

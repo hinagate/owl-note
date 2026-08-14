@@ -212,7 +212,13 @@ export async function importKeyring(ring) {
   const have = await rawKeys();
   let added = 0;
   for (const [id, b64] of Object.entries(incoming)) {
-    if (typeof b64 !== 'string' || have[id]) continue;
+    if (!/^[A-Za-z0-9_-]{8}$/.test(id) || typeof b64 !== 'string' || have[id]) continue;
+    // Never persist a malformed backup entry: an invalid key could otherwise be
+    // selected as the active key on a fresh install and break every later save.
+    try {
+      const bytes = base64urlToBytes(b64);
+      if (bytes.length !== 32 || bytesToBase64url(bytes) !== b64) continue;
+    } catch { continue; }
     await persist(id, b64);
     added += 1;
   }

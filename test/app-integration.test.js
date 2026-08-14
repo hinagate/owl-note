@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { installFakeChrome } from './helpers/fake-chrome.js';
+import { _resetCache } from '../src/lib/note-key.js';
 
 beforeEach(async () => {
   installFakeChrome();
+  _resetCache();
   document.body.innerHTML =
     '<div id="toolbar"></div><aside id="sidebar"></aside><section id="note-list"></section><main id="editor"></main><div id="toast" hidden></div>';
   const app = await import('../src/app/app.js');
@@ -207,6 +209,28 @@ describe('app integration', () => {
     location.hash = ''; // reset so it doesn't leak into other tests
     const crumbs = [...document.querySelectorAll('#editor .editor-breadcrumb .crumb')].map((c) => c.textContent);
     expect(crumbs).toEqual(['📓 Notes', 'Work']); // full path, not just the root
+  });
+
+  it('opens the exact locked note requested by a direct bookmark URL', async () => {
+    const app = await import('../src/app/app.js');
+    const bm = await import('../src/lib/bookmarks.js');
+    const { encode } = await import('../src/lib/codec.js');
+    const source = chrome;
+    const root = await bm.ensureRoot();
+    const requestedPayload = await encode({ id: 'locked-direct', title: 'Requested locked', body: 'secret', created: 100, version: 1, hash: 'h' });
+    await bm.createNote(root, 'Requested locked', requestedPayload);
+    await bm.createNote(root, 'Newer locked', await encode({ id: 'newer', title: 'Newer locked', body: 'other', created: 200, version: 1, hash: 'h' }));
+
+    const target = installFakeChrome({ extensionId: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' });
+    target.bookmarks = source.bookmarks;
+    _resetCache();
+    app.resetUI();
+    location.hash = '#' + requestedPayload;
+    await app.initUI(root);
+    location.hash = '';
+
+    expect(document.querySelector('#editor .note-title').value).toBe('Requested locked');
+    expect(document.querySelector('#editor .readonly-notice')?.textContent).toContain('key for this note is not on this device');
   });
 
   it('reveals a new sub-notebook even when an ancestor was collapsed', async () => {
