@@ -154,6 +154,9 @@ export function renderNoteList(container, { notes, activeHandle, onOpen = () => 
       + (handle === activeHandle ? ' active' : '')
       + (n.draft ? ' draft' : '')
       + (n.localOnly ? ' local-only' : '');
+    // Lets the open path move the selection outline the instant a card is clicked,
+    // without waiting for the note to load and the list to be rebuilt around it.
+    card.dataset.handle = String(handle);
 
     if (!n.draft) {
       card.className += (selected.has(handle) ? ' selected' : '') + (!n.draft && index === focusIndex ? ' focused' : '');

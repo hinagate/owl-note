@@ -203,4 +203,27 @@ describe('renderNoteList new-note button', () => {
     expect(c.querySelector('button.new')).not.toBeNull();
     expect(c.querySelector('.empty')).not.toBeNull();
   });
+
+  // The open path moves the selection outline on the click, before the note has
+  // loaded, by finding the card through this attribute rather than rebuilding the
+  // whole list. Without it the border trailed the note it pointed at.
+  it('tags each card with its handle so the selection can move before a reload', () => {
+    const el = document.createElement('div');
+    el.id = 'note-list';
+    document.body.appendChild(el);
+    renderNoteList(el, { notes: [
+      { bookmarkId: 'b1', title: 'A', body: 'x' },
+      { bookmarkId: 'b2', title: 'B', body: 'y' },
+    ] });
+    const handles = [...el.querySelectorAll('.item.card')].map((c) => c.dataset.handle);
+    expect(handles).toEqual(['b1', 'b2']);
+  });
+
+  it('falls back to the note id as the handle for a local-only note', () => {
+    const el = document.createElement('div');
+    el.id = 'note-list';
+    document.body.appendChild(el);
+    renderNoteList(el, { notes: [{ id: 'local-1', title: 'A', body: 'x', localOnly: true }] });
+    expect(el.querySelector('.item.card').dataset.handle).toBe('local-1');
+  });
 });
