@@ -1315,6 +1315,24 @@ export function renderEditor(
              // without rebuilding the editor and taking the caret with it
     setShareActionVisible: (id, visible) => { const item = shareItems.get(id); if (item) item.hidden = !visible; },
     isDirty, // unsaved edits? — lets the app reload a synced-in change without discarding work
+    // Where the reader was, so switching away and back does not send them to the top
+    // of a long note. Pixel offsets, which are exact for the edit pane because its
+    // text is final at render. The PREVIEW is best-effort: images arrive later and
+    // re-render it, so on an image-heavy note its position drifts after restore.
+    getViewState: () => ({
+      top: ta.scrollTop,
+      caret: ta.selectionStart,
+      previewTop: preview.scrollTop,
+    }),
+    restoreViewState: (state) => {
+      if (!state) return;
+      if (Number.isFinite(state.caret)) {
+        const at = Math.min(state.caret, ta.value.length);
+        ta.setSelectionRange(at, at);
+      }
+      if (Number.isFinite(state.top)) { ta.scrollTop = state.top; backdrop.scrollTop = ta.scrollTop; }
+      if (Number.isFinite(state.previewTop)) preview.scrollTop = state.previewTop;
+    },
     // Announce that the open note changed elsewhere. Only used when the editor is
     // dirty; a clean editor is reloaded outright instead of asking.
     notifyRemoteChange: ({ onReload = null } = {}) => { onRemoteReload = onReload; remoteBar.hidden = false; },

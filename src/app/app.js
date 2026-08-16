@@ -326,6 +326,50 @@ function phoneticsSegmenter(text) {
 // ── Preview zoom ────────────────────────────────────────────────────────────────
 // A reader-level preference like phonetics, not a property of any note: someone who needs
 // 150% needs it on every note. Persisted so it survives closing the extension.
+// Where the reader was in each note, so leaving to check something else and coming
+// back does not reset a long note to the top. Device-local by nature — a scroll
+// offset means nothing on another screen — so `local`, never `sync`, following the
+// preview-zoom precedent below.
+//
+// One object rather than a key per note: it is read once at boot and rewritten on
+// note switch, and holding it in one place is what makes the cap below trivial.
+// An entry is ~100 bytes, so even the full cap is a few tens of KB.
+const VIEW_STATE_KEY = 'owl:viewState';
+const VIEW_STATE_MAX = 200; // most-recently-viewed notes; bounded by construction
+let viewStates = null; // { [noteId]: { top, caret, previewTop, at } }
+
+async function loadViewStates() {
+  try { viewStates = (await chrome.storage.local.get(VIEW_STATE_KEY))[VIEW_STATE_KEY] || {}; }
+  catch { viewStates = {}; } // unreadable storage just means no restore, never a broken open
+  return viewStates;
+}
+
+function persistViewStates() {
+  if (!viewStates) return;
+  Promise.resolve(chrome.storage.local.set({ [VIEW_STATE_KEY]: viewStates }))
+    .catch(() => { /* position is a convenience; losing it must never surface */ });
+}
+
+function rememberViewState(id, state) {
+  if (!id || !state || !viewStates) return;
+  viewStates[id] = { ...state, at: Date.now() };
+  const ids = Object.keys(viewStates);
+  if (ids.length > VIEW_STATE_MAX) {
+    // Oldest-touched go first. Evicting by age keeps the notes actually in rotation.
+    ids.sort((a, b) => (viewStates[a].at ?? 0) - (viewStates[b].at ?? 0));
+    for (const stale of ids.slice(0, ids.length - VIEW_STATE_MAX)) delete viewStates[stale];
+  }
+  persistViewStates();
+}
+
+// Delete forever should leave nothing behind, including this.
+function forgetViewStates(ids) {
+  if (!viewStates || !ids || !ids.length) return;
+  let dropped = false;
+  for (const id of ids) if (id && viewStates[id]) { delete viewStates[id]; dropped = true; }
+  if (dropped) persistViewStates();
+}
+
 const PREVIEW_ZOOM_KEY = 'owl:previewZoom';
 
 async function loadPreviewZoom() {
@@ -348,7 +392,7 @@ const QUICK_CAPTURE_KEY = 'owl:quickCapture';
 let lastQuickCaptureToken = null;
 let quickCaptureQueue = Promise.resolve();
 
-const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1, indexReady: null, driveEnabled: false, phonetics: false, phoneticsTables: { en: null, ja: null, zh: null }, phoneticsLoading: new Set(), phoneticsBusy: false, previewZoom: DEFAULT_ZOOM };
+const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, editorNoteId: null, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1, indexReady: null, driveEnabled: false, phonetics: false, phoneticsTables: { en: null, ja: null, zh: null }, phoneticsLoading: new Set(), phoneticsBusy: false, previewZoom: DEFAULT_ZOOM };
 
 export function resetUI() {
   ui.rootId = null;
@@ -879,6 +923,7 @@ export async function initUI(rootId) {
   await maybeCreateWelcomeNote();
   restorePhonetics(await loadPhoneticsPref()); // before the first render, so the toggle shows its true state
   ui.previewZoom = await loadPreviewZoom(); // ditto: the bar must open showing the saved level
+  await loadViewStates(); // before the first note opens, or its position cannot be restored
   renderCurrentEditor();
   await openByHash();
   // Register before reading the one-shot value so a capture arriving during boot
@@ -1056,6 +1101,7 @@ async function trashAction(kind, handle) {
     if (kind === 'deleteForever' && !confirm('Permanently delete this note? This cannot be undone.')) return;
     await deleteForever(targets);
     for (const t of targets) { askIndex.removeNote(t.id); removeSemantic(t.id); } // purged notes are gone for good (no-op if never indexed, e.g. already in Trash)
+    forgetViewStates(targets.map((t) => t.id)); // leave nothing behind for a note deleted forever
     toast(kind === 'empty' ? 'Trash emptied' : 'Deleted');
   }
   if (ui.current && targets.some((t) => t.id === ui.current.id)) {
@@ -1377,6 +1423,10 @@ function renderCurrentEditor(opts = {}) {
   const noteFolderId = ui.activeLocalId
     ? (ui.activeLocalFolderId ?? ui.activeFolder)
     : (ui.current?.folderId ?? ui.activeFolder);
+  // Capture where the reader was BEFORE the old editor goes away. This runs on
+  // every re-render, not just note switches, so toggling phonetics no longer
+  // throws you back to the top of a long note either.
+  if (ui.editor && ui.editorNoteId) rememberViewState(ui.editorNoteId, ui.editor.getViewState?.());
   if (ui.editor && ui.editor.destroy) ui.editor.destroy(); // cancel the prior editor's pending auto-save
   // A note switch can bring a script whose table isn't in memory yet — opening a Japanese
   // note with phonetics already on pulls the kana table here.
@@ -1485,6 +1535,11 @@ function renderCurrentEditor(opts = {}) {
       { id: 'owl-note', label: 'Export this note as .owl-note', run: exportSharedOwlNote },
     ],
   });
+  // A brand-new draft has nowhere to return to, and a locked note shows a
+  // placeholder whose offsets mean nothing.
+  ui.editorNoteId = (ui.current && !ui.isNew && !ui.current.locked) ? ui.current.id : null;
+  if (ui.editorNoteId && viewStates) ui.editor.restoreViewState?.(viewStates[ui.editorNoteId]);
+
   // Every note open/close/switch funnels through this function, so this one call
   // keeps the Ask drawer's context chip following the open note live (not just at
   // drawer-open/ask time). Safe when the panel doesn't exist (test harnesses).
