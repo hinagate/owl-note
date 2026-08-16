@@ -1314,6 +1314,9 @@ export function renderEditor(
     refresh, // repaint the preview in place — lets a late-arriving reading table show up
              // without rebuilding the editor and taking the caret with it
     setShareActionVisible: (id, visible) => { const item = shareItems.get(id); if (item) item.hidden = !visible; },
+    // The live content, attachments pruned to what the body still references. The
+    // toolbar's per-note export needs the same view the Share menu used to build.
+    getSnapshot: shareSnapshot,
     isDirty, // unsaved edits? — lets the app reload a synced-in change without discarding work
     // Where the reader was, so switching away and back does not send them to the top
     // of a long note. Pixel offsets, which are exact for the edit pane because its

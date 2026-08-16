@@ -17,20 +17,45 @@ describe('toolbar', () => {
     expect(onSearch).toHaveBeenCalledWith('pasta');
   });
 
-  it('Export dropdown offers Markdown and JSON and fires the chosen one', () => {
-    const onExportMarkdown = vi.fn(); const onExportJson = vi.fn();
+  // Export is now every way of writing notes to a file, this note first, each label
+  // stating its scope. Previously the two all-notes items were indistinguishable and
+  // the per-note one lived under Share, where nobody would look for it.
+  it('Export dropdown offers this note and both all-notes files, and fires the chosen one', () => {
+    const onExportNote = vi.fn(); const onExportMarkdown = vi.fn(); const onExportJson = vi.fn();
     const el = document.getElementById('toolbar');
-    renderToolbar(el, opts({ onExportMarkdown, onExportJson }));
+    const api = renderToolbar(el, opts({ onExportNote, onExportMarkdown, onExportJson }));
     const exportBtn = [...el.querySelectorAll('button')].find((b) => b.textContent.includes('Export'));
     exportBtn.click();
-    const items = [...el.querySelectorAll('.menu-item')].map((b) => b.textContent);
-    expect(items).toEqual(['Markdown (.zip)', 'JSON backup']);
-    [...el.querySelectorAll('.menu-item')].find((b) => b.textContent === 'Markdown (.zip)').click();
-    expect(onExportMarkdown).toHaveBeenCalled();
+    const item = (text) => [...el.querySelectorAll('.menu-item')].find((b) => b.textContent === text);
+    expect([...el.querySelectorAll('.menu-item')].map((b) => b.textContent))
+      .toEqual(['This note (.owl-note)', 'All notes as Markdown (.zip)', 'All notes + keys (JSON backup)']);
+
+    api.setNoteExportEnabled(true);
+    item('This note (.owl-note)').click();
+    expect(onExportNote).toHaveBeenCalled();
     expect(el.querySelector('.menu').hidden).toBe(true);
+
     exportBtn.click();
-    [...el.querySelectorAll('.menu-item')].find((b) => b.textContent === 'JSON backup').click();
+    item('All notes as Markdown (.zip)').click();
+    expect(onExportMarkdown).toHaveBeenCalled();
+
+    exportBtn.click();
+    item('All notes + keys (JSON backup)').click();
     expect(onExportJson).toHaveBeenCalled();
+  });
+
+  // The toolbar is not rebuilt when the open note changes, so the per-note item is
+  // toggled through the returned api instead of by re-rendering.
+  it('leaves the per-note export disabled until a note is open', () => {
+    const onExportNote = vi.fn();
+    const el = document.getElementById('toolbar');
+    const api = renderToolbar(el, opts({ onExportNote }));
+    const item = () => [...el.querySelectorAll('.menu-item')].find((b) => b.textContent === 'This note (.owl-note)');
+    expect(item().disabled).toBe(true);
+    api.setNoteExportEnabled(true);
+    expect(item().disabled).toBe(false);
+    api.setNoteExportEnabled(false);
+    expect(item().disabled).toBe(true);
   });
 
   it('Import accepts supported formats (multiple) and passes selected files to onImport', () => {

@@ -392,7 +392,7 @@ const QUICK_CAPTURE_KEY = 'owl:quickCapture';
 let lastQuickCaptureToken = null;
 let quickCaptureQueue = Promise.resolve();
 
-const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, editorNoteId: null, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1, indexReady: null, driveEnabled: false, phonetics: false, phoneticsTables: { en: null, ja: null, zh: null }, phoneticsLoading: new Set(), phoneticsBusy: false, previewZoom: DEFAULT_ZOOM };
+const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, editorNoteId: null, toolbar: null, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1, indexReady: null, driveEnabled: false, phonetics: false, phoneticsTables: { en: null, ja: null, zh: null }, phoneticsLoading: new Set(), phoneticsBusy: false, previewZoom: DEFAULT_ZOOM };
 
 export function resetUI() {
   ui.rootId = null;
@@ -1354,9 +1354,10 @@ async function refreshPanes() {
     onOpenTrash: async () => { ui.selected = new Set(); ui.anchor = null; ui.focus = -1; ui.activeFolder = ui.trashId; await refreshPanes(); },
   });
   ui.driveEnabled = await isEnabled();
-  renderToolbar(document.getElementById('toolbar'), {
+  ui.toolbar = renderToolbar(document.getElementById('toolbar'), {
     query: ui.query,
     onSearch: async (q) => { ui.selected = new Set(); ui.anchor = null; ui.focus = -1; ui.query = q; await refreshNoteList(); },
+    onExportNote: () => exportCurrentOwlNote(),
     onExportMarkdown: () => doExportMarkdown(),
     onExportJson: doExport,
     onImport: (files) => doImportFiles(files),
@@ -1532,12 +1533,13 @@ function renderCurrentEditor(opts = {}) {
     shareActions: [
       { id: 'pdf', label: 'Share with PDF', run: shareNoteWithPdf },
       { id: 'drive', label: 'Create Drive share link', hidden: !ui.driveEnabled, run: createDriveShareLink },
-      { id: 'owl-note', label: 'Export this note as .owl-note', run: exportSharedOwlNote },
     ],
   });
   // A brand-new draft has nowhere to return to, and a locked note shows a
   // placeholder whose offsets mean nothing.
   ui.editorNoteId = (ui.current && !ui.isNew && !ui.current.locked) ? ui.current.id : null;
+  // A locked note's body is a placeholder, so there is nothing worth packaging.
+  ui.toolbar?.setNoteExportEnabled?.(!!ui.current && !ui.current.locked);
   if (ui.editorNoteId && viewStates) ui.editor.restoreViewState?.(viewStates[ui.editorNoteId]);
 
   // Every note open/close/switch funnels through this function, so this one call
@@ -1769,6 +1771,15 @@ function downloadBlob(blob, filename) {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+// Called from the toolbar's Export menu, which has no snapshot of its own. Uses the
+// editor's live content (unsaved edits included) exactly as the Share entry did.
+function exportCurrentOwlNote() {
+  if (!ui.current || ui.current.locked) return;
+  const snapshot = ui.editor?.getSnapshot?.()
+    ?? { title: ui.current.title, body: ui.current.body, attachments: ui.current.attachments || [] };
+  return exportSharedOwlNote(snapshot);
 }
 
 async function exportSharedOwlNote(snapshot) {

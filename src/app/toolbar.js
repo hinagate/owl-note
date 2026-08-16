@@ -3,7 +3,7 @@
 // Track the active outside-click closer so re-renders don't leak stale listeners.
 let _activeCloser = null;
 
-export function renderToolbar(container, { query = '', onSearch, onExportMarkdown, onExportJson, onImport, driveEnabled = false, onToggleDrive = null, onAsk = null }) {
+export function renderToolbar(container, { query = '', onSearch, onExportNote, onExportMarkdown, onExportJson, onImport, driveEnabled = false, onToggleDrive = null, onAsk = null }) {
   // Clean up any stale document listener from a previous render.
   if (_activeCloser) {
     document.removeEventListener('click', _activeCloser);
@@ -34,15 +34,26 @@ export function renderToolbar(container, { query = '', onSearch, onExportMarkdow
   const menu = document.createElement('div');
   menu.className = 'menu';
   menu.hidden = true;
+  // Every way of turning notes into a file lives here, this note first, so
+  // "Export" always means "write a file" and Share is only ever "send this to
+  // someone". Each label states its scope: the two were previously indistinguishable
+  // and the per-note one was filed under Share, where nobody would look for it.
+  const noteItem = document.createElement('button');
+  noteItem.className = 'menu-item';
+  noteItem.textContent = 'This note (.owl-note)';
+  noteItem.disabled = true; // no note open yet; app.js enables it per note
+  noteItem.addEventListener('click', () => { menu.hidden = true; onExportNote?.(); });
   const mdItem = document.createElement('button');
   mdItem.className = 'menu-item';
-  mdItem.textContent = 'Markdown (.zip)';
+  mdItem.textContent = 'All notes as Markdown (.zip)';
   mdItem.addEventListener('click', () => { menu.hidden = true; onExportMarkdown(); });
   const jsonItem = document.createElement('button');
   jsonItem.className = 'menu-item';
-  jsonItem.textContent = 'JSON backup';
+  // Says "+ keys" because since encryption landed this file carries the keys that
+  // open the notes — it is the recovery file, and worth treating as one.
+  jsonItem.textContent = 'All notes + keys (JSON backup)';
   jsonItem.addEventListener('click', () => { menu.hidden = true; onExportJson(); });
-  menu.append(mdItem, jsonItem);
+  menu.append(noteItem, mdItem, jsonItem);
   exportBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     const willOpen = menu.hidden;
@@ -74,6 +85,10 @@ export function renderToolbar(container, { query = '', onSearch, onExportMarkdow
   importBtn.addEventListener('click', () => importInput.click());
 
   container.append(searchWrap, exportWrap, importBtn, importInput);
+  // The toolbar is not rebuilt when the open note changes, so the per-note item is
+  // toggled through this rather than re-rendered — same shape as the editor's
+  // setShareActionVisible.
+  const api = { setNoteExportEnabled: (on) => { noteItem.disabled = !on; } };
 
   // "Ask your notes" drawer opener. Build it here, but append it LAST below so it
   // owns the toolbar's right margin even when the optional Drive control is present.
@@ -115,4 +130,6 @@ export function renderToolbar(container, { query = '', onSearch, onExportMarkdow
   }
 
   if (askBtn) container.append(askBtn);
+
+  return api;
 }
