@@ -715,6 +715,158 @@ export function toggleOrderedList(body, start, end) {
   return toggleListMarker(body, start, end, 'ordered');
 }
 
+/* -------------------------------------------------- ordered-list renumbering */
+
+// `1. `, capturing the prefix (indent + quote run) and the number separately.
+const ORDERED_ITEM = /^(\s*(?:> )*)(\d+)\. /;
+
+// A fence toggles code-block mode, and markdown inside one is a sample, not a
+// list — renumbering `1.` in a snippet would corrupt the example being shown.
+function insideFence(lines, upTo) {
+  let open = false;
+  for (let i = 0; i < upTo; i++) if (/^\s*(?:```|~~~)/.test(lines[i])) open = !open;
+  return open;
+}
+
+// The run of items the caret's item belongs to: same indent AND same quote depth,
+// so a nested sub-list is its own sequence rather than being folded into its
+// parent's. A blank line between items keeps the run going (a loose list is still
+// one list); anything else ends it.
+function orderedRun(lines, at, prefix) {
+  const isItem = (i) => {
+    const m = ORDERED_ITEM.exec(lines[i] ?? '');
+    return !!m && m[1] === prefix;
+  };
+  // Stepped over rather than treated as the end of the list:
+  //   - a blank line, because a loose list is still one list;
+  //   - anything indented past our own marker: a nested sub-list, or an item's
+  //     indented continuation paragraph;
+  //   - a LAZY continuation — an unindented line written straight under an item
+  //     with no blank line between. Markdown folds that into the item's paragraph,
+  //     and people write lists that way constantly ("3. go out" then an
+  //     explanatory line beneath it). Treating those as the end of the list meant
+  //     a list broken up by explanations only ever renumbered its first run.
+  // Only a line that starts a genuinely new block — unindented, and separated by a
+  // blank line — actually ends the run.
+  const skippable = (i) => {
+    const line = lines[i] ?? '';
+    if (line.trim() === '') return true;
+    const lead = /^(\s*(?:> )*)/.exec(line)[1];
+    if (lead.length > prefix.length) return true;
+    const prev = lines[i - 1];
+    return i > 0 && prev !== undefined && prev.trim() !== '';
+  };
+  const idx = [at];
+  for (let i = at - 1; i >= 0; i -= 1) {
+    if (isItem(i)) { idx.unshift(i); continue; }
+    if (skippable(i)) continue;
+    break;
+  }
+  for (let i = at + 1; i < lines.length; i += 1) {
+    if (isItem(i)) { idx.push(i); continue; }
+    if (skippable(i)) continue;
+    break;
+  }
+  return idx;
+}
+
+// Make the ordered list under `caret` run consecutively again, the way a word
+// processor does: delete or reorder an item and the rest close the gap by
+// themselves, instead of leaving 1. 2. 4. behind for the author to fix by hand.
+//
+// Counting continues from the FIRST item's own number rather than resetting to 1,
+// so a list deliberately starting at 5 keeps starting at 5.
+//
+// Returns an edit in the same shape the table auto-format uses (so the caller can
+// apply it through insertText and keep one undo step), or null when the caret is
+// not in an ordered list or the numbering is already correct — null means "do
+// nothing at all", which is what keeps this off the critical path while typing.
+export function renumberOrderedList(body, caret) {
+  const text = String(body ?? '');
+  const lines = text.split('\n');
+
+  // Line containing the caret, plus that line's start offset.
+  let lineStart = 0;
+  let at = 0;
+  for (; at < lines.length; at += 1) {
+    const next = lineStart + lines[at].length + 1;
+    if (caret < next) break;
+    lineStart = next;
+  }
+  if (at >= lines.length) return null;
+
+  if (insideFence(lines, at)) return null;
+
+  // The caret is usually ON an item, but not after deleting one: removing
+  // "3. go out" leaves it at the start of that item's explanation line, and
+  // bailing there meant the very edit that creates a gap never closed it. So when
+  // the caret is on a continuation line, walk up to the item it belongs to. A
+  // blank line ends the search — past that the caret is in its own paragraph, not
+  // in the list.
+  let anchor = at;
+  let m = ORDERED_ITEM.exec(lines[at]);
+  if (!m) {
+    for (let i = at - 1; i >= 0; i -= 1) {
+      if (lines[i].trim() === '') break;
+      const candidate = ORDERED_ITEM.exec(lines[i]);
+      if (candidate) { anchor = i; m = candidate; break; }
+    }
+    if (!m) return null;
+  }
+
+  const run = orderedRun(lines, anchor, m[1]);
+  if (run.length < 2) return null; // a single item is already correctly numbered
+
+  const first = Number(ORDERED_ITEM.exec(lines[run[0]])[2]);
+  if (!Number.isFinite(first)) return null;
+
+  const renumbered = new Map();
+  let changed = false;
+  run.forEach((lineIndex, n) => {
+    const line = lines[lineIndex];
+    const want = String(first + n);
+    const next = line.replace(ORDERED_ITEM, (_, pre, num) => {
+      if (num !== want) changed = true;
+      return `${pre}${want}. `;
+    });
+    renumbered.set(lineIndex, next);
+  });
+  if (!changed) return null;
+
+  // The caret must survive a width change ("9." -> "10." on its own line, and on
+  // every line above it), or typing in a long list would jump the cursor around.
+  const blockStart = lines.slice(0, run[0]).reduce((sum, l) => sum + l.length + 1, 0);
+  let shiftBefore = 0;
+  for (const i of run) {
+    if (i >= at) break;
+    shiftBefore += renumbered.get(i).length - lines[i].length;
+  }
+  const ownDelta = renumbered.has(at) ? renumbered.get(at).length - lines[at].length : 0;
+  // Only meaningful when the caret is on an item: a caret sitting in the digits
+  // must not be pushed along by its own line's width change. On a continuation
+  // line there is no number under it, so the shift applies normally.
+  const onItem = ORDERED_ITEM.exec(lines[at]);
+  const inNumber = !!onItem && caret - lineStart < (onItem[1].length + onItem[2].length + 2);
+  const caretOut = caret + shiftBefore + (inNumber ? 0 : ownDelta);
+
+  const out = run.map((i) => renumbered.get(i));
+  // Preserve any blank lines that sit between items in a loose list.
+  const body2 = [];
+  for (let i = run[0]; i <= run[run.length - 1]; i += 1) {
+    body2.push(renumbered.has(i) ? renumbered.get(i) : lines[i]);
+  }
+  const insert = body2.join('\n');
+  const blockEnd = blockStart + lines.slice(run[0], run[run.length - 1] + 1).join('\n').length;
+  void out;
+  return {
+    replaceStart: blockStart,
+    replaceEnd: blockEnd,
+    insert,
+    selStart: Math.max(blockStart, Math.min(caretOut, blockStart + insert.length)),
+    selEnd: Math.max(blockStart, Math.min(caretOut, blockStart + insert.length)),
+  };
+}
+
 /* ------------------------------------------------------------------ tables */
 
 // A GFM cell cannot contain a raw '|' (it would open a new column) and cannot

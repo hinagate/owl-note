@@ -7,7 +7,7 @@ import { relativeTime } from '../lib/relative-time.js';
 import { blockRanges, locateSelection, blockIndexOf } from '../lib/source-map.js';
 import * as panes from './panes.js';
 import { renderFormatBar, formatActions } from './format-bar.js';
-import { nextTableRow } from '../lib/format.js';
+import { nextTableRow, renumberOrderedList } from '../lib/format.js';
 import { tableCellTarget, tableCellLineBreak, isTableCellSelection, alignTableAt } from '../lib/table.js';
 import { showDrawPanel } from './draw-panel.js';
 import { annotateRuby } from '../lib/ruby-annotate.js';
@@ -982,7 +982,49 @@ export function renderEditor(
     }
   };
 
-  const fireChange = () => {
+  // Keep an ordered list numbered consecutively while it is edited, the way a word
+  // processor does: delete an item and the rest close the gap instead of leaving
+  // 1. 2. 4. behind. The renumber lands as its OWN undo step, so one Ctrl+Z takes
+  // back the numbering and the next takes back the edit — which is also how a word
+  // processor treats an autoformat.
+  // Deferred by one task, deliberately. execCommand is REFUSED while an input event
+  // is dispatching — it returns false — and insertText's fallback then assigns
+  // ta.value, which wipes the textarea's undo stack. Renumbering from inside the
+  // handler therefore cost the user their entire undo history: measured, four
+  // Ctrl+Z presses in a row did nothing. Running on the next task lets the edit go
+  // through execCommand, so it stays undoable and folds into one step.
+  let renumberTimer = null;
+  const renumberList = (inputType) => {
+    if (aligningTable) return;
+    // An undo emits an input event of its own. Renumbering in response re-applies
+    // the very numbering the user just stepped back through, so Ctrl+Z appeared to
+    // do nothing at all — measured: every press was immediately cancelled out.
+    // A pending renumber from the previous keystroke has to go too, or it lands
+    // after the undo and does the same thing one task later.
+    if (inputType === 'historyUndo' || inputType === 'historyRedo') {
+      clearTimeout(renumberTimer);
+      renumberTimer = null;
+      return;
+    }
+    if (!renumberOrderedList(ta.value, ta.selectionStart ?? 0)) return; // nothing to do; stay off the hot path
+    clearTimeout(renumberTimer);
+    renumberTimer = setTimeout(() => {
+      renumberTimer = null;
+      if (destroyed || aligningTable) return;
+      // Recomputed at fire time: the text has moved on since the keystroke.
+      const edit = renumberOrderedList(ta.value, ta.selectionStart ?? 0);
+      if (!edit) return;
+      aligningTable = true; // re-entry guard: insertText fires another input event
+      try {
+        insertText(edit.insert, edit.replaceStart, edit.replaceEnd);
+        ta.setSelectionRange(edit.selStart, edit.selEnd);
+      } finally {
+        aligningTable = false;
+      }
+    }, 0);
+  };
+
+  const fireChange = (event) => {
     // Replacing a multi-line table through execCommand can emit one nested input
     // event per inserted line. The outer event performs the single refresh/save
     // notification after alignment finishes; handling the nested events would
@@ -990,6 +1032,7 @@ export function renderEditor(
     if (aligningTable) return;
     linkedRange = null; // offsets are stale the moment the text moves under them
     alignTable();
+    renumberList(event && event.inputType);
     refresh();
     onChange({ title: titleInput.value, body: ta.value, attachments: atts });
     scheduleAutoSave();
@@ -1279,6 +1322,7 @@ export function renderEditor(
     destroy: () => {
       destroyed = true;
       clearTimeout(saveTimer);
+      clearTimeout(renumberTimer); // stop a pending list renumber
       document.removeEventListener('visibilitychange', refreshRelative);
       window.removeEventListener('focus', refreshRelative);
       zoomBar.destroy();
