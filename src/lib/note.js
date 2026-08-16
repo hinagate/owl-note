@@ -70,7 +70,12 @@ export function withPinned(note, pinned) {
 // deliberately has no effect, so a fresh capture becomes the top unpinned note.
 export function orderNotes(notes) {
   const rank = (n) => (n.pinned ? 0 : 1);
-  const recency = (n) => n.created ?? n.dateAdded ?? 0; // newest first
+  // Last touched first. Sorting on `created` meant editing a note never moved it,
+  // so the note you were just working on stayed buried under whatever happened to
+  // be newest — the list answered "what did I make recently", not "what am I
+  // working on". `created` and `dateAdded` remain the fallbacks for notes that
+  // predate an updated stamp.
+  const recency = (n) => n.updated ?? n.created ?? n.dateAdded ?? 0;
   return notes
     .map((n, i) => ({ n, i }))
     .sort((a, b) => {

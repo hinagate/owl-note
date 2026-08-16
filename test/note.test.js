@@ -105,4 +105,30 @@ describe('orderNotes', () => {
     ]);
     expect(out.map((n) => n.id)).toEqual(['p2', 'p1', 'b', 'a']);
   });
+
+  // Sorting on `created` meant the note you were just working on stayed buried.
+  it('orders by last change, not creation', () => {
+    const out = orderNotes([
+      { id: 'oldest-made-newest-edit', created: 100, updated: 900 },
+      { id: 'newest-made', created: 800, updated: 800 },
+      { id: 'middle', created: 400, updated: 500 },
+    ]);
+    expect(out.map((n) => n.id)).toEqual(['oldest-made-newest-edit', 'newest-made', 'middle']);
+  });
+
+  it('falls back to created when a note has no updated stamp', () => {
+    const out = orderNotes([
+      { id: 'no-updated', created: 900 },
+      { id: 'edited', created: 100, updated: 500 },
+    ]);
+    expect(out.map((n) => n.id)).toEqual(['no-updated', 'edited']);
+  });
+
+  it('still floats pinned above a more recently edited note', () => {
+    const out = orderNotes([
+      { id: 'fresh', created: 100, updated: 999 },
+      { id: 'pin', created: 100, updated: 1, pinned: true },
+    ]);
+    expect(out.map((n) => n.id)).toEqual(['pin', 'fresh']);
+  });
 });
