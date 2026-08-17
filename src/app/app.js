@@ -1,7 +1,7 @@
 import * as bm from '../lib/bookmarks.js';
 import * as mirror from '../lib/mirror.js';
 import { encode, decode, selfTest } from '../lib/codec.js';
-import { isMissingKeyError, ensureDistributed, watchKeyChanges, importKeyring, exportKeyring } from '../lib/note-key.js';
+import { isMissingKeyError, reconcileKeyring, watchKeyChanges, importKeyring, exportKeyring } from '../lib/note-key.js';
 import { createNote, withUpdatedContent, contentHash, extractTitle, withPinned, orderNotes } from '../lib/note.js';
 import { renderSidebar } from './sidebar.js';
 import { renderNoteList } from './note-list.js';
@@ -2234,10 +2234,12 @@ export async function boot() {
     toast('Encoding self-test failed — saving disabled', true);
     return;
   }
-  // Re-upload any key that was minted while sync was unavailable, and pick up keys
-  // arriving from another device mid-session so their notes become readable without
-  // a reload. Both are best-effort: neither may block boot.
-  try { await ensureDistributed(); } catch { /* offline / sync off — local copy still works */ }
+  // Square the two storage areas: re-upload any key minted while sync was unavailable,
+  // and take a durable local copy of every key another device has shared. The copy down
+  // is what leaves each install able to restore the others — a key only ever held in
+  // sync vanishes from EVERY device the moment that copy is cleared. Best-effort:
+  // it may not block boot.
+  try { await reconcileKeyring(); } catch { /* offline / sync off — local copy still works */ }
   watchKeyChanges(() => { refreshPanes().catch(() => {}); });
   const root = await bm.ensureRoot();
   await initUI(root);

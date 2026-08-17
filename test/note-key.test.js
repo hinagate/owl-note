@@ -5,7 +5,7 @@ import {
   keyById,
   rawKeys,
   hasAnyKey,
-  ensureDistributed,
+  reconcileKeyring,
   exportKeyring,
   importKeyring,
   isMissingKeyError,
@@ -79,9 +79,9 @@ describe('note-key', () => {
 
     const sync = new Map();
     useDevice({ local: localA, sync });
-    await ensureDistributed();
+    await reconcileKeyring();
     useDevice({ local: localB, sync });
-    await ensureDistributed();
+    await reconcileKeyring();
 
     const ring = await rawKeys();
     expect(Object.keys(ring).sort()).toEqual([a.id, b.id].sort());
@@ -113,19 +113,82 @@ describe('note-key', () => {
     const { local } = useDevice({ syncEnabled: false });
     const { id } = await activeKey();
     expect(local.get(`owl:key:${id}`)).toBeTypeOf('string');
-    expect(await ensureDistributed()).toBe(0); // nowhere to distribute to; must not throw
+    expect(await reconcileKeyring()).toEqual({ pulled: 0, pushed: 0 }); // nowhere to distribute to; must not throw
     await expect(keyById(id)).resolves.toBeTruthy();
   });
 
-  it('ensureDistributed re-uploads a key minted while sync was unavailable', async () => {
+  it('re-uploads a key minted while sync was unavailable', async () => {
     const local = new Map();
     useDevice({ local, syncEnabled: false });
     const { id } = await activeKey();
     const sync = new Map();
     useDevice({ local, sync });
-    expect(await ensureDistributed()).toBe(1);
+    expect(await reconcileKeyring()).toEqual({ pulled: 0, pushed: 1 });
     expect(sync.get(`owl:key:${id}`)).toBe(local.get(`owl:key:${id}`));
-    expect(await ensureDistributed()).toBe(0); // idempotent
+    expect(await reconcileKeyring()).toEqual({ pulled: 0, pushed: 0 }); // idempotent
+  });
+
+  // The other half, and the one that decides whether a keyring can be RESTORED.
+  // rawKeys() unions both areas, so a key sitting only in sync reads perfectly —
+  // while being nowhere on this machine. Without the copy down, every device is a
+  // client of one shared copy: clear it once and they all go dark together.
+  it('copies a key that arrived from another device down into local storage', async () => {
+    const sync = new Map();
+    useDevice({ sync });
+    const { id } = await activeKey();
+
+    const local = new Map(); // a second machine, nothing of its own yet
+    useDevice({ local, sync });
+    expect(local.get(`owl:key:${id}`)).toBeUndefined();
+    expect(await reconcileKeyring()).toEqual({ pulled: 1, pushed: 0 });
+    expect(local.get(`owl:key:${id}`)).toBe(sync.get(`owl:key:${id}`));
+    expect(local.get('owl:keyIds')).toContain(id); // indexed, so the fast path finds it
+    expect(await reconcileKeyring()).toEqual({ pulled: 0, pushed: 0 }); // idempotent
+  });
+
+  it('a device that pulled a key keeps it after the synced copy is cleared', async () => {
+    const sync = new Map();
+    useDevice({ sync });
+    const { id } = await activeKey();
+
+    const local = new Map();
+    useDevice({ local, sync });
+    await reconcileKeyring();
+
+    sync.clear(); // sync reset, or the account's extension data wiped elsewhere
+    useDevice({ local, sync });
+    await expect(keyById(id)).resolves.toBeTruthy();
+  });
+
+  // The scenario the user asked for: one install left standing rebuilds the rest.
+  it('one surviving device restores the whole keyring to a wiped account', async () => {
+    const sync = new Map();
+    const localA = new Map();
+    const localB = new Map();
+
+    useDevice({ local: localA, sync });
+    const a = await activeKey();
+    useDevice({ local: localB, sync });      // B adopts A's key...
+    await reconcileKeyring();                 // ...and now holds it durably
+    await importKeyring({ keys: { bbbbbbbb: 'E'.repeat(43) } }); // plus one of its own
+
+    useDevice({ local: localA, sync });
+    await reconcileKeyring();                 // A picks up B's key too
+
+    // Every other install is removed and the account's synced data goes with it.
+    sync.clear();
+    localB.clear();
+
+    useDevice({ local: localA, sync });
+    expect(await reconcileKeyring()).toEqual({ pulled: 0, pushed: 2 }); // A repopulates sync
+    expect(sync.get(`owl:key:${a.id}`)).toBeTypeOf('string');
+    expect(sync.get('owl:key:bbbbbbbb')).toBe('E'.repeat(43));
+
+    // ...so a reinstall on the wiped machine can read everything again.
+    useDevice({ local: new Map(), sync });
+    await reconcileKeyring();
+    await expect(keyById(a.id)).resolves.toBeTruthy();
+    await expect(keyById('bbbbbbbb')).resolves.toBeTruthy();
   });
 
   it('survives a Chrome sync reset, because the local copy is authoritative', async () => {

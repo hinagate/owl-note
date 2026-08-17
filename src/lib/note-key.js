@@ -130,22 +130,58 @@ async function persist(id, b64) {
   await reindex([...Object.keys(ring), id]);
   ringCache = { ...ring, [id]: b64 };
   const sync = syncArea();
-  if (sync) { try { await sync.set({ [KEY_PREFIX + id]: b64 }); } catch { /* offline / quota — local copy stands, retried by ensureDistributed */ } }
+  if (sync) { try { await sync.set({ [KEY_PREFIX + id]: b64 }); } catch { /* offline / quota — local copy stands, retried by reconcileKeyring */ } }
 }
 
-// Push any key that only exists locally up to sync. Covers the device that
-// minted its key while offline or with sync switched off; cheap on startup.
-export async function ensureDistributed() {
+// Make local and sync hold the SAME set of keys, in both directions.
+//
+// The pull half is what makes the keyring survivable. rawKeys() reads the union of
+// the two areas, so a key sitting only in sync is perfectly readable — and was never
+// written to this device. Every device therefore depended on the synced copy staying
+// alive: clear it once (a sync reset, or an uninstall elsewhere if Chrome propagates
+// that) and every device loses the same keys at the same moment, with no survivor to
+// restore from. Copying them down means each device holds a complete keyring of its
+// own, so ONE surviving install can repopulate everything through the push half.
+//
+// The push half covers the device that minted its key while offline or with sync off.
+export async function reconcileKeyring() {
   const sync = syncArea();
-  if (!sync) return 0;
-  const ring = await rawKeys();
-  if (!Object.keys(ring).length) return 0;
   let synced = {};
-  try { synced = collectKeys(await sync.get(null), {}); } catch { return 0; }
-  const missing = {};
-  for (const [id, b64] of Object.entries(ring)) if (synced[id] !== b64) missing[KEY_PREFIX + id] = b64;
-  if (!Object.keys(missing).length) return 0;
-  try { await sync.set(missing); return Object.keys(missing).length; } catch { return 0; }
+  if (sync) { try { synced = collectKeys(await sync.get(null), {}); } catch { synced = {}; } }
+
+  let localKeys = {};
+  try {
+    const ids = (await chrome.storage.local.get(KEY_INDEX))[KEY_INDEX];
+    if (Array.isArray(ids) && ids.length) {
+      collectKeys(await chrome.storage.local.get(ids.map((id) => KEY_PREFIX + id)), localKeys);
+    }
+  } catch { localKeys = {}; }
+
+  // Pull: anything sync knows that this device does not.
+  const toLocal = {};
+  for (const [id, b64] of Object.entries(synced)) if (localKeys[id] !== b64) toLocal[KEY_PREFIX + id] = b64;
+  let pulled = 0;
+  if (Object.keys(toLocal).length) {
+    try {
+      await chrome.storage.local.set(toLocal);
+      await reindex([...Object.keys(localKeys), ...Object.keys(synced)]);
+      pulled = Object.keys(toLocal).length;
+      invalidate();
+    } catch { /* best-effort; the union is still readable from sync */ }
+  }
+
+  // Push: anything this device holds that sync does not.
+  let pushed = 0;
+  if (sync) {
+    const toSync = {};
+    for (const [id, b64] of Object.entries({ ...synced, ...localKeys })) {
+      if (synced[id] !== b64) toSync[KEY_PREFIX + id] = b64;
+    }
+    if (Object.keys(toSync).length) {
+      try { await sync.set(toSync); pushed = Object.keys(toSync).length; } catch { /* offline / quota */ }
+    }
+  }
+  return { pulled, pushed };
 }
 
 export async function keyById(id) {
@@ -230,10 +266,13 @@ export async function importKeyring(ring) {
 // reload, so drop the import cache whenever the ring changes underneath us.
 export function watchKeyChanges(onNewKey) {
   if (!chrome.storage.onChanged || !chrome.storage.onChanged.addListener) return;
-  chrome.storage.onChanged.addListener((changes) => {
+  chrome.storage.onChanged.addListener((changes, area) => {
     const ids = Object.keys(changes).filter((k) => k.startsWith(KEY_PREFIX));
     if (!ids.length) return;
     invalidate(); // re-resolves to the same active id; just drops the stale ring
+    // A key arriving from another device is only readable while sync keeps it. Copy
+    // it down now, so this device survives the synced copy being cleared later.
+    if (area === 'sync') { reconcileKeyring().catch(() => {}); }
     if (typeof onNewKey === 'function') onNewKey(ids.map((k) => k.slice(KEY_PREFIX.length)));
   });
 }
