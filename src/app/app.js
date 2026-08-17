@@ -1,7 +1,7 @@
 import * as bm from '../lib/bookmarks.js';
 import * as mirror from '../lib/mirror.js';
 import { encode, decode, selfTest } from '../lib/codec.js';
-import { isMissingKeyError, ensureDistributed, watchKeyChanges, importKeyring } from '../lib/note-key.js';
+import { isMissingKeyError, ensureDistributed, watchKeyChanges, importKeyring, exportKeyring } from '../lib/note-key.js';
 import { createNote, withUpdatedContent, contentHash, extractTitle, withPinned, orderNotes } from '../lib/note.js';
 import { renderSidebar } from './sidebar.js';
 import { renderNoteList } from './note-list.js';
@@ -392,7 +392,7 @@ const QUICK_CAPTURE_KEY = 'owl:quickCapture';
 let lastQuickCaptureToken = null;
 let quickCaptureQueue = Promise.resolve();
 
-const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, editorNoteId: null, toolbar: null, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1, indexReady: null, driveEnabled: false, phonetics: false, phoneticsTables: { en: null, ja: null, zh: null }, phoneticsLoading: new Set(), phoneticsBusy: false, previewZoom: DEFAULT_ZOOM };
+const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, editorNoteId: null, toolbar: null, currentPreviewOnly: false, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1, indexReady: null, driveEnabled: false, phonetics: false, phoneticsTables: { en: null, ja: null, zh: null }, phoneticsLoading: new Set(), phoneticsBusy: false, previewZoom: DEFAULT_ZOOM };
 
 export function resetUI() {
   ui.rootId = null;
@@ -1359,8 +1359,9 @@ async function refreshPanes() {
     onSearch: async (q) => { ui.selected = new Set(); ui.anchor = null; ui.focus = -1; ui.query = q; await refreshNoteList(); },
     onExportNote: () => exportCurrentOwlNote(),
     onExportMarkdown: () => doExportMarkdown(),
-    onExportJson: doExport,
+    onExportKey: doExportRecoveryKey,
     onImport: (files) => doImportFiles(files),
+    onImportKey: (file) => doImportRecoveryKey(file),
     driveEnabled: ui.driveEnabled,
     onToggleDrive: async (checked) => {
       const result = await toggleDriveSync(checked);
@@ -1660,6 +1661,7 @@ async function openLocalNote(id) {
 // mirror when it holds the same content (origin device — no fetch), else pull the full
 // payload from Drive. Falls back to the preview if Drive is unreachable, so it still opens.
 async function resolveNote(n) {
+  ui.currentPreviewOnly = false;
   if (!n || !n._driveBody) return n;
   const backup = await mirror.getBackup(n.id);
   if (backup && backup.current && backup.current.body !== undefined && backup.current.hash === n.hash) {
@@ -1669,6 +1671,9 @@ async function resolveNote(n) {
     const full = await decode(await noteDrive.loadNoteBody(n._driveBody));
     return { ...full, _driveBody: n._driveBody, bookmarkId: n.bookmarkId, folderId: n.folderId, dateAdded: n.dateAdded };
   } catch {
+    // Flagged on ui, not on the note, so the marker can never be written into a
+    // saved payload. Cleared on every open by the assignment in openBookmark.
+    ui.currentPreviewOnly = true;
     return { ...n, body: n.preview || '' }; // Drive unavailable — open with the preview
   }
 }
@@ -1755,14 +1760,26 @@ export async function openByHash() {
   } catch { /* not a valid note payload */ }
 }
 
-async function doExport() {
-  const json = await mirror.exportAll();
-  const blob = new Blob([json], { type: 'application/json' });
+// The keys alone. There used to be a whole-notes JSON backup here, and it was
+// dangerous: it collected notes from the LOCAL MIRROR, which only holds what this
+// device saved itself, so every note synced in from another device was silently
+// missing from a file people reasonably treated as a complete restore. The Markdown
+// export reads the bookmark tree and is complete, so that is the note backup now,
+// and this carries the one thing a .zip cannot.
+async function doExportRecoveryKey() {
+  const ring = await exportKeyring();
+  if (!ring || !Object.keys(ring.keys || {}).length) {
+    toast('No encryption keys on this device yet', true);
+    return;
+  }
+  // Wrapped under `keyring` so the existing JSON import path restores it unchanged.
+  const blob = new Blob([JSON.stringify({ version: 1, keyring: ring }, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'owl-note-backup.json';
+  a.download = 'owl-note-recovery-key.json';
   a.click();
   URL.revokeObjectURL(a.href);
+  toast('Recovery key saved — keep this file private');
 }
 
 function downloadBlob(blob, filename) {
@@ -1777,8 +1794,17 @@ function downloadBlob(blob, filename) {
 // editor's live content (unsaved edits included) exactly as the Share entry did.
 function exportCurrentOwlNote() {
   if (!ui.current || ui.current.locked) return;
+  // A Drive-backed note whose body could not be fetched opens showing its stored
+  // preview. Packaging that would write a truncated note into a file labelled as a
+  // backup — the same silent under-export the JSON backup was just removed for.
+  if (ui.currentPreviewOnly) {
+    toast("Can't back up this note — its full text is in Drive and could not be loaded", true);
+    return;
+  }
   const snapshot = ui.editor?.getSnapshot?.()
     ?? { title: ui.current.title, body: ui.current.body, attachments: ui.current.attachments || [] };
+  const notebook = (ui.notebooks || []).find((nb) => nb.id === (ui.current.folderId ?? ui.activeFolder));
+  snapshot.notebook = notebook && notebook.id !== ui.rootId ? notebook.title : undefined;
   return exportSharedOwlNote(snapshot);
 }
 
@@ -1916,7 +1942,7 @@ async function doExportMarkdown() {
   a.download = 'owl-note-export.zip';
   a.click();
   URL.revokeObjectURL(a.href);
-  toast(skipped ? `Exported ${count} notes (${skipped} skipped)` : `Exported ${count} notes`);
+  toast(skipped ? `Exported ${count} notes — ${skipped} skipped (locked or unreachable)` : `Exported ${count} notes`, skipped > 0);
 }
 
 // --- Markdown / JSON import ----------------------------------------------
@@ -2021,6 +2047,7 @@ export async function importFiles(files, onProgress) {
   // still undecodable during deduplication and importing their plaintext backup
   // creates a second copy. Cache the parse result so every file is read once.
   const parsedJson = new Map();
+  let keysRestored = 0;
   for (const file of files) {
     const name = String(file && file.name || '').toLowerCase();
     if (!name.endsWith('.json')) continue;
@@ -2028,14 +2055,16 @@ export async function importFiles(files, onProgress) {
       const data = JSON.parse(await file.text());
       parsedJson.set(file, { data });
       if (data.keyring) {
-        try { await importKeyring(data.keyring); } catch { /* keys are a bonus; continue with the normal note import */ }
+        // Counted so the summary can say so: a recovery-key file carries no notes,
+        // and reporting only "0 new, 0 updated" would read as nothing having happened.
+        try { keysRestored += await importKeyring(data.keyring); } catch { /* keys are a bonus; continue with the normal note import */ }
       }
     } catch (error) {
       parsedJson.set(file, { error });
     }
   }
 
-  const ctx = { root, idMap: await buildIdMap(root), nbCache: new Map(), tally: { created: 0, updated: 0, skipped: 0, tooLarge: 0 }, touched: new Set() };
+  const ctx = { root, idMap: await buildIdMap(root), nbCache: new Map(), tally: { created: 0, updated: 0, skipped: 0, tooLarge: 0, keys: 0 }, touched: new Set() };
   for (const file of files) {
     const name = (file.name || '').toLowerCase();
     let pending = 1; // this file's unfinished units: its own parse + discovered notes
@@ -2044,9 +2073,14 @@ export async function importFiles(files, onProgress) {
     try {
       if (name.endsWith('.owl-note')) {
         const imported = await parseOwlNotePackage(new Uint8Array(await file.arrayBuffer()));
-        // A shared note is always an independent editable copy, never an update of
-        // the sender's original id (even if this package is imported twice).
-        await importOne({ ...imported, id: undefined }, root, ctx);
+        // A package carrying its id is a backup of that note: restore it in place.
+        // Packages written before the format carried one still import as a fresh
+        // copy, which is exactly what they were. The notebook is honoured too, so a
+        // restored note lands back where it lived rather than at the root.
+        const targetFolder = imported.notebook
+          ? await findOrCreateNotebook(root, imported.notebook, ctx.nbCache)
+          : root;
+        await importOne(imported, targetFolder, ctx);
         step();
       } else if (name.endsWith('.zip')) {
         const entries = (await unzip(new Uint8Array(await file.arrayBuffer())))
@@ -2107,7 +2141,35 @@ export async function importFiles(files, onProgress) {
       progress.done += pending; pending = 0; report(); // close out its units so the bar still completes
     }
   }
-  return { ...ctx.tally, touched: [...ctx.touched] };
+  return { ...ctx.tally, keys: keysRestored, touched: [...ctx.touched] };
+}
+
+// Installing a decryption key from another installation is a deliberate act, not a
+// side effect of loading a file, so it has its own menu entry and its own
+// confirmation. It used to happen silently whenever an imported .json happened to
+// contain a keyring — undiscoverable if you needed it, and unannounced if you did not.
+async function doImportRecoveryKey(file) {
+  let ring = null;
+  try {
+    const data = JSON.parse(await file.text());
+    ring = data && (data.keyring || (data.keys ? data : null));
+  } catch { /* not JSON at all */ }
+  const keys = ring && ring.keys && Object.keys(ring.keys);
+  if (!keys || !keys.length) {
+    toast("That file doesn't contain a recovery key", true);
+    return;
+  }
+  const n = keys.length;
+  if (!confirm(`Add ${n} decryption key${n === 1 ? '' : 's'} from another OWL-Note installation?
+
+Notes locked by ${n === 1 ? 'it' : 'them'} will become readable here. Your own keys are kept.`)) return;
+  let added = 0;
+  try { added = await importKeyring(ring); }
+  catch { toast("Couldn't add the key", true); return; }
+  if (!added) { toast('Already had that key — nothing changed'); return; }
+  toast(`${added} key${added === 1 ? '' : 's'} added — locked notes should open now`);
+  await refreshPanes(); // previously locked notes decode on the next read
+  if (ui.current && ui.current.locked && ui.activeBookmarkId) await openBookmark(ui.activeBookmarkId);
 }
 
 async function doImportFiles(files) {
@@ -2124,7 +2186,12 @@ async function doImportFiles(files) {
   }
   finally { renderImportProgress(null); } // the summary toast (or the error) takes over from here
   if (t) {
-    const parts = [`${t.created} new`, `${t.updated} updated`];
+    // A recovery-key file carries no notes at all, so lead with the keys when that
+    // is what was imported — "0 new, 0 updated" alone reads as a failed import.
+    const parts = t.keys && !t.created && !t.updated
+      ? [`${t.keys} encryption key${t.keys === 1 ? '' : 's'} restored`]
+      : [`${t.created} new`, `${t.updated} updated`];
+    if (t.keys && (t.created || t.updated)) parts.push(`${t.keys} key${t.keys === 1 ? '' : 's'} restored`);
     if (t.tooLarge) parts.push(`${t.tooLarge} local-only (not synced — use Export → Import to copy to other devices)`);
     if (t.skipped) parts.push(`${t.skipped} skipped`);
     toast(`Imported: ${parts.join(', ')}`, t.tooLarge > 0 || t.skipped > 0);

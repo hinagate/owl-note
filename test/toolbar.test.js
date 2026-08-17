@@ -3,7 +3,7 @@ import { renderToolbar } from '../src/app/toolbar.js';
 
 beforeEach(() => { document.body.innerHTML = '<div id="toolbar"></div>'; });
 
-const opts = (over) => ({ query: '', onSearch: vi.fn(), onExportMarkdown: vi.fn(), onExportJson: vi.fn(), onImport: vi.fn(), ...over });
+const opts = (over) => ({ query: '', onSearch: vi.fn(), onExportMarkdown: vi.fn(), onExportKey: vi.fn(), onImport: vi.fn(), onImportKey: vi.fn(), ...over });
 
 describe('toolbar', () => {
   it('fires the search callback', () => {
@@ -21,27 +21,27 @@ describe('toolbar', () => {
   // stating its scope. Previously the two all-notes items were indistinguishable and
   // the per-note one lived under Share, where nobody would look for it.
   it('Export dropdown offers this note and both all-notes files, and fires the chosen one', () => {
-    const onExportNote = vi.fn(); const onExportMarkdown = vi.fn(); const onExportJson = vi.fn();
+    const onExportNote = vi.fn(); const onExportMarkdown = vi.fn(); const onExportKey = vi.fn();
     const el = document.getElementById('toolbar');
-    const api = renderToolbar(el, opts({ onExportNote, onExportMarkdown, onExportJson }));
+    const api = renderToolbar(el, opts({ onExportNote, onExportMarkdown, onExportKey }));
     const exportBtn = [...el.querySelectorAll('button')].find((b) => b.textContent.includes('Export'));
     exportBtn.click();
-    const item = (text) => [...el.querySelectorAll('.menu-item')].find((b) => b.textContent === text);
-    expect([...el.querySelectorAll('.menu-item')].map((b) => b.textContent))
-      .toEqual(['This note (.owl-note)', 'All notes as Markdown (.zip)', 'All notes + keys (JSON backup)']);
+    const item = (text) => [...el.querySelectorAll('.export-menu .menu-item')].find((b) => b.textContent === text);
+    expect([...el.querySelectorAll('.export-menu .menu-item')].map((b) => b.textContent))
+      .toEqual(['This note (.owl-note)', 'All notes as Markdown (.zip)', 'Recovery key (.json)']);
 
     api.setNoteExportEnabled(true);
     item('This note (.owl-note)').click();
     expect(onExportNote).toHaveBeenCalled();
-    expect(el.querySelector('.menu').hidden).toBe(true);
+    expect(el.querySelector('.export-menu').hidden).toBe(true);
 
     exportBtn.click();
     item('All notes as Markdown (.zip)').click();
     expect(onExportMarkdown).toHaveBeenCalled();
 
     exportBtn.click();
-    item('All notes + keys (JSON backup)').click();
-    expect(onExportJson).toHaveBeenCalled();
+    item('Recovery key (.json)').click();
+    expect(onExportKey).toHaveBeenCalled();
   });
 
   // The toolbar is not rebuilt when the open note changes, so the per-note item is
@@ -50,7 +50,7 @@ describe('toolbar', () => {
     const onExportNote = vi.fn();
     const el = document.getElementById('toolbar');
     const api = renderToolbar(el, opts({ onExportNote }));
-    const item = () => [...el.querySelectorAll('.menu-item')].find((b) => b.textContent === 'This note (.owl-note)');
+    const item = () => [...el.querySelectorAll('.export-menu .menu-item')].find((b) => b.textContent === 'This note (.owl-note)');
     expect(item().disabled).toBe(true);
     api.setNoteExportEnabled(true);
     expect(item().disabled).toBe(false);
@@ -118,5 +118,37 @@ describe('toolbar', () => {
     expect(el.lastElementChild).toBe(ask);
     ask.click();
     expect(onAsk).toHaveBeenCalledTimes(1);
+  });
+
+  // Import mirrors Export. Loading a decryption key from another installation is a
+  // different act from loading notes, so it is its own entry rather than something a
+  // general import notices inside a file.
+  it('Import offers notes and the recovery key as separate entries', () => {
+    const el = document.getElementById('toolbar');
+    renderToolbar(el, opts({}));
+    const importBtn = [...el.querySelectorAll('button')].find((b) => b.textContent.includes('Import'));
+    importBtn.click();
+    expect([...el.querySelectorAll('.import-menu .menu-item')].map((b) => b.textContent))
+      .toEqual(['Notes (.zip, .md, .owl-note, .json…)', 'Recovery key (.json)']);
+  });
+
+  it('the key entry opens a file picker limited to .json', () => {
+    const el = document.getElementById('toolbar');
+    renderToolbar(el, opts({}));
+    const inputs = [...el.querySelectorAll('input[type=file]')];
+    expect(inputs).toHaveLength(2);
+    expect(inputs.some((i) => i.accept === '.json' && !i.multiple)).toBe(true);
+  });
+
+  it('passes a chosen key file to onImportKey, not to onImport', () => {
+    const onImport = vi.fn(); const onImportKey = vi.fn();
+    const el = document.getElementById('toolbar');
+    renderToolbar(el, opts({ onImport, onImportKey }));
+    const keyInput = [...el.querySelectorAll('input[type=file]')].find((i) => i.accept === '.json');
+    const file = new File(['{}'], 'owl-note-recovery-key.json', { type: 'application/json' });
+    Object.defineProperty(keyInput, 'files', { value: [file], configurable: true });
+    keyInput.dispatchEvent(new Event('change'));
+    expect(onImportKey).toHaveBeenCalledWith(file);
+    expect(onImport).not.toHaveBeenCalled();
   });
 });

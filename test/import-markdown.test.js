@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { installFakeChrome } from './helpers/fake-chrome.js';
 import * as bm from '../src/lib/bookmarks.js';
 import * as mirror from '../src/lib/mirror.js';
+import { exportKeyring } from '../src/lib/note-key.js';
 import { decode, encryptionKeyId } from '../src/lib/codec.js';
 import { zipFiles } from '../src/lib/zip.js';
 import { importFiles, loadNotes, resetUI } from '../src/app/app.js';
@@ -30,7 +31,7 @@ async function notesByTitle(root) {
 }
 
 describe('importFiles', () => {
-  it('imports an .owl-note as a fresh editable copy with its photo', async () => {
+  it('restores an .owl-note in place, so re-importing a backup does not duplicate it', async () => {
     const root = await bm.ensureRoot();
     const blob = await buildOwlNotePackage({
       id: 'sender-id',
@@ -44,11 +45,26 @@ describe('importFiles', () => {
     await importFiles([portable]);
     const imported = [];
     for (const row of await bm.allNotes(root)) imported.push(await decode(row.payload));
-    expect(imported).toHaveLength(2);
-    expect(new Set(imported.map((note) => note.id)).size).toBe(2);
-    expect(imported.every((note) => note.id !== 'sender-id')).toBe(true);
-    expect(imported[0].attachments[0].dataUri).toBe('data:image/png;base64,AQID');
+    expect(imported).toHaveLength(1);            // the second import updated the first
+    expect(imported[0].id).toBe('sender-id');    // and kept the backed-up note's identity
+    expect(imported[0].attachments).toHaveLength(1);
   });
+
+  // Packages written before the format carried an id are still just copies, and
+  // must keep importing as one rather than failing.
+  it('still imports a package with no id as a fresh copy', async () => {
+    const root = await bm.ensureRoot();
+    const blob = await buildOwlNotePackage({ title: 'Legacy', body: 'no id in here' });
+    const buffer = await blob.arrayBuffer();
+    const portable = { name: 'Legacy.owl-note', arrayBuffer: async () => buffer, text: async () => '' };
+    await importFiles([portable]);
+    await importFiles([portable]);
+    const imported = [];
+    for (const row of await bm.allNotes(root)) imported.push(await decode(row.payload));
+    expect(imported).toHaveLength(2);
+    expect(new Set(imported.map((n) => n.id)).size).toBe(2);
+  });
+
   it('imports a zip, recreating notebooks from folders (Inbox -> root)', async () => {
     const root = await bm.ensureRoot();
     const file = await zipFile('export.zip', [
@@ -142,7 +158,9 @@ describe('importFiles', () => {
     const saved = await saveNote(original, root, undefined);
     const sourceRow = (await bm.allNotes(root))[0];
     const sourceKeyId = await encryptionKeyId(sourceRow.payload);
-    const backup = await mirror.exportAll();
+    // The shape a backup file written before 2.3.28 has: notes AND keyring. Those
+    // files still exist on disk, so the import path must keep handling them.
+    const backup = JSON.stringify({ version: 1, notes: await mirror.allBackups(), keyring: await exportKeyring() });
 
     // Extension B has its own storage and has already minted its own active key,
     // exactly as a booted Store/dev build would, but sees A's shared bookmarks.

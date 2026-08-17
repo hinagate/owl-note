@@ -36,21 +36,20 @@ describe('exports stay plaintext while storage is encrypted', () => {
     expect(backup.current.body).toBe(SECRET); // mirror is plaintext by design
   });
 
-  it('JSON export contains readable note text', async () => {
-    const root = await bm.ensureRoot();
-    await saveNote(createNote({ title: 'Notes', body: SECRET }), root, null);
-    const json = await mirror.exportAll();
-    expect(json).toContain(SECRET);
-    expect(JSON.parse(json).notes[0].body).toBe(SECRET);
+  // The whole-notes JSON backup was removed: it collected from the local mirror,
+  // which only holds notes THIS device saved, so anything synced in from another
+  // device was silently missing from a file people treated as a complete restore.
+  // The Markdown export reads the bookmark tree and is the note backup now.
+  it('the mirror no longer offers a note backup at all', async () => {
+    expect(mirror.exportAll).toBeUndefined();
+    expect(mirror.importAll).toBeUndefined();
   });
 
-  it('JSON export carries the keyring, so a reinstall can still read the bookmarks', async () => {
+  it('the local mirror still keeps the note readable for recovery', async () => {
     const root = await bm.ensureRoot();
-    await saveNote(createNote({ title: 'Notes', body: SECRET }), root, null);
-    const data = JSON.parse(await mirror.exportAll());
-    // Recovery depends on this. It also means an export is as sensitive as the
-    // notes themselves plus the key — see the warning in PRIVACY.md.
-    expect(Object.keys(data.keyring.keys).length).toBeGreaterThan(0);
+    const note = createNote({ title: 'Notes', body: SECRET });
+    await saveNote(note, root, null);
+    expect((await mirror.getBackup(note.id)).current.body).toBe(SECRET);
   });
 
   it('Markdown export produces readable .md text', async () => {

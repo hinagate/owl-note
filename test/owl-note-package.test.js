@@ -24,7 +24,9 @@ describe('.owl-note package', () => {
     expect(paths.filter((path) => path.startsWith('attachments/'))).toHaveLength(2);
 
     const manifest = JSON.parse(new TextDecoder().decode(entries.find((entry) => entry.path === 'note.json').bytes));
-    expect(manifest.note).not.toHaveProperty('id');
+    // The id is what makes this a backup of one note rather than a detached copy:
+    // importing it restores the original instead of leaving a second beside it.
+    expect(manifest.note.id).toBe(note.id);
     expect(manifest.note.createdAt).toBe(100);
     expect(manifest.note.updatedAt).toBe(200);
     expect(manifest.attachments).toHaveLength(2);

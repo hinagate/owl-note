@@ -47,7 +47,7 @@ describe('loadNotes merges local-only notes', () => {
     const notes = await loadNotes(root);
     expect(notes).toHaveLength(1);
     expect(notes[0]).toMatchObject({ id: n.id, bookmarkId, title: 'Shared secret', locked: true });
-    expect(notes[0].body).toContain('key is not on this device');
+    expect(notes[0].body).toContain('the key for it is not on this device');
     expect(notes[0].body).not.toContain('never show this');
   });
 });

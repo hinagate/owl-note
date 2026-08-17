@@ -26,22 +26,6 @@ describe('mirror', () => {
     expect(missing[0].id).toBe(b.id);
   });
 
-  it('exports and imports notes', async () => {
-    const a = createNote({ body: 'a' });
-    await mirror.saveBackup(a);
-    const json = await mirror.exportAll();
-    installFakeChrome(); // wipe storage
-    const res = await mirror.importAll(json);
-    expect(res.imported).toBe(1);
-    expect((await mirror.allBackups())[0].body).toBe('a');
-  });
-
-  it('importAll skips entries without a valid id', async () => {
-    const json = JSON.stringify({ version: 1, notes: [{ id: 'ok', title: 'A', body: 'a', attachments: [], version: 1, hash: 'h' }, { title: 'no id' }, null] });
-    const res = await mirror.importAll(json);
-    expect(res.imported).toBe(1);
-    expect((await mirror.allBackups()).map((n) => n.id)).toEqual(['ok']);
-  });
 
   it('saveBackup records folderId and localOnly; localOnlyBackups filters by folder', async () => {
     const a = createNote({ body: 'a' });

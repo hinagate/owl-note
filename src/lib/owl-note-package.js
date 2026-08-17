@@ -85,6 +85,13 @@ export async function buildOwlNotePackage(note, resolveAttachment) {
     format: 'owl-note',
     version: 1,
     note: {
+      // The id and notebook make this a BACKUP of one note rather than a detached
+      // copy: importing it restores the original in place instead of leaving a
+      // second one beside it. A recipient who has never seen the note simply gets
+      // it created under this id, and re-importing the same file updates rather
+      // than duplicating — which is the better outcome for sharing too.
+      id: note.id ?? undefined,
+      notebook: note.notebook ?? undefined,
       title: String(note.title || ''),
       body: String(note.body || ''),
       createdAt: note.created ?? note.createdAt ?? undefined,
@@ -120,6 +127,10 @@ export async function parseOwlNotePackage(bytes) {
     };
   });
   return {
+    // Absent in packages written before this became a backup format — those still
+    // import as a fresh copy, which is what they were.
+    id: typeof manifest.note.id === 'string' ? manifest.note.id : undefined,
+    notebook: typeof manifest.note.notebook === 'string' ? manifest.note.notebook : undefined,
     title: String(manifest.note.title || ''),
     body: String(manifest.note.body || ''),
     created: manifest.note.createdAt,

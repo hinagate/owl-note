@@ -3,7 +3,7 @@
 // Track the active outside-click closer so re-renders don't leak stale listeners.
 let _activeCloser = null;
 
-export function renderToolbar(container, { query = '', onSearch, onExportNote, onExportMarkdown, onExportJson, onImport, driveEnabled = false, onToggleDrive = null, onAsk = null }) {
+export function renderToolbar(container, { query = '', onSearch, onExportNote, onExportMarkdown, onExportKey, onImport, onImportKey, driveEnabled = false, onToggleDrive = null, onAsk = null }) {
   // Clean up any stale document listener from a previous render.
   if (_activeCloser) {
     document.removeEventListener('click', _activeCloser);
@@ -32,7 +32,7 @@ export function renderToolbar(container, { query = '', onSearch, onExportNote, o
   const exportBtn = document.createElement('button');
   exportBtn.textContent = 'Export ▾';
   const menu = document.createElement('div');
-  menu.className = 'menu';
+  menu.className = 'menu export-menu';
   menu.hidden = true;
   // Every way of turning notes into a file lives here, this note first, so
   // "Export" always means "write a file" and Share is only ever "send this to
@@ -47,13 +47,17 @@ export function renderToolbar(container, { query = '', onSearch, onExportNote, o
   mdItem.className = 'menu-item';
   mdItem.textContent = 'All notes as Markdown (.zip)';
   mdItem.addEventListener('click', () => { menu.hidden = true; onExportMarkdown(); });
-  const jsonItem = document.createElement('button');
-  jsonItem.className = 'menu-item';
-  // Says "+ keys" because since encryption landed this file carries the keys that
-  // open the notes — it is the recovery file, and worth treating as one.
-  jsonItem.textContent = 'All notes + keys (JSON backup)';
-  jsonItem.addEventListener('click', () => { menu.hidden = true; onExportJson(); });
-  menu.append(noteItem, mdItem, jsonItem);
+  // The keys, and only the keys. They used to ride inside a whole-notes JSON backup,
+  // which bundled the one genuinely secret file together with the notes and made it
+  // look like the authoritative restore — while actually holding a SUBSET of them.
+  // Separated so the note exports above are safe to hand around and this one is
+  // obviously the file to guard.
+  const keyItem = document.createElement('button');
+  keyItem.className = 'menu-item';
+  keyItem.textContent = 'Recovery key (.json)';
+  keyItem.title = 'The keys that unlock your notes. Keep this private.';
+  keyItem.addEventListener('click', () => { menu.hidden = true; onExportKey(); });
+  menu.append(noteItem, mdItem, keyItem);
   exportBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     const willOpen = menu.hidden;
@@ -70,7 +74,18 @@ export function renderToolbar(container, { query = '', onSearch, onExportNote, o
   });
   exportWrap.append(exportBtn, menu);
 
-  // Import (smart: .owl-note / .json / .zip / .md / .enex / .docx)
+  // Import mirrors Export: notes, and the key, as separate deliberate actions.
+  // Installing a decryption key from another install is not the same kind of act as
+  // loading notes, and hiding it inside a general "Import" that happened to notice a
+  // keyring in the file made it both undiscoverable and silent.
+  const importWrap = document.createElement('div');
+  importWrap.className = 'menu-wrap';
+  const importBtn = document.createElement('button');
+  importBtn.textContent = 'Import ▾';
+  const importMenu = document.createElement('div');
+  importMenu.className = 'menu import-menu';
+  importMenu.hidden = true;
+
   const importInput = document.createElement('input');
   importInput.type = 'file';
   importInput.accept = '.owl-note,.json,.zip,.md,.enex,.docx';
@@ -80,11 +95,45 @@ export function renderToolbar(container, { query = '', onSearch, onExportNote, o
     if (importInput.files.length) onImport([...importInput.files]);
     importInput.value = ''; // allow re-importing the same file
   });
-  const importBtn = document.createElement('button');
-  importBtn.textContent = 'Import';
-  importBtn.addEventListener('click', () => importInput.click());
 
-  container.append(searchWrap, exportWrap, importBtn, importInput);
+  const keyInput = document.createElement('input');
+  keyInput.type = 'file';
+  keyInput.accept = '.json';
+  keyInput.style.display = 'none';
+  keyInput.addEventListener('change', () => {
+    if (keyInput.files.length) onImportKey?.(keyInput.files[0]);
+    keyInput.value = '';
+  });
+
+  const notesItem = document.createElement('button');
+  notesItem.className = 'menu-item';
+  notesItem.textContent = 'Notes (.zip, .md, .owl-note, .json…)';
+  notesItem.addEventListener('click', () => { importMenu.hidden = true; importInput.click(); });
+  const keyItemIn = document.createElement('button');
+  keyItemIn.className = 'menu-item';
+  keyItemIn.textContent = 'Recovery key (.json)';
+  keyItemIn.title = 'Unlock notes written by another OWL-Note installation.';
+  keyItemIn.addEventListener('click', () => { importMenu.hidden = true; keyInput.click(); });
+  importMenu.append(notesItem, keyItemIn);
+
+  importBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const willOpen = importMenu.hidden;
+    importMenu.hidden = !willOpen;
+    if (willOpen) {
+      const closer = (ev) => {
+        if (importWrap.contains(ev.target)) return;
+        importMenu.hidden = true;
+        document.removeEventListener('click', closer);
+        if (_activeCloser === closer) _activeCloser = null;
+      };
+      _activeCloser = closer;
+      setTimeout(() => document.addEventListener('click', closer), 0);
+    }
+  });
+  importWrap.append(importBtn, importMenu, importInput, keyInput);
+
+  container.append(searchWrap, exportWrap, importWrap);
   // The toolbar is not rebuilt when the open note changes, so the per-note item is
   // toggled through this rather than re-rendered — same shape as the editor's
   // setShareActionVisible.
