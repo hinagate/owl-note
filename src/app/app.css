@@ -295,6 +295,13 @@ body.resizing { user-select: none; cursor: col-resize; }
 .preview th, .preview td {
   padding: 7px 12px; border: 1px solid var(--border);
   vertical-align: top;
+  /* NOT the inherited `anywhere`. Both break a too-long word, but `anywhere` also
+     reports a min-content width of ONE CHARACTER — and column sizing is computed
+     from min-content, so the auto layout was free to squeeze a column that narrow.
+     A plain "Symbol" heading came out 61px wide, stacked as Sy/mb/ol. `break-word`
+     keeps whole words in the intrinsic width (heading back to one 43px line) while
+     still breaking a genuinely unbreakable string instead of overflowing the cell. */
+  overflow-wrap: break-word;
 }
 /* Markdown's :--: / --: alignment markers become align="" attributes, which are
    presentational hints — ANY author text-align here would silently outrank them.
