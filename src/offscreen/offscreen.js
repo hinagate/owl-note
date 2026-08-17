@@ -14,6 +14,10 @@ import {
 
 const RETRY_DELAY_MS = 250;
 const AVAILABILITY_POLL_MS = 1000;
+// A download that never finishes polled forever, leaving the overlay on its
+// progress text with no way out. Chrome reports "downloading" for a language it
+// then never delivers, so the wait needs an end.
+const AVAILABILITY_DEADLINE_MS = 120000;
 
 let stream = null;
 let playbackContext = null;
@@ -21,6 +25,7 @@ let recognition = null;
 let recognitionTrack = null;
 let restartTimer = null;
 let availabilityTimer = null;
+let availabilityDeadline = 0;
 let language = 'en-US';
 let stopping = false;
 
@@ -60,15 +65,22 @@ function availabilityError(result) {
   if (result === 'unsupported') {
     return 'Native transcription requires Chrome 139 or newer.';
   }
+  if (result === 'timeout') {
+    return `Chrome stopped responding while checking ${language}. It may have no on-device model for this language.`;
+  }
+  if (result === 'stalled') {
+    return `Chrome never finished downloading the ${language} speech model. Check chrome://settings/captions.`;
+  }
   if (result === 'unavailable') {
-    return `Chrome has no local speech model available for ${language}.`;
+    return `Chrome has no on-device speech model for ${language}. Try a language listed in chrome://settings/captions.`;
   }
   return 'Chrome live transcription is unavailable.';
 }
 
-async function prepare({ lang, sessionToken }) {
+async function prepare({ lang, sessionToken, polling = false }) {
   language = normalizeSpeechLanguage(lang);
   clearTimeout(availabilityTimer);
+  if (!polling) availabilityDeadline = Date.now() + AVAILABILITY_DEADLINE_MS;
   const Recognition = nativeSpeechConstructor(globalThis);
   status({ asr: 'checking', engine: 'chrome-native', lang: language });
   const availability = await checkNativeSpeechAvailability(Recognition, language);
@@ -86,9 +98,13 @@ async function prepare({ lang, sessionToken }) {
   }
 
   if (availability === 'downloading') {
+    if (Date.now() > availabilityDeadline) {
+      status({ asr: 'error', engine: 'chrome-native', error: availabilityError('stalled') });
+      return;
+    }
     status({ asr: 'downloading', engine: 'chrome-native', lang: language });
     availabilityTimer = setTimeout(
-      () => prepare({ lang: language, sessionToken }),
+      () => prepare({ lang: language, sessionToken, polling: true }),
       AVAILABILITY_POLL_MS,
     );
     return;

@@ -4,6 +4,7 @@ import {
   startSession, appendCues, getSession, getSessionMeta, getSessionTail, patchSession,
   stopSession, clearSession, isSilent,
 } from '../lib/capture-session.js';
+import { SPEECH_LANG_KEY } from '../lib/native-speech.js';
 import { buildTranscriptNote, cuesToMarkdown } from '../lib/transcript.js';
 import { decode } from '../lib/codec.js';
 import { captureFullPage } from '../lib/full-page-capture.js';
@@ -298,11 +299,23 @@ async function clearArmedTranscription(tabId) {
   try { await transcribeArmStore()?.remove?.(TRANSCRIBE_ARM_KEY); } catch { /* best-effort */ }
 }
 
+async function preferredSpeechLanguage() {
+  try {
+    const saved = (await chrome.storage.local.get(SPEECH_LANG_KEY))[SPEECH_LANG_KEY];
+    if (typeof saved === 'string' && saved) return saved;
+  } catch { /* storage unavailable — fall through to the UI language */ }
+  return chrome.i18n?.getUILanguage?.() || 'en-US';
+}
+
 export async function handleTranscribe(info, tab) {
   if (info.menuItemId !== TRANSCRIBE_ID) return null;
   const tabId = tab?.id;
   if (!Number.isInteger(tabId)) return null;
-  const lang = chrome.i18n?.getUILanguage?.() || 'en-US';
+  // A language the reader already got working beats guessing from the browser UI
+  // language: Chrome does not have a model for every locale, and for some it reports
+  // a successful install and then never delivers one. The setup page records what
+  // actually worked; until then the UI language is still the best first guess.
+  const lang = await preferredSpeechLanguage();
   const title = cleanCaptureTitle(tab?.title);
 
   // A context-menu click is an explicit activeTab invocation, and Chrome folds

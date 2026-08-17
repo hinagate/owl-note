@@ -28,6 +28,9 @@
       }
       button.primary { background: #2dbe60; border-color: #2dbe60; color: #04150a; font-weight: 600; }
       .note { color: #6b6b6b; font-size: 12px; }
+      .note.warn { color: #b3541e; }
+      label[for="lang"] { font-size: 13px; }
+      select { padding: 6px 8px; border-radius: 6px; border: 1px solid #cfcfcf; background: transparent; color: inherit; }
     </style>
   </head>
   <body>
@@ -40,6 +43,10 @@
       <li>Audio is captured only from the tab you started, and never uploaded or stored.</li>
       <li>OWL-Note never uses cloud transcription.</li>
     </ul>
+    <div class="row">
+      <label for="lang">Transcribe in</label>
+      <select id="lang"></select>
+    </div>
     <div class="row">
       <button id="enable" class="primary" disabled>Enable and continue</button>
       <button id="cancel">Not now</button>
