@@ -361,9 +361,19 @@ body.resizing { user-select: none; cursor: col-resize; }
 .image-lightbox {
   position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
   padding: 40px; background: rgba(15, 23, 42, 0.84); cursor: zoom-out;
+  /* The image is moved with a transform, so an overflowing one must be clipped by
+     this box rather than spilling over the page behind the backdrop. */
+  overflow: hidden;
 }
 .image-lightbox-image { max-width: 94vw; max-height: 90vh; object-fit: contain; border-radius: 8px; box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45); cursor: default; transform-origin: center; transition: transform 0.08s ease-out; user-select: none; -webkit-user-drag: none; }
 .image-lightbox-image.pannable { cursor: grab; touch-action: none; }
+/* A full-page capture is far taller than the viewport (2736x17541 is 1:6.4). Fitting
+   THAT inside 90vh leaves a ~126px-wide sliver of unreadable text, because contain
+   scales by whichever axis binds first — always the height for these. Such images fit
+   to WIDTH instead and are scrolled through vertically, the way any screenshot viewer
+   works. The class is set from measurement, not a fixed ratio: what matters is whether
+   containing it would leave the image too narrow to read on THIS viewport. */
+.image-lightbox-image.fit-width { max-width: 94vw; max-height: none; }
 .image-lightbox-image.dragging { cursor: grabbing; transition: none; }
 .image-lightbox-zoom {
   position: fixed; top: 18px; left: 50%; transform: translateX(-50%); min-width: 58px; padding: 4px 10px;

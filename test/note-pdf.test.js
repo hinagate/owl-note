@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildNotePdf, notePdfFilename, verifiedPdfBytes, verifiedPdfFile } from '../src/lib/note-pdf.js';
+import { buildNotePdf, notePdfFilename, verifiedPdfBytes, verifiedPdfFile, CAPTURE_SCALE } from '../src/lib/note-pdf.js';
 import { createRasterPdf } from '../src/lib/raster-pdf.js';
 
 let originalGetContext;
@@ -98,6 +98,31 @@ describe('note PDF capture', () => {
     const heights = rasterize.mock.calls.map((call) => call[1].height);
     expect(Math.max(...heights)).toBeLessThan(5000);
     expect(heights.reduce((sum, height) => sum + height, 0)).toBe(60000);
+  });
+
+  // Capture resolution and the per-capture page count are coupled: the canvas budget
+  // is an AREA, so raising the scale without shrinking the slab is what produces the
+  // oversized canvas that Chromium silently renders all-white. Pin both together.
+  it('rasterizes at a resolution that clears the 300 DPI print standard', async () => {
+    const rasterize = vi.fn(async (host, capture) => capturedCanvas(true, 794 * CAPTURE_SCALE, capture.height * CAPTURE_SCALE));
+    await buildNotePdf(
+      { title: 'Sharp', body: 'Body', attachments: [] },
+      { rasterize, measureHost: () => ({ width: 794, height: 1123 }) },
+    );
+    expect(rasterize.mock.calls[0][1].scale).toBe(CAPTURE_SCALE);
+    // 794 CSS px spans an A4's 8.268in, so this is the PDF's real DPI.
+    expect(Math.round((794 * CAPTURE_SCALE) / 8.268)).toBeGreaterThanOrEqual(280);
+  });
+
+  it('keeps each capture near the area the old scale-2 slab used, not 2.25x of it', async () => {
+    const rasterize = vi.fn(async (host, capture) => capturedCanvas(true, 794 * CAPTURE_SCALE, capture.height * CAPTURE_SCALE));
+    await buildNotePdf(
+      { title: 'Long note', body: 'Body', attachments: [] },
+      { rasterize, measureHost: () => ({ width: 794, height: 60000 }) },
+    );
+    const areas = rasterize.mock.calls.map((call) => 794 * CAPTURE_SCALE * call[1].height * CAPTURE_SCALE);
+    // The four-page slab at scale 2 was ~14.3M device px; stay in that neighbourhood.
+    expect(Math.max(...areas)).toBeLessThan(20e6);
   });
 
   it('sanitizes the downloaded PDF filename', () => {

@@ -28,18 +28,31 @@ function blobToDataURL(blob) {
   });
 }
 
+// The target pixel size for an image, capped on EACH AXIS. Pure, so the sizing rule
+// is testable without a canvas — the encode path around it is browser-only.
+export function fitWithin(width, height, maxWidth = 1280, maxHeight = 2048) {
+  const scale = Math.min(1, maxWidth / width, maxHeight / height);
+  return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)), scale };
+}
+
 // Re-encode one image data: URI to a downscaled WebP data: URI. Browser-only;
 // returns the input unchanged when the browser APIs are absent, when the image
 // is already small enough to render, or on any decode/encode failure.
-export async function downscaleDataUri(dataUri, { maxDim = 1280, quality = 0.82, skipUnderBytes = 60000 } = {}) {
+// The cap is per-AXIS, not on the longest side. A single maxDim scales a portrait
+// image by its HEIGHT, so its width lands far below the cap — a 9:19.5 phone
+// screenshot was stored 591px wide and then stretched 2.25x to reach the 1332px
+// the PDF renders a full-width image at, which is what made shared photos look
+// soft. Capping width and height independently keeps the full 1280px of width for
+// tall images while still bounding how much a very long capture can grow.
+// Landscape, square and wide images are unaffected: their width hits maxWidth
+// first, exactly as maxDim did, so they re-encode to byte-identical output.
+export async function downscaleDataUri(dataUri, { maxWidth = 1280, maxHeight = 2048, quality = 0.82, skipUnderBytes = 60000 } = {}) {
   if (typeof createImageBitmap !== 'function' || typeof OffscreenCanvas !== 'function') return dataUri;
   if (approxBytes(dataUri) < skipUnderBytes) return dataUri; // small images already render fine
   try {
     const blob = await (await fetch(dataUri)).blob();
     const bmp = await createImageBitmap(blob);
-    const scale = Math.min(1, maxDim / Math.max(bmp.width, bmp.height));
-    const w = Math.max(1, Math.round(bmp.width * scale));
-    const h = Math.max(1, Math.round(bmp.height * scale));
+    const { width: w, height: h } = fitWithin(bmp.width, bmp.height, maxWidth, maxHeight);
     const canvas = new OffscreenCanvas(w, h);
     canvas.getContext('2d').drawImage(bmp, 0, 0, w, h);
     if (bmp.close) bmp.close();

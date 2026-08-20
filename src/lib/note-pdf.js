@@ -3,6 +3,16 @@ import { inlineImagesAsync, linkifyFileRefs } from './note-images.js';
 import { getBytes } from './attachment-store.js';
 import { A4_PAGE_HEIGHT, A4_PAGE_WIDTH, createRasterPdf } from './raster-pdf.js';
 
+// Device pixels per CSS pixel when rasterising a page. The host is 794 CSS px wide
+// and an A4 page is 8.27in, so this sets the PDF's real resolution: 2 gave 192 DPI,
+// below the 300 DPI print standard and visibly soft once a reader zooms in; 3 gives
+// 288 DPI. What this buys is TEXT and other vector content, which the browser
+// re-renders at the capture resolution and which therefore gets genuinely sharper.
+// It does not add detail to photos — a full-width image targets 666*scale device px
+// (1998 here), so a stored photo below that is still upscaled; that ceiling is set
+// by the per-axis cap in image-downscale.js, not by this constant.
+export const CAPTURE_SCALE = 3;
+
 function safeFilename(value) {
   const cleaned = String(value || 'Untitled note')
     .replace(/[\\/:*?"<>|]/g, '-')
@@ -124,15 +134,17 @@ export async function buildNotePdf(note, options = {}) {
     report({ percent: 10, phase: 'rendering', page: 0, totalPages });
     // Never ask Chromium for one canvas as tall as the whole note. Long notes can
     // exceed the browser's maximum canvas dimension and silently render as white.
-    // Four A4 pages per capture stays comfortably below that limit at scale 2,
-    // while avoiding one expensive DOM clone for every individual page.
-    const captureHeight = cssPageHeight * 4;
+    // The budget is an AREA, so it has to shrink as the scale rises: at CAPTURE_SCALE 3
+    // a four-page slab would be ~2382x13476 (~32M px, ~128MB of backing store), where
+    // two pages keep each capture near the ~16M px the old four-page/scale-2 slab used.
+    // The cost is one extra DOM clone per two pages, not per page.
+    const captureHeight = cssPageHeight * (CAPTURE_SCALE >= 3 ? 2 : 4);
     const pages = [];
     let pageIndex = 0;
     for (let captureY = 0; captureY < totalHeight; captureY += captureHeight) {
       const height = Math.min(captureHeight, totalHeight - captureY);
       const canvas = await rasterize(host, {
-        scale: 2,
+        scale: CAPTURE_SCALE,
         useCORS: true,
         backgroundColor: '#ffffff',
         logging: false,
@@ -146,7 +158,7 @@ export async function buildNotePdf(note, options = {}) {
         const slice = makePdfPage(canvas, y, sliceHeight);
         // A full-page PNG for every page makes long notes enormous and can leave
         // the Windows share sheet busy while the browser stages the file. At the
-        // 2x capture resolution, high-quality JPEG remains crisp for text/photos
+        // capture resolution above, high-quality JPEG remains crisp for text/photos
         // while dramatically reducing encoding time and hand-off size.
         pages.push({
           dataUrl: slice.toDataURL('image/jpeg', 0.9),

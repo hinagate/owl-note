@@ -13,6 +13,25 @@ import { showDrawPanel } from './draw-panel.js';
 import { annotateRuby } from '../lib/ruby-annotate.js';
 import { createZoomBar } from './preview-zoom.js';
 
+// Below this fraction of the available width, a contained image is too narrow to read
+// and is better fitted to the width and scrolled. Deliberately low: this is meant to
+// catch documents (a full-page capture contains to ~10% of the width), NOT ordinary
+// tall photos. A 3:4 portrait contains to ~50% and a phone screenshot to ~31%, both
+// perfectly readable whole, and forcing those to scroll would be a downgrade. On a
+// typical window this engages past roughly 2.7:1.
+const FIT_WIDTH_BELOW = 0.25;
+
+/**
+ * Whether an image should be fitted to the width rather than contained.
+ * `null` when the inputs are not measurable yet (image undecoded, or jsdom).
+ * Pure, so the rule is testable without a layout engine.
+ */
+export function shouldFitWidth(naturalWidth, naturalHeight, availableWidth, availableHeight) {
+  if (!naturalWidth || !naturalHeight || !availableWidth || !availableHeight) return null;
+  const containedWidth = Math.min(availableWidth, availableHeight * (naturalWidth / naturalHeight));
+  return containedWidth < availableWidth * FIT_WIDTH_BELOW;
+}
+
 export function renderEditor(
   container,
   { title = '', body = '', attachments = [], created = null, updated = null, onChange = () => {}, onSave = () => {}, onDelete = null, focusTitle = false, measure = null, breadcrumb = [], onNavigate = () => {}, onSuggestTitle = null, shareActions = [], recoverAttachments = null, loadImageBytes = getBytes, phonetics = null, previewZoom = null, readOnly = false, readOnlyNotice = '' },
@@ -543,14 +562,71 @@ export function renderEditor(
     lightboxImage.classList.remove('dragging');
   }
 
+  // Choose between containing the image and fitting it to the width. Contain scales by
+  // whichever axis binds first, which for a full-page capture (1:6.4 and taller) is
+  // always the height — leaving a sliver of unreadable text. Decided by measurement
+  // rather than a fixed aspect threshold, because "too narrow to read" depends on the
+  // viewport: the same image is fine on a tall thin window and useless on a short wide one.
+  function updateLightboxFit() {
+    const decision = shouldFitWidth(
+      lightboxImage.naturalWidth,
+      lightboxImage.naturalHeight,
+      (lightbox.clientWidth || window.innerWidth) * 0.94,
+      (lightbox.clientHeight || window.innerHeight) * 0.9,
+    );
+    if (decision === null) return; // not measurable yet; keep whatever is applied
+    lightboxImage.classList.toggle('fit-width', decision);
+  }
+
+  // Whether the image currently extends past the viewport, per axis. Panning and
+  // wheel-scrolling both key off this rather than off the zoom level: a width-fitted
+  // capture overflows vertically at scale 1, where a scale>1 test would refuse to move.
+  function lightboxOverflow() {
+    const rect = lightboxImage.getBoundingClientRect();
+    const viewportWidth = lightbox.clientWidth || window.innerWidth;
+    const viewportHeight = lightbox.clientHeight || window.innerHeight;
+    // jsdom reports zeroes for every box, and an unmeasurable image must not silently
+    // become unpannable. Fall back to the zoom level, which is what this used to test
+    // and is still true in a real browser: magnifying past the fitted size overflows.
+    if (!rect.width || !rect.height || !viewportWidth || !viewportHeight) {
+      const zoomed = lightboxScale > 1;
+      return { x: zoomed, y: zoomed, any: zoomed };
+    }
+    return {
+      x: rect.width > viewportWidth + 1,
+      y: rect.height > viewportHeight + 1,
+      any: rect.width > viewportWidth + 1 || rect.height > viewportHeight + 1,
+    };
+  }
+
+  // How far this image can usefully be magnified. Scale 1 is the FITTED size, not
+  // actual pixels: the lightbox shrinks a large photo to 94vw/90vh, so a detailed
+  // image is already being displayed below its own resolution at 1. A flat ceiling
+  // put real detail out of reach on exactly those images. This raises the ceiling to
+  // twice 1:1 for them, and never lowers it — a small diagram keeps the full 5x it
+  // has always had, since magnifying past 1:1 is still what a reader wants there.
+  const LIGHTBOX_MIN_MAX_SCALE = 5;
+  const LIGHTBOX_MAX_SCALE = 8;
+  function maxLightboxScale() {
+    const natural = lightboxImage.naturalWidth;
+    // getBoundingClientRect includes the live transform, so dividing by the current
+    // scale recovers the fitted width — the same trick clampLightboxPan uses.
+    const rect = lightboxImage.getBoundingClientRect().width;
+    const fitted = lightboxScale ? rect / lightboxScale : rect;
+    if (!natural || !fitted) return LIGHTBOX_MIN_MAX_SCALE; // jsdom / not yet laid out
+    return Math.min(LIGHTBOX_MAX_SCALE, Math.max(LIGHTBOX_MIN_MAX_SCALE, (natural / fitted) * 2));
+  }
+
   function setLightboxScale(value) {
-    lightboxScale = Math.min(5, Math.max(0.5, Math.round(value * 100) / 100));
-    if (lightboxScale <= 1) {
+    lightboxScale = Math.min(maxLightboxScale(), Math.max(0.5, Math.round(value * 100) / 100));
+    applyLightboxTransform();
+    const overflow = lightboxOverflow();
+    if (!overflow.any) {
       lightboxPanX = 0;
       lightboxPanY = 0;
       endLightboxDrag();
     }
-    lightboxImage.classList.toggle('pannable', lightboxScale > 1);
+    lightboxImage.classList.toggle('pannable', overflow.any);
     applyLightboxTransform();
     clampLightboxPan();
     applyLightboxTransform();
@@ -578,7 +654,17 @@ export function renderEditor(
     lightbox.hidden = false;
     lightboxPanX = 0;
     lightboxPanY = 0;
+    // naturalWidth is only known once decoded. A cached image is already complete and
+    // fires no load event, so fit now AND on load rather than relying on either alone.
+    updateLightboxFit();
     setLightboxScale(1);
+    if (!lightboxImage.complete) {
+      lightboxImage.addEventListener('load', () => {
+        if (lightbox.hidden) return;
+        updateLightboxFit();
+        setLightboxScale(lightboxScale);
+      }, { once: true });
+    }
     lightboxClose.focus();
   }
 
@@ -644,11 +730,20 @@ export function renderEditor(
   lightbox.addEventListener('wheel', (e) => {
     if (lightbox.hidden) return;
     e.preventDefault();
+    // A 17541px-tall capture cannot be reached by zooming, and zoom was the only thing
+    // the wheel did. Scroll it instead when there is somewhere to scroll, and keep zoom
+    // on ctrl/meta+wheel, which is what browsers and image viewers already train.
+    if (!e.ctrlKey && !e.metaKey && lightboxOverflow().y) {
+      lightboxPanY -= e.deltaY;
+      clampLightboxPan();
+      applyLightboxTransform();
+      return;
+    }
     setLightboxScale(lightboxScale * (e.deltaY < 0 ? 1.15 : (1 / 1.15)));
   }, { passive: false });
   lightboxImage.addEventListener('dragstart', (e) => e.preventDefault());
   lightboxImage.addEventListener('pointerdown', (e) => {
-    if (lightboxScale <= 1 || e.button !== 0) return;
+    if (!lightboxOverflow().any || e.button !== 0) return;
     e.preventDefault();
     lightboxDrag = {
       pointerId: e.pointerId,
@@ -672,6 +767,7 @@ export function renderEditor(
   lightboxImage.addEventListener('pointercancel', endLightboxDrag);
   const onLightboxResize = () => {
     if (lightbox.hidden) return;
+    updateLightboxFit();
     clampLightboxPan();
     applyLightboxTransform();
   };

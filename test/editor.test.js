@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { renderEditor } from '../src/app/editor.js';
+import { renderEditor, shouldFitWidth } from '../src/app/editor.js';
 
 beforeEach(() => { document.body.innerHTML = '<main id="editor"></main>'; });
 
@@ -323,5 +323,35 @@ describe('editor', () => {
     expect(label.title).toContain(`Created: ${new Date(created).toLocaleString()}`);
     expect(label.title).toContain(`Updated: ${new Date(updated).toLocaleString()}`);
     api.destroy();
+  });
+});
+
+// A full-page capture is many times taller than it is wide. `object-fit: contain`
+// scales by whichever axis binds first — always the height for these — so a
+// 2736x17541 capture was shown as a ~126px-wide sliver of unreadable text, and no
+// amount of zooming reached it because zoom is centred, not a scroll.
+describe('shouldFitWidth (which images are scrolled instead of contained)', () => {
+  const desktop = [1203, 810]; // a 1280x900 window's 94vw x 90vh
+
+  it('fits a full-page capture to the width', () => {
+    expect(shouldFitWidth(2736, 17541, ...desktop)).toBe(true);
+  });
+
+  it('still contains ordinary photos, portrait ones included', () => {
+    expect(shouldFitWidth(4000, 3000, ...desktop)).toBe(false); // landscape
+    expect(shouldFitWidth(3000, 3000, ...desktop)).toBe(false); // square
+    expect(shouldFitWidth(960, 1280, ...desktop)).toBe(false); // portrait 3:4
+    expect(shouldFitWidth(1170, 2532, ...desktop)).toBe(false); // phone screenshot
+  });
+
+  it('decides from the viewport, not a fixed aspect ratio', () => {
+    // The same image on a short, wide window has less height to contain into.
+    expect(shouldFitWidth(1000, 2600, 1800, 400)).toBe(true);
+    expect(shouldFitWidth(1000, 2600, 600, 1400)).toBe(false);
+  });
+
+  it('reports "unknown" rather than guessing before the image has decoded', () => {
+    expect(shouldFitWidth(0, 0, ...desktop)).toBeNull();
+    expect(shouldFitWidth(2736, 17541, 0, 0)).toBeNull();
   });
 });
