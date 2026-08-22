@@ -1211,3 +1211,29 @@ body.resizing { user-select: none; cursor: col-resize; }
 .preview-zoom button:disabled { opacity: 0.35; cursor: default; }
 /* Fixed width + tabular figures so the bar does not twitch as the number changes. */
 .preview-zoom-level { min-width: 52px; font-variant-numeric: tabular-nums; color: var(--muted); }
+
+/* The Reference popup is a form, not a menu of choices: APA has a fixed shape, so
+   the five fields are collected separately and assembled for the user. Wider than
+   the other popups because a reference line needs room to be read back. */
+.format-reference-popup { padding: 12px; width: 340px; max-width: 92vw; }
+.reference-form { display: flex; flex-direction: column; gap: 8px; }
+.reference-field { display: grid; grid-template-columns: 88px 1fr; align-items: center; gap: 8px; }
+.reference-field-label { font-size: 12px; color: var(--muted); }
+.reference-field input {
+  min-width: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 5px;
+  background: #fff; color: var(--text); font: inherit; font-size: 13px;
+}
+.reference-field input:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+/* The finished line, shown as it is typed so the APA format is never a surprise. */
+.reference-preview {
+  margin: 2px 0 0; padding: 8px; border-radius: 5px; background: var(--list-bg);
+  font-size: 12px; line-height: 1.5; color: var(--text); overflow-wrap: anywhere;
+}
+.reference-preview.is-empty { color: var(--muted); font-style: italic; }
+.reference-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.reference-actions button {
+  padding: 5px 12px; border: 1px solid var(--border); border-radius: 5px;
+  background: #fff; color: var(--text); font: inherit; font-size: 13px; cursor: pointer;
+}
+.reference-actions .reference-insert { border-color: var(--accent-dark); background: var(--accent); color: #fff; }
+.reference-actions button:hover { filter: brightness(0.97); }

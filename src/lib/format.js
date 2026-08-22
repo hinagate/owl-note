@@ -675,7 +675,12 @@ function toggleListMarker(body, start, end, kind) {
   return { replaceStart: blockStart, replaceEnd: blockEnd, insert, selStart: blockStart, selEnd: blockStart + insert.length };
 }
 
-const QUOTE_PREFIX = { has: /^(\s*)> /, add: '> ' };
+// The space after `>` is OPTIONAL when detecting, mandatory when adding. CommonMark
+// treats `>text` as a blockquote and so does our renderer, but a `> ` -only test saw
+// that line as unquoted: pressing Quote on something already visibly quoted added a
+// SECOND level (`> >text`, two nested blockquotes) instead of removing it. Adding
+// still normalises to `> `, so toggling off then on tidies the loose form up.
+const QUOTE_PREFIX = { has: /^(\s*)> ?/, add: '> ' };
 
 // Toggle the quote prefix over every selected line. If ALL non-blank lines
 // already carry it, remove it; otherwise add it to the lines missing it (after

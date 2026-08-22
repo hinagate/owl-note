@@ -9,6 +9,8 @@ import {
   cycleHeading, toggleLinePrefix, toggleOrderedList, insertLink, insertTable,
   insertSizedTable,
 } from '../lib/format.js';
+import { insertReference, REFERENCE_TEMPLATE } from '../lib/reference.js';
+import { formatApa, parseAuthorList, hasCitationContent } from '../lib/citation.js';
 
 export const HIGHLIGHT_COLORS = [
   { id: 'yellow', name: 'Yellow', value: '#fff176' },
@@ -57,7 +59,8 @@ export function formatActions() {
     { id: 'heading', label: 'H', title: 'Heading — cycles # · ## · ###', run: (b, s) => cycleHeading(b, s) },
     { id: 'bullet-list', label: '•', title: 'Bullet list', run: (b, s, e) => toggleLinePrefix(b, s, e, 'bullet') },
     { id: 'ordered-list', label: '1.', title: 'Numbered list', run: (b, s, e) => toggleOrderedList(b, s, e) },
-    { id: 'quote', label: '❝', title: 'Quote', run: (b, s, e) => toggleLinePrefix(b, s, e, 'quote') },
+    // Replaces the old Quote button. Opens a small APA form; see makeReferenceControl.
+    { id: 'reference', label: '[1]', title: 'Reference (APA)', run: (b, s, e) => insertReference(b, s, e) },
     { id: 'align-left', label: '≡', title: 'Align left', run: (b, s, e) => setAlignment(b, s, e, 'left') },
     { id: 'align-center', label: '≡', title: 'Align center', run: (b, s, e) => setAlignment(b, s, e, 'center') },
     { id: 'align-right', label: '≡', title: 'Align right', run: (b, s, e) => setAlignment(b, s, e, 'right') },
@@ -142,6 +145,106 @@ export function renderFormatBar(container, { apply, actions = formatActions() })
   function runFromMenu(run) {
     closePopup();
     apply(run);
+  }
+
+  // The Reference popup. A form rather than a menu of choices: APA has a fixed shape,
+  // and asking for the five fields separately means the user never has to remember
+  // where the italics, brackets and full stops go.
+  //
+  // The textarea keeps selectionStart/End while blurred, so typing in these inputs
+  // does not lose the place the marker belongs. The anchor still preventDefaults its
+  // mousedown for the same reason every other control here does.
+  const REFERENCE_FIELDS = [
+    { id: 'authors', label: 'Author(s)', placeholder: 'Vaswani, Ashish; Shazeer, Noam', hint: 'Separate people with ;' },
+    { id: 'year', label: 'Year', placeholder: '2017' },
+    { id: 'title', label: 'Title', placeholder: 'Attention Is All You Need' },
+    { id: 'source', label: 'Source', placeholder: 'arXiv' },
+    { id: 'url', label: 'URL or DOI', placeholder: 'https://arxiv.org/abs/1706.03762' },
+  ];
+
+  function makeReferenceControl(action) {
+    const button = baseButton('format-btn format-reference', action.label, action.title);
+    const menu = document.createElement('div');
+    menu.className = 'format-popup format-reference-popup';
+    menu.setAttribute('role', 'dialog');
+    menu.setAttribute('aria-label', 'Insert reference');
+
+    const form = document.createElement('form');
+    form.className = 'reference-form';
+    const inputs = {};
+    for (const field of REFERENCE_FIELDS) {
+      const row = document.createElement('label');
+      row.className = 'reference-field';
+      const name = document.createElement('span');
+      name.className = 'reference-field-label';
+      name.textContent = field.label;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = field.placeholder;
+      input.autocomplete = 'off';
+      if (field.hint) input.title = field.hint;
+      inputs[field.id] = input;
+      row.append(name, input);
+      form.appendChild(row);
+    }
+
+    const preview = document.createElement('p');
+    preview.className = 'reference-preview';
+    preview.setAttribute('aria-live', 'polite');
+
+    const actions = document.createElement('div');
+    actions.className = 'reference-actions';
+    const insert = baseButton('reference-insert', 'Insert', 'Insert this reference');
+    const cancel = baseButton('reference-cancel', 'Cancel', 'Cancel');
+    actions.append(cancel, insert);
+    form.append(preview, actions);
+    menu.appendChild(form);
+
+    const read = () => ({
+      authors: parseAuthorList(inputs.authors.value),
+      year: inputs.year.value,
+      title: inputs.title.value,
+      source: inputs.source.value,
+      url: inputs.url.value,
+    });
+
+    // Show the finished APA line as it is typed, so the format is never a surprise.
+    // When the form is empty the preview shows the SKELETON rather than an
+    // instruction, because inserting it and filling it in the note is a legitimate
+    // way to work — and the only way to discover that is to be shown the result.
+    const refresh = () => {
+      const record = read();
+      const line = hasCitationContent(record) ? formatApa(record) : '';
+      preview.textContent = line || REFERENCE_TEMPLATE;
+      preview.classList.toggle('is-empty', !line);
+      insert.textContent = line ? 'Insert' : 'Insert blank';
+      insert.title = line ? 'Insert this reference' : 'Insert the empty template and fill it in the note';
+    };
+    for (const input of Object.values(inputs)) input.addEventListener('input', refresh);
+
+    const reset = () => { for (const input of Object.values(inputs)) input.value = ''; refresh(); };
+
+    const commit = () => {
+      const record = read();
+      const line = hasCitationContent(record) ? formatApa(record) : '';
+      closePopup();
+      apply((body, start, end) => insertReference(body, start, end, line));
+      reset();
+    };
+    form.addEventListener('submit', (event) => { event.preventDefault(); commit(); }); // Enter in a field
+    insert.addEventListener('mousedown', (event) => event.preventDefault()); // retain the selection
+    insert.addEventListener('click', commit);
+    cancel.addEventListener('mousedown', (event) => event.preventDefault());
+    cancel.addEventListener('click', () => { closePopup({ restoreFocus: true }); reset(); });
+
+    registerPopup(menu, button, 'dialog');
+    // A form popup focuses its first FIELD, not its first button.
+    button.addEventListener('click', () => {
+      if (menu.hidden) return;
+      refresh();
+      inputs.authors.focus();
+    });
+    container.append(button, menu);
   }
 
   function makeCaseControl(action) {
@@ -338,6 +441,7 @@ export function renderFormatBar(container, { apply, actions = formatActions() })
     if (action.id === 'font-color') { makeFontColorControl(action); continue; }
     if (action.id === 'highlight') { makeHighlightControl(action); continue; }
     if (action.id === 'table') { makeTableControl(action); continue; }
+    if (action.id === 'reference') { makeReferenceControl(action); continue; }
 
     const button = baseButton(`format-btn format-${action.id}`, action.label, action.title);
     // Pointer activation runs on mousedown so the textarea keeps focus and its
