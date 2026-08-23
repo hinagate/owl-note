@@ -12,6 +12,7 @@ vi.mock('../src/app/panes.js', () => ({
 }));
 
 import { renderEditor } from '../src/app/editor.js';
+import { formatActions } from '../src/app/format-bar.js';
 
 beforeEach(() => {
   document.body.innerHTML = '<main id="editor"></main>';
@@ -242,6 +243,102 @@ describe('format bar in the editor', () => {
     ta.setSelectionRange(0, 4);
     document.querySelector('.format-bullet-list').dispatchEvent(mousedown());
     expect(ta.value).toBe('## T');
+  });
+});
+
+// jsdom does not implement the browser's editing history. This small stand-in
+// models the part the editor relies on: every execCommand('insertText') call is
+// one history entry, and undo restores the value and selection from before it.
+// That lets these tests catch a toolbar action that bypasses insertText (or splits
+// one click across multiple native edits) without duplicating the format logic.
+function installNativeUndoHarness(ta) {
+  const original = Object.getOwnPropertyDescriptor(document, 'execCommand');
+  const past = [];
+  const execCommand = vi.fn((command, _showUi, text) => {
+    if (command === 'insertText') {
+      past.push({
+        value: ta.value,
+        selectionStart: ta.selectionStart,
+        selectionEnd: ta.selectionEnd,
+      });
+      ta.setRangeText(String(text), ta.selectionStart, ta.selectionEnd, 'end');
+      ta.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        inputType: 'insertText',
+        data: String(text),
+      }));
+      return true;
+    }
+    if (command === 'undo') {
+      const previous = past.pop();
+      if (!previous) return false;
+      ta.value = previous.value;
+      ta.setSelectionRange(previous.selectionStart, previous.selectionEnd);
+      ta.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'historyUndo' }));
+      return true;
+    }
+    return false;
+  });
+  Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand });
+
+  return {
+    execCommand,
+    historyDepth: () => past.length,
+    undo: () => execCommand('undo'),
+    restore: () => {
+      if (original) Object.defineProperty(document, 'execCommand', original);
+      else delete document.execCommand;
+    },
+  };
+}
+
+const FORMAT_ACTION_IDS = formatActions().filter((action) => !action.divider).map((action) => action.id);
+
+function activateFormatAction(id) {
+  if (id === 'case') {
+    document.querySelector('.format-case').click();
+    [...document.querySelectorAll('.format-case-popup .format-popup-item')]
+      .find((item) => item.textContent === 'UPPERCASE')
+      .click();
+    return;
+  }
+  if (id === 'reference') {
+    document.querySelector('.format-reference').click();
+    document.querySelector('.reference-insert').click();
+    return;
+  }
+  document.querySelector(`.format-${id}`).dispatchEvent(mousedown());
+}
+
+describe('format bar undo', () => {
+  it('keeps the undo matrix in sync with every editing button', () => {
+    expect(FORMAT_ACTION_IDS).toEqual([
+      'bold', 'italic', 'underline', 'strike', 'case', 'font-color', 'highlight',
+      'heading', 'bullet-list', 'ordered-list', 'reference', 'align-left',
+      'align-center', 'align-right', 'link', 'table',
+    ]);
+  });
+
+  it.each(FORMAT_ACTION_IDS)('%s is one edit that undo restores', (id) => {
+    const editor = render();
+    const ta = document.querySelector('textarea.note-body');
+    const original = ta.value;
+    ta.setSelectionRange(0, 5);
+    const history = installNativeUndoHarness(ta);
+
+    try {
+      activateFormatAction(id);
+      expect(ta.value).not.toBe(original);
+      expect(history.execCommand.mock.calls.filter(([command]) => command === 'insertText')).toHaveLength(1);
+      expect(history.historyDepth()).toBe(1);
+
+      expect(history.undo()).toBe(true);
+      expect(ta.value).toBe(original);
+      expect(history.historyDepth()).toBe(0);
+    } finally {
+      history.restore();
+      editor.destroy();
+    }
   });
 });
 

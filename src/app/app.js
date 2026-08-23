@@ -1382,6 +1382,8 @@ async function refreshPanes() {
 }
 
 // Build the clickable notebook path (root → the note's folder) for the editor breadcrumb.
+// The bookmark folder itself keeps its historical "📓 Notes" name, but this crumb
+// navigates to the app's aggregate root view, so label the destination "All notes".
 function folderPath(folderId) {
   if (folderId === ui.trashId) return [{ id: ui.trashId, title: '🗑 Trash' }];
   const byId = new Map((ui.notebooks || []).map((n) => [n.id, n]));
@@ -1391,7 +1393,7 @@ function folderPath(folderId) {
     chain.unshift({ id: cur, title: byId.get(cur).title });
     cur = byId.get(cur).parentId;
   }
-  chain.unshift({ id: ui.rootId, title: bm.ROOT_TITLE });
+  chain.unshift({ id: ui.rootId, title: '📓 All notes' });
   return chain;
 }
 

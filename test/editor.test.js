@@ -135,13 +135,14 @@ describe('editor', () => {
     expect(enlargedImage.style.transform).toBe('scale(1)');
   });
 
-  it('finds text within the current note from the right side of the format bar', () => {
+  it('keeps Find in note last so it wraps only when the first row runs out of room', () => {
     const el = document.getElementById('editor');
     renderEditor(el, { body: 'Owl one\nno match\nowl two' });
     const bar = el.querySelector('.format-bar');
     const search = bar.querySelector('.note-search');
     const input = search.querySelector('.note-search-input');
     expect(bar.lastElementChild).toBe(search);
+    expect(bar.querySelector('.note-search-row')).toBeNull();
     input.value = 'owl';
     input.dispatchEvent(new Event('input'));
     expect(search.querySelector('.note-search-count').textContent).toBe('1/2');

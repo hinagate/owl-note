@@ -350,8 +350,9 @@ export function renderEditor(
   };
   const cleanupFormatBar = renderFormatBar(formatBar, { apply: applyFormat, actions: fmtActions });
 
-  // Compact current-note search lives at the right edge of the formatting row. It
-  // highlights every body match without taking focus away while the user is typing;
+  // Current-note search stays at the end of the first formatting row while there
+  // is room, then wraps naturally to the left edge of the next row. It highlights
+  // every body match without taking focus away while the user is typing;
   // Enter / Shift+Enter cycles forward / backward.
   const noteSearch = document.createElement('div');
   noteSearch.className = 'note-search';
@@ -775,7 +776,7 @@ export function renderEditor(
   const onLightboxKeydown = (e) => { if (e.key === 'Escape' && !lightbox.hidden) closeLightbox(); };
   document.addEventListener('keydown', onLightboxKeydown);
 
-  // Clickable notebook path for the open note (📓 Notes › Work › Research). Empty
+  // Clickable notebook path for the open note (📓 All notes › Work › Research). Empty
   // when no note is open — CSS hides the row via :empty.
   const crumbs = document.createElement('nav');
   crumbs.className = 'editor-breadcrumb';

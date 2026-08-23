@@ -3,7 +3,7 @@
 // the text tool. The original draw-panel.test.js keeps the pre-existing
 // behaviour honest; this file is the new surface.
 import { describe, it, expect, beforeEach } from 'vitest';
-import { showDrawPanel } from '../src/app/draw-panel.js';
+import { showDrawPanel, TEXT_PRESETS } from '../src/app/draw-panel.js';
 
 beforeEach(() => {
   document.body.innerHTML = '';
@@ -520,6 +520,74 @@ describe('text color is its own control', () => {
   });
 });
 
+const TEXT_TOOLBAR_BUTTON_CASES = [
+  { name: 'Bold', selector: '.draw-bold', property: 'bold', expected: true },
+  { name: 'Italic', selector: '.draw-italic', property: 'italic', expected: true },
+  { name: 'Underline', selector: '.draw-underline', property: 'underline', expected: true },
+  ...TEXT_PRESETS.map((color) => ({
+    name: `Text color ${color}`,
+    selector: `.draw-text-color-row [data-preset="${color}"]`,
+    property: 'color',
+    expected: color,
+  })),
+  {
+    name: 'No background fill',
+    selector: '.draw-text-bg-row [data-preset="none"]',
+    property: 'background',
+    expected: null,
+  },
+  ...TEXT_PRESETS.map((color) => ({
+    name: `Background fill ${color}`,
+    selector: `.draw-text-bg-row [data-preset="${color}"]`,
+    property: 'background',
+    expected: color,
+  })),
+];
+
+describe('text toolbar button undo', () => {
+  function reopenCommittedBox(panel) {
+    pickTool('text');
+    pointer(panel.canvas, 'pointerdown', 20, 20);
+    typeInto(panel.textEditor, 'undo my style');
+    panel.textEditor.dispatchEvent(new Event('blur'));
+
+    // Start every palette test from a value outside the presets so even the
+    // default black/no-fill buttons make an observable change.
+    Object.assign(panel.state.items[0], { color: '#123456', background: '#123456' });
+    const original = { ...panel.state.items[0] };
+    panel.canvas.dispatchEvent(new MouseEvent('dblclick', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 25,
+      clientY: 25,
+    }));
+    expect(panel.textEditor.hidden).toBe(false);
+    return original;
+  }
+
+  it('keeps the undo matrix in sync with every button in the text toolbar', () => {
+    showDrawPanel({});
+    pickTool('text');
+    const bar = document.querySelector('.draw-text-bar');
+    expect(bar.querySelectorAll('button')).toHaveLength(TEXT_TOOLBAR_BUTTON_CASES.length);
+    for (const { selector } of TEXT_TOOLBAR_BUTTON_CASES) {
+      expect(bar.querySelectorAll(selector), selector).toHaveLength(1);
+    }
+  });
+
+  it.each(TEXT_TOOLBAR_BUTTON_CASES)('$name is restored by one undo', ({ selector, property, expected }) => {
+    const panel = showDrawPanel({});
+    const original = reopenCommittedBox(panel);
+
+    click(document.querySelector(selector));
+    panel.textEditor.dispatchEvent(new Event('blur'));
+    expect(panel.state.items[0][property]).toBe(expected);
+
+    click(document.querySelector('.draw-undo'));
+    expect(panel.state.items).toEqual([original]);
+  });
+});
+
 // The reported sequence: start typing, reach for a text-bar control, and the
 // blur that focus change causes would commit the box — so by the time the
 // colour was chosen there was no box left to apply it to, and dismissing the
@@ -842,4 +910,3 @@ describe('fill behind text', () => {
     expect(panel.textEditor.style.background).toContain('rgb(255, 255, 255)');
   });
 });
-

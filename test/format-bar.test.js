@@ -17,6 +17,25 @@ function render(container, options) {
 const mousedown = () => new MouseEvent('mousedown', { cancelable: true, bubbles: true });
 
 describe('format bar', () => {
+  it('wraps onto another fully padded row when the editor pane narrows', () => {
+    const css = readFileSync('src/app/app.css', 'utf8');
+    const rule = css.match(/\.format-bar\s*\{([^}]*)\}/)?.[1] || '';
+    expect(rule).toContain('flex: 0 0 auto'); // the lower row cannot be height-clipped
+    expect(rule).toContain('flex-wrap: wrap');
+    expect(rule).toContain('row-gap: 4px');
+    expect(rule).toContain('padding: 4px 14px 8px');
+    expect(rule).toContain('overflow: visible');
+    expect(rule).not.toContain('overflow-x: auto');
+  });
+
+  it('keeps Find in note on row one when it fits and left-aligns it after wrapping', () => {
+    const css = readFileSync('src/app/app.css', 'utf8');
+    const search = css.match(/\.format-bar \.note-search\s*\{([^}]*)\}/)?.[1] || '';
+    expect(search).toContain('flex: 0 1 210px');
+    expect(search).toContain('margin-left: 0');
+    expect(css).not.toContain('.format-bar .note-search-row');
+  });
+
   it('renders sixteen action buttons and a group divider, in order', () => {
     const c = mount();
     render(c, { apply: () => {} });

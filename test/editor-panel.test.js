@@ -395,14 +395,14 @@ describe('remote-change notice', () => {
 
 describe('notebook breadcrumb', () => {
   it('renders the folder path as clickable crumbs with separators', () => {
-    render({ breadcrumb: [{ id: 'r', title: '📓 Notes' }, { id: 'w', title: 'Work' }, { id: 's', title: 'Research' }] });
+    render({ breadcrumb: [{ id: 'r', title: '📓 All notes' }, { id: 'w', title: 'Work' }, { id: 's', title: 'Research' }] });
     const crumbs = [...document.querySelectorAll('.editor-breadcrumb .crumb')];
-    expect(crumbs.map((c) => c.textContent)).toEqual(['📓 Notes', 'Work', 'Research']);
+    expect(crumbs.map((c) => c.textContent)).toEqual(['📓 All notes', 'Work', 'Research']);
     expect(document.querySelectorAll('.editor-breadcrumb .sep')).toHaveLength(2);
   });
   it('clicking a crumb calls onNavigate with that folder id', () => {
     const onNavigate = vi.fn();
-    render({ breadcrumb: [{ id: 'r', title: '📓 Notes' }, { id: 'w', title: 'Work' }], onNavigate });
+    render({ breadcrumb: [{ id: 'r', title: '📓 All notes' }, { id: 'w', title: 'Work' }], onNavigate });
     [...document.querySelectorAll('.editor-breadcrumb .crumb')][1].click();
     expect(onNavigate).toHaveBeenCalledWith('w');
   });

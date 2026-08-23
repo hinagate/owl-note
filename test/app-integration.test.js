@@ -176,7 +176,7 @@ describe('app integration', () => {
     card.click();
     await new Promise((r) => setTimeout(r, 0)); // let openBookmark settle
     const crumbs = [...document.querySelectorAll('#editor .editor-breadcrumb .crumb')].map((c) => c.textContent);
-    expect(crumbs).toEqual(['📓 Notes', 'Work']);
+    expect(crumbs).toEqual(['📓 All notes', 'Work']);
   });
 
   it('creates a sub-notebook under the selected notebook', async () => {
@@ -208,7 +208,7 @@ describe('app integration', () => {
     await app.initUI(root);
     location.hash = ''; // reset so it doesn't leak into other tests
     const crumbs = [...document.querySelectorAll('#editor .editor-breadcrumb .crumb')].map((c) => c.textContent);
-    expect(crumbs).toEqual(['📓 Notes', 'Work']); // full path, not just the root
+    expect(crumbs).toEqual(['📓 All notes', 'Work']); // full path, not just the root
   });
 
   it('opens the exact locked note requested by a direct bookmark URL', async () => {
@@ -265,12 +265,12 @@ describe('app integration', () => {
     [...document.querySelectorAll('#note-list .item.card')].find((c) => c.textContent.includes('Note')).click();
     await new Promise((r) => setTimeout(r, 10));
     const crumbs = () => [...document.querySelectorAll('#editor .editor-breadcrumb .crumb')].map((c) => c.textContent);
-    expect(crumbs()).toEqual(['📓 Notes', 'Work']);
+    expect(crumbs()).toEqual(['📓 All notes', 'Work']);
     window.prompt = () => 'Job';
     [...document.querySelectorAll('#sidebar .item.folder')].find((x) => x.querySelector('.nb-label')?.textContent === 'Work')
       .querySelector('.nb-rename').click();
     await new Promise((r) => setTimeout(r, 15));
-    expect(crumbs()).toEqual(['📓 Notes', 'Job']); // breadcrumb refreshed in place
+    expect(crumbs()).toEqual(['📓 All notes', 'Job']); // breadcrumb refreshed in place
   });
 
   it('shows a note created outside the app (Save-selection context menu) without a manual refresh', async () => {
