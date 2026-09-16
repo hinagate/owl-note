@@ -3,9 +3,17 @@
 import { describe, it, expect } from 'vitest';
 import { buildKanaTable, toHiragana } from '../scripts/build-kana-dict.mjs';
 import { buildPinyinTable, toneMark } from '../scripts/build-pinyin-dict.mjs';
+import { buildIpaTable } from '../scripts/build-ipa-dict.mjs';
 import { MAX_SURFACE, MAX_PHRASE } from '../src/lib/segment.js';
 
 const rows = (text) => new Map(text.trimEnd().split('\n').map((line) => line.split('\t')));
+
+describe('buildIpaTable', () => {
+  it('bakes explicit vowel length and syllable boundaries into the shipped lookup', () => {
+    const table = rows(buildIpaTable({ scheming: 'S K IY1 M IH0 NG' }).text);
+    expect(table.get('scheming')).toBe('ˈskiː.mɪŋ');
+  });
+});
 
 describe('buildKanaTable', () => {
   it('keeps only the primary reading when the source lists alternates', () => {

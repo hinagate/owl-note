@@ -3,8 +3,10 @@
 // Pure module — no imports, no DOM. Runs at BUILD time to bake the runtime dictionary,
 // so nothing here ships in the extension bundle.
 //
-// Transcription style is American learner-dictionary, not narrow phonetic:
-//   - no length marks (u, i — not uː, iː), matching how US dictionaries write them
+// Transcription style is learner-dictionary IPA, not narrow phonetic:
+//   - strong IY/UW carry the explicit length marks used by Cambridge (iː/uː),
+//     while their unstressed forms stay short (happy /ˈhæp.i/)
+//   - unstressed syllable boundaries use a dot, so SCHEMING is /ˈskiː.mɪŋ/
 //   - r, not ɹ: every major learner dictionary uses r for English, and this is read
 //     by people learning the language, not by phoneticians
 //   - AH and ER split on stress, which is the one place ARPAbet is lossier than IPA:
@@ -12,12 +14,12 @@
 
 const VOWELS = {
   AA: 'ɑ', AE: 'æ', AH: 'ʌ', AO: 'ɔ', AW: 'aʊ', AY: 'aɪ',
-  EH: 'ɛ', ER: 'ɝ', EY: 'eɪ', IH: 'ɪ', IY: 'i',
-  OW: 'oʊ', OY: 'ɔɪ', UH: 'ʊ', UW: 'u',
+  EH: 'ɛ', ER: 'ɝ', EY: 'eɪ', IH: 'ɪ', IY: 'iː',
+  OW: 'oʊ', OY: 'ɔɪ', UH: 'ʊ', UW: 'uː',
 };
 
 // Same vowel, reduced: only reachable with stress digit 0.
-const REDUCED = { AH: 'ə', ER: 'ɚ' };
+const REDUCED = { AH: 'ə', ER: 'ɚ', IY: 'i', UW: 'u' };
 
 const CONSONANTS = {
   B: 'b', CH: 'tʃ', D: 'd', DH: 'ð', F: 'f', G: 'ɡ', HH: 'h', JH: 'dʒ',
@@ -26,6 +28,11 @@ const CONSONANTS = {
 };
 
 const MARK = { 1: 'ˈ', 2: 'ˌ' };
+
+// A stressed checked (short) vowel needs a consonant to close its syllable:
+// HAPPY is /ˈhæp.i/ and VISION is /ˈvɪʒ.ən/. A free/long vowel does not, so the
+// single M in SCHEMING opens its second syllable: /ˈskiː.mɪŋ/.
+const CHECKED = new Set(['AE', 'AH', 'EH', 'IH', 'UH']);
 
 // Consonant clusters English allows at the START of a syllable. Needed because IPA
 // marks a syllable, not a vowel, so the mark goes before the onset — and the onset is
@@ -62,6 +69,7 @@ export function arpabetToIpa(arpabet) {
     if (base in VOWELS) {
       units.push({
         ipa: (stress === '0' && REDUCED[base]) || VOWELS[base],
+        base,
         vowel: true,
         stress,
       });
@@ -74,21 +82,30 @@ export function arpabetToIpa(arpabet) {
 
   // A one-syllable word carries no stress mark by convention: /rɛd/, not /ˈrɛd/.
   const syllables = units.filter((u) => u.vowel).length;
-  const marks = new Map(); // insert-before index -> mark
+  const marks = new Map(); // insert-before index -> stress mark or syllable dot
   if (syllables > 1) {
+    let vowelNumber = 0;
+    let previousVowel = -1;
     for (let i = 0; i < units.length; i += 1) {
-      const mark = units[i].vowel ? MARK[units[i].stress] : undefined;
-      if (!mark) continue;
+      if (!units[i].vowel) continue;
       // Maximal onset: take as many preceding consonants as could legally begin a
       // syllable, and no more. Everything left of that belongs to the previous
       // syllable's coda — ˌʌndɚˈstænd, not ˌʌndɚstˈænd and not ˌʌndɚˈrstænd.
-      let at = i;
-      while (at > 0 && !units[at - 1].vowel) {
-        const onset = units.slice(at - 1, i);
-        if (!canOpen(onset.map((u) => u.ipa).join(''), onset.length)) break;
-        at -= 1;
+      let at = vowelNumber === 0 ? 0 : i;
+      if (vowelNumber > 0) {
+        const checked = units[previousVowel].stress !== '0' && CHECKED.has(units[previousVowel].base);
+        const earliestOnset = previousVowel + (checked ? 2 : 1); // reserve one coda consonant when checked
+        while (at > earliestOnset && !units[at - 1].vowel) {
+          const onset = units.slice(at - 1, i);
+          if (!canOpen(onset.map((u) => u.ipa).join(''), onset.length)) break;
+          at -= 1;
+        }
       }
-      marks.set(at, mark);
+      const stress = MARK[units[i].stress];
+      if (stress) marks.set(at, stress);
+      else if (vowelNumber > 0) marks.set(at, '.');
+      previousVowel = i;
+      vowelNumber += 1;
     }
   }
 
