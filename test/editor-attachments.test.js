@@ -90,6 +90,79 @@ describe('editor file attachments', () => {
     editor.destroy();
   });
 
+  // Office puts a bitmap of the selection on the clipboard next to the real HTML, and the
+  // bitmap used to win — so a pasted spreadsheet arrived as a picture nobody could edit.
+  const EXCEL_RANGE = '<html xmlns:o="urn:schemas-microsoft-com:office:office">'
+    + '<head><meta name=ProgId content=Excel.Sheet><style><!--.xl65 {font-weight:700;}--></style></head>'
+    + '<body><table><!--StartFragment--><col width=64 span=2>'
+    + '<tr><td class=xl65>Region</td><td class=xl65>Q1</td></tr>'
+    + '<tr><td>North</td><td align=right>120</td></tr>'
+    + '<!--EndFragment--></table></body></html>';
+
+  const WORD_PICTURE = '<html xmlns:o="urn:schemas-microsoft-com:office:office"><body>'
+    + '<!--StartFragment--><p class=MsoNormal><img width=400 height=300'
+    + ' src="file:///C:/Users/a/AppData/Local/Temp/msohtmlclip1/01/clip_image001.png"></p>'
+    + '<!--EndFragment--></body></html>';
+
+  function pasteOffice(textarea, html, plain, bitmap) {
+    const paste = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, 'clipboardData', {
+      value: {
+        items: bitmap ? [{ kind: 'file', type: bitmap.type, getAsFile: () => bitmap }] : [],
+        getData: (type) => (type === 'text/html' ? html : plain),
+      },
+    });
+    textarea.dispatchEvent(paste);
+    return paste;
+  }
+
+  it('pastes a copied Excel range as an editable table, not the clipboard bitmap', async () => {
+    const editor = renderEditor(document.getElementById('root'), {});
+    const textarea = document.querySelector('.note-body');
+    const paste = pasteOffice(textarea, EXCEL_RANGE, 'Region\tQ1\nNorth\t120',
+      new File([new Uint8Array([1, 2, 3])], 'image.png', { type: 'image/png' }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(paste.defaultPrevented).toBe(true);
+    expect(editor.getAttachments()).toHaveLength(0); // the bitmap was not attached
+    expect(editor.getBody()).toMatch(/\|\s*Region\s*\|\s*Q1\s*\|/);
+    expect(editor.getBody()).toMatch(/\|\s*North\s*\|\s*120\s*\|/);
+    editor.destroy();
+  });
+
+  it('starts the pasted table on its own block so it still renders as a table', async () => {
+    const editor = renderEditor(document.getElementById('root'), { body: 'Intro line' });
+    const textarea = document.querySelector('.note-body');
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    pasteOffice(textarea, EXCEL_RANGE, '', new File([new Uint8Array([1, 2, 3])], 'image.png', { type: 'image/png' }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(editor.getBody()).toMatch(/^Intro line\n\n\|/);
+    expect(document.querySelector('.preview-body table')).toBeTruthy();
+    editor.destroy();
+  });
+
+  it('still attaches the bitmap when Word copied a picture, which has no HTML to convert', async () => {
+    const editor = renderEditor(document.getElementById('root'), {});
+    const textarea = document.querySelector('.note-body');
+    pasteOffice(textarea, WORD_PICTURE, '', new File([new Uint8Array([1, 2, 3])], 'image.png', { type: 'image/png' }));
+    await vi.waitFor(() => expect(editor.getAttachments()).toHaveLength(1));
+
+    expect(editor.getBody()).toMatch(/!\[.*\]\(owl-img:[A-Za-z0-9]+\)/);
+    expect(editor.getBody()).not.toContain('clip_image001');
+    editor.destroy();
+  });
+
+  it('leaves a non-Office paste to the browser', () => {
+    const editor = renderEditor(document.getElementById('root'), {});
+    const textarea = document.querySelector('.note-body');
+    const paste = pasteOffice(textarea, '<h1>A blog post</h1>', 'A blog post', null);
+
+    expect(paste.defaultPrevented).toBe(false); // browser inserts its own plain text
+    expect(editor.getBody()).toBe('');
+    editor.destroy();
+  });
+
   it('accepts multiple dropped files and shows the attachment drop target', async () => {
     const editor = renderEditor(document.getElementById('root'), {});
     const textarea = document.querySelector('.note-body');

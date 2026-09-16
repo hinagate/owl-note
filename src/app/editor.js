@@ -11,6 +11,7 @@ import { nextTableRow, renumberOrderedList } from '../lib/format.js';
 import { tableCellTarget, tableCellLineBreak, isTableCellSelection, alignTableAt } from '../lib/table.js';
 import { showDrawPanel } from './draw-panel.js';
 import { annotateRuby } from '../lib/ruby-annotate.js';
+import { officeClipboardMarkdown } from '../lib/office-clipboard.js';
 import { createZoomBar } from './preview-zoom.js';
 
 // Below this fraction of the available width, a contained image is too narrow to read
@@ -1335,10 +1336,41 @@ export function renderEditor(
     if (file) await insertAttachmentFile(file);
   });
 
+  // Word and Excel put a BITMAP of the copied selection on the clipboard beside the real
+  // HTML, and that bitmap looks exactly like a pasted photo — which is why a spreadsheet
+  // used to land as a picture nobody could edit. Convert the HTML instead whenever it
+  // holds anything writable as Markdown. A copied chart or picture carries no such HTML,
+  // so it still falls through to the image path below.
+  function insertOfficeMarkdown(markdown) {
+    const start = ta.selectionStart ?? ta.value.length;
+    const end = ta.selectionEnd ?? start;
+    insertText(blockSnippet(markdown, start), start, end); // keeps undo alive
+  }
+
+  // A table or heading has to start its own block or marked parses it as paragraph text;
+  // a single run of words pastes inline, where the cursor already is.
+  function blockSnippet(markdown, start) {
+    if (!markdown.includes('\n')) return markdown;
+    const before = ta.value.slice(0, start);
+    let lead = '';
+    if (before && !before.endsWith('\n\n')) lead = before.endsWith('\n') ? '\n' : '\n\n';
+    return `${lead}${markdown}\n`;
+  }
+
+  const clipboardHtml = (transfer) => {
+    try { return transfer?.getData?.('text/html') || ''; } catch { return ''; }
+  };
+
   // Paste real clipboard files through the same paths as the Image/File buttons.
   // Plain text is untouched so the browser retains its normal paste behavior.
   ta.addEventListener('paste', async (e) => {
     const files = filesFromTransfer(e.clipboardData);
+    const officeMarkdown = officeClipboardMarkdown(clipboardHtml(e.clipboardData));
+    if (officeMarkdown) {
+      e.preventDefault();
+      insertOfficeMarkdown(officeMarkdown);
+      return;
+    }
     if (!files.length) {
       // A copied owl-img/owl-file link contains only an id; recover its attachment
       // from the source note so the preview and eventual save keep working.
@@ -1391,6 +1423,15 @@ export function renderEditor(
   bodyWrap.addEventListener('drop', async (e) => {
     const files = filesFromTransfer(e.dataTransfer);
     bodyWrap.classList.remove('file-drop-active');
+    // Dragging a range out of Excel carries the same bitmap-plus-HTML pair as copying it.
+    const officeMarkdown = officeClipboardMarkdown(clipboardHtml(e.dataTransfer));
+    if (officeMarkdown) {
+      e.preventDefault();
+      e.stopPropagation();
+      ta.focus();
+      insertOfficeMarkdown(officeMarkdown);
+      return;
+    }
     if (!files.length) return;
     e.preventDefault();
     e.stopPropagation();
