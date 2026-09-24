@@ -14,6 +14,7 @@ import { saveBackup } from '../lib/mirror.js';
 import { contentHash, createNote } from '../lib/note.js';
 import { saveNote } from '../lib/save-note.js';
 import { buildQuickNote } from '../lib/quick-note.js';
+import { withKeepAlive } from '../lib/keepalive.js';
 
 const SAVE_SELECTION_ID = 'owl-save-selection';
 const CAPTURE_FULL_PAGE_ID = 'owl-capture-full-page';
@@ -28,6 +29,14 @@ const TRANSCRIBE_SETUP_TEXT = 'One-time language download: click “Enable and c
 const TRANSCRIBE_REINVOKE_TEXT = 'This page changed while transcription was starting. Right-click “Live Transcription save to OWL-Note” again.';
 const APP_OPENED_MESSAGE = 'owl-app-opened';
 const APP_TAB_KEY = 'owl:appTab';
+
+// A capture's progress badge is browser state and outlives the worker that set it. Each
+// running capture leaves a marker naming this worker; a marker from any other worker
+// found at startup means that worker was stopped mid-capture, and nothing else would
+// ever replace its "99%".
+const WORKER_INSTANCE = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+const CAPTURE_INFLIGHT_PREFIX = 'owl:captureInflight:';
+let captureSeq = 0;
 // A one-shot signal the app tab watches (chrome.storage.onChanged): after a capture it
 // jumps to All notes (root) so the new note shows on top. Carries {id, at} — a fresh
 // timestamp each time so back-to-back captures always register as a change.
@@ -62,6 +71,11 @@ export async function captureRichSelection(info, tab, capture = captureSmartSele
 // bring OWL-Note to the front so the capture is immediately visible on top of All notes.
 export async function handleSaveSelection(info, tab, capture = captureRichSelection) {
   if (info.menuItemId !== SAVE_SELECTION_ID) return;
+  // A selection can carry images, and saving one uploads them to Drive like any capture.
+  await withKeepAlive(() => saveSelection(info, tab, capture));
+}
+
+async function saveSelection(info, tab, capture) {
   const selection = (info.selectionText || '').trim();
   const url = info.pageUrl || (tab && tab.url) || '';
   const title = (tab && tab.title) || ''; // best-effort; no `tabs` permission required
@@ -116,6 +130,40 @@ async function showCaptureProgress({ completed = 0, total = 1 } = {}) {
   } catch { /* progress is cosmetic */ }
 }
 
+// The tiles are in; what remains is the save, which can take minutes when a large capture
+// uploads to Drive. Say so, rather than leave "99%" looking stuck.
+async function showCaptureSaving() {
+  try {
+    await chrome.action?.setBadgeText?.({ text: '…' });
+    await chrome.action?.setBadgeBackgroundColor?.({ color: '#3567c8' });
+    await chrome.action?.setTitle?.({ title: 'OWL-Note — saving the capture…' });
+  } catch { /* progress is cosmetic */ }
+}
+
+// Run a capture with the worker kept alive and a marker recording that it is under way.
+async function trackCapture(work) {
+  const store = globalThis.chrome?.storage?.session;
+  const key = `${CAPTURE_INFLIGHT_PREFIX}${WORKER_INSTANCE}:${++captureSeq}`;
+  try { await store?.set?.({ [key]: { instance: WORKER_INSTANCE, at: Date.now() } }); } catch { /* best-effort */ }
+  try {
+    return await withKeepAlive(work);
+  } finally {
+    try { await store?.remove?.(key); } catch { /* best-effort */ }
+  }
+}
+
+export async function clearInterruptedCaptures() {
+  const store = globalThis.chrome?.storage?.session;
+  if (!store?.get) return false;
+  const all = await store.get(null);
+  const stale = Object.keys(all || {})
+    .filter((k) => k.startsWith(CAPTURE_INFLIGHT_PREFIX) && all[k]?.instance !== WORKER_INSTANCE);
+  if (!stale.length) return false;
+  await store.remove(stale);
+  await flashCaptureError(new Error('The last capture stopped before it finished'));
+  return true;
+}
+
 async function flashCaptureError(error) {
   const reason = String(error?.message || error || 'Capture failed').slice(0, 160);
   try {
@@ -133,10 +181,15 @@ async function flashCaptureError(error) {
 // tab), stitch locally, then use the normal attachment and optional Drive path.
 export async function handleCaptureFullPage(info, tab, capture = captureFullPage) {
   if (info.menuItemId !== CAPTURE_FULL_PAGE_ID) return null;
+  return trackCapture(() => saveFullPageCapture(info, tab, capture));
+}
+
+async function saveFullPageCapture(info, tab, capture) {
   try {
     await showCaptureProgress({ completed: 0, total: 1 });
     const captured = await capture(tab, { onProgress: showCaptureProgress });
     if (!captured?.dataUri) throw new Error('The browser returned an empty capture');
+    await showCaptureSaving();
 
     const title = cleanCaptureTitle(tab?.title);
     const id = contentHash(captured.dataUri);
@@ -175,10 +228,15 @@ export async function handleCaptureFullPage(info, tab, capture = captureFullPage
 // can choose a faithful bitmap or a semantic note depending on what they need.
 export async function handleCaptureSmartPage(info, tab, capture = captureSmartPage) {
   if (info.menuItemId !== CAPTURE_SMART_PAGE_ID) return null;
+  return trackCapture(() => saveSmartPageCapture(info, tab, capture));
+}
+
+async function saveSmartPageCapture(info, tab, capture) {
   try {
     await showCaptureProgress({ completed: 0, total: 1 });
     const converted = await capture(tab, { onProgress: showCaptureProgress });
     if (!converted?.markdown) throw new Error('The page did not contain readable content');
+    await showCaptureSaving();
 
     const title = cleanCaptureTitle(converted.title || tab?.title);
     const { body } = buildQuickNote({
@@ -550,7 +608,8 @@ export async function handleSaveTranscript() {
   });
   try {
     const note = createNote({ title: title || 'Transcript', body });
-    const saved = await saveNote(note, await ensureTranscriptsNotebook(), undefined);
+    // An hour-long transcript passes the bookmark cap and uploads to Drive as a note body.
+    const saved = await withKeepAlive(async () => saveNote(note, await ensureTranscriptsNotebook(), undefined));
     await clearSession();
     await signalQuickCapture(note, { openNote: true });
     await focusOrOpenApp();
@@ -811,6 +870,7 @@ export function wireEvents() {
   // The worker wakes on every message, so this is checked often enough to catch a
   // session whose tab was left playing silence.
   finalizeIfSilent().catch(() => {});
+  clearInterruptedCaptures().catch(() => {});
 }
 
 // Register on load (no-op in environments where chrome is not yet defined).

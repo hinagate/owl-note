@@ -231,3 +231,32 @@ describe('full-page capture orchestration', () => {
     expect(injected.at(-1)).toBe(restorePageAfterCapture);
   });
 });
+
+describe('full-page capture — restoring the page cannot hold the save hostage', () => {
+  it('finishes when Chrome never answers the restore (a frozen tab)', async () => {
+    const executeScript = vi.fn(async (options) => {
+      if (options.func === preparePageForCapture) {
+        return [{ result: { documentWidth: 1200, documentHeight: 900, viewportWidth: 1200, viewportHeight: 1000 } }];
+      }
+      if (options.func === scrollPageForCapture) return [{ result: { x: 0, y: 0 } }];
+      if (options.func === restorePageAfterCapture) return new Promise(() => {}); // frozen: never settles
+      throw new Error('unexpected injection');
+    });
+    const compositor = { add: vi.fn(), finish: vi.fn(async () => ({ dataUri: 'data:image/jpeg;base64,AQID', mime: 'image/jpeg', width: 1, height: 1 })) };
+
+    const result = await captureFullPage(
+      { id: 9, windowId: 4 },
+      {
+        executeScript,
+        captureVisibleTab: async () => 'data:image/jpeg;base64,tile',
+        queryTabs: async () => [{ id: 9 }],
+        createCompositor: async () => compositor,
+        sleep: async () => {},
+        restoreWaitMs: 20,
+      },
+    );
+
+    expect(result.dataUri).toBe('data:image/jpeg;base64,AQID');
+    expect(executeScript.mock.calls.at(-1)[0].func).toBe(restorePageAfterCapture); // it was still asked
+  });
+});

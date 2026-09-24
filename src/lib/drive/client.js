@@ -1,13 +1,14 @@
 import { getAccessToken } from './auth.js';
 import { DRIVE_FILES_URL, DRIVE_UPLOAD_URL, ATTACH_FOLDER_NAME, MAX_ATTACH_BYTES } from './config.js';
+import { DRIVE_REQUEST_TIMEOUT_MS, DRIVE_DOWNLOAD_TIMEOUT_MS, uploadTimeoutMs, fetchWithDeadline } from './deadline.js';
 
 const FOLDER_KEY = 'drive:folderId';
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 
-async function authedFetch(url, opts = {}) {
+async function authedFetch(url, { timeoutMs = DRIVE_REQUEST_TIMEOUT_MS, ...opts } = {}) {
   const token = await getAccessToken();
   const headers = { ...(opts.headers || {}), Authorization: `Bearer ${token}` };
-  const res = await fetch(url, { ...opts, headers });
+  const res = await fetchWithDeadline(url, { ...opts, headers }, timeoutMs);
   if (!res.ok) throw new Error(`Drive API ${res.status} for ${url}`);
   return res;
 }
@@ -56,12 +57,13 @@ export async function uploadFile({ name, mime, bytes, hash }) {
     method: 'POST',
     headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
     body,
+    timeoutMs: uploadTimeoutMs(body.length),
   })).json();
   return res.id;
 }
 
 export async function getMedia(fileId) {
-  const res = await authedFetch(`${DRIVE_FILES_URL}/${fileId}?alt=media`);
+  const res = await authedFetch(`${DRIVE_FILES_URL}/${fileId}?alt=media`, { timeoutMs: DRIVE_DOWNLOAD_TIMEOUT_MS });
   return new Uint8Array(await res.arrayBuffer());
 }
 
@@ -71,6 +73,7 @@ export async function updateMedia(fileId, bytes) {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/octet-stream' },
     body: bytes,
+    timeoutMs: uploadTimeoutMs(bytes.length),
   });
   return fileId;
 }

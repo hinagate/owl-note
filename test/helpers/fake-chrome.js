@@ -170,6 +170,9 @@ export function installFakeChrome(opts = {}) {
     // it just never propagates. `syncEnabled: false` drops the area entirely to
     // exercise the "key can't be distributed" path.
     ...(opts.syncEnabled === false ? {} : { sync: makeArea('sync', opts.syncStore) }),
+    // Opt-in: several callers fall back to storage.local when session is missing, and
+    // existing tests assert that fallback.
+    ...(opts.session ? { session: makeArea('session', opts.sessionStore) } : {}),
   };
 
   const extId = opts.extensionId || 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';

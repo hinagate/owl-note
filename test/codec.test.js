@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { encode, decode, selfTest, compressionAvailable, isEncryptedNote, ENCRYPT_WRITES, LOCKED_NOTE_BODY, LOCKED_NO_KEY_BODY } from '../src/lib/codec.js';
+import { encode, decode, selfTest, compressionAvailable, isEncryptedNote, noteIdOf, ENCRYPT_WRITES, LOCKED_NOTE_BODY, LOCKED_NO_KEY_BODY } from '../src/lib/codec.js';
 import { createNote } from '../src/lib/note.js';
 import { installFakeChrome } from './helpers/fake-chrome.js';
 import { activeKey, MissingKeyError, _resetCache } from '../src/lib/note-key.js';
@@ -210,5 +210,21 @@ describe('codec encryption', () => {
       const err = await decode(payload).catch((e) => e);
       expect(err.envelope.attachments[0].driveFileId).toBe('KEEP1');
     });
+  });
+});
+
+describe('noteIdOf', () => {
+  it('reads the note id from an encrypted payload without its key', async () => {
+    installFakeChrome();
+    _resetCache();
+    const payload = await encode({ id: 'n-1', title: 'T', body: 'secret', attachments: [] });
+    installFakeChrome(); // a different installation: the key that sealed it is gone
+    _resetCache();
+    await expect(decode(payload)).rejects.toThrow();
+    expect(await noteIdOf(payload)).toBe('n-1');
+  });
+
+  it('reads it from a plaintext payload an older build wrote', async () => {
+    expect(await noteIdOf(await encode({ id: 'legacy', body: 'x' }, { encrypt: false }))).toBe('legacy');
   });
 });

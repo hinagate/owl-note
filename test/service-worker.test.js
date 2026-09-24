@@ -306,3 +306,58 @@ describe('service worker handlers', () => {
     expect(created).toEqual([{ url: 'app.html' }]);
   });
 });
+
+// A capture's badge is browser state that outlives the worker. When Chrome stopped the
+// worker during a slow Drive upload, nothing ever replaced "99%" — it stayed for good.
+describe('service worker — interrupted captures', () => {
+  const captured = { dataUri: 'data:image/jpeg;base64,AQID', mime: 'image/jpeg', width: 1, height: 1 };
+  const fullPage = { menuItemId: 'owl-capture-full-page', pageUrl: 'https://example.com/' };
+  const tab = { id: 17, windowId: 2, title: 'Page', url: 'https://example.com/' };
+
+  function recordBadges(chrome) {
+    const badges = [];
+    chrome.action.setBadgeText = async ({ text }) => { badges.push(text); };
+    return badges;
+  }
+
+  it('shows the capture is saving once every tile is in, then the checkmark', async () => {
+    const chrome = installFakeChrome({ session: true });
+    const badges = recordBadges(chrome);
+    await sw.handleCaptureFullPage(fullPage, tab, async (_tab, { onProgress }) => {
+      await onProgress({ completed: 16, total: 16 });
+      return captured;
+    });
+    expect(badges.slice(-3)).toEqual(['99%', '…', '✓']);
+  });
+
+  it('marks a capture as under way, and clears the mark when it ends', async () => {
+    const chrome = installFakeChrome({ session: true });
+    let release;
+    const running = sw.handleCaptureFullPage(fullPage, tab, () => new Promise((resolve) => { release = resolve; }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(Object.keys(await chrome.storage.session.get(null))).toHaveLength(1);
+    // The worker running this capture must not mistake its own mark for an abandoned one.
+    expect(await sw.clearInterruptedCaptures()).toBe(false);
+
+    release(captured);
+    await running;
+    expect(await chrome.storage.session.get(null)).toEqual({});
+  });
+
+  it('clears the mark when the capture fails, too', async () => {
+    const chrome = installFakeChrome({ session: true });
+    await sw.handleCaptureFullPage(fullPage, tab, async () => { throw new Error('tab closed'); });
+    expect(await chrome.storage.session.get(null)).toEqual({});
+  });
+
+  it('replaces a stale badge left by a worker stopped mid-capture', async () => {
+    const chrome = installFakeChrome({ session: true });
+    const badges = recordBadges(chrome);
+    await chrome.storage.session.set({ 'owl:captureInflight:gone:1': { instance: 'gone', at: 1 } });
+
+    expect(await sw.clearInterruptedCaptures()).toBe(true);
+    expect(badges).toEqual(['!']);
+    expect(await chrome.storage.session.get(null)).toEqual({});
+    expect(await sw.clearInterruptedCaptures()).toBe(false); // handled once
+  });
+});

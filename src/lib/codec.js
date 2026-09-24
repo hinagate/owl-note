@@ -151,6 +151,13 @@ async function decodeOuter(payload) {
   return JSON.parse(await inflateRaw(base64urlToBytes(payload)));
 }
 
+// The note's id without decrypting it: the envelope keeps `id` in the clear for older
+// builds, and a legacy plaintext payload is the note itself. Cheap enough to run over
+// every bookmark, and it works for notes whose key this installation does not hold.
+export async function noteIdOf(payload) {
+  return (await decodeOuter(payload))?.id ?? null;
+}
+
 // Return the key id named by an encrypted payload without decrypting its note.
 // Save paths use this to keep an existing bookmark on the same key. Legacy
 // plaintext payloads return null and are upgraded with this installation's key.

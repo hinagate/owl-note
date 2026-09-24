@@ -1,6 +1,6 @@
 import * as bm from '../lib/bookmarks.js';
 import * as mirror from '../lib/mirror.js';
-import { encode, decode, selfTest } from '../lib/codec.js';
+import { encode, decode, selfTest, noteIdOf } from '../lib/codec.js';
 import { isMissingKeyError, reconcileKeyring, watchKeyChanges, importKeyring, exportKeyring } from '../lib/note-key.js';
 import { createNote, withUpdatedContent, contentHash, extractTitle, withPinned, orderNotes } from '../lib/note.js';
 import { renderSidebar } from './sidebar.js';
@@ -180,6 +180,40 @@ export async function toggleDriveSync(checked) {
     toast(cancelled ? '⚠ Google Drive sync cancelled — not enabled.' : `⚠ Couldn't enable Drive sync${m ? ': ' + m : ''}`, true);
     return await isEnabled();
   }
+}
+
+// Bring back notes an interrupted save left in storage that no list reads (see
+// mirror.recoverStrandedNotes).
+async function bookmarkedNoteIds(rootId) {
+  const ids = new Set();
+  for (const r of await bm.allNotes(rootId)) {
+    try {
+      const id = await noteIdOf(r.payload);
+      if (id) ids.add(id);
+    } catch { /* a malformed payload names no note */ }
+  }
+  return ids;
+}
+
+// The notebook the save was headed for, if the user has not deleted it since.
+async function liveFolderOr(rootId, folderId) {
+  if (!folderId) return rootId;
+  try {
+    const [node] = await chrome.bookmarks.get(folderId);
+    return node && !node.url ? folderId : rootId;
+  } catch {
+    return rootId;
+  }
+}
+
+export async function recoverStrandedCaptures(rootId = ui.rootId) {
+  return mirror.recoverStrandedNotes({
+    folderFor: (folderId) => liveFolderOr(rootId, folderId),
+    bookmarkedIds: () => bookmarkedNoteIds(rootId),
+    // Twice the bookmark sync cap: a compressed image this large cannot have arrived
+    // through a synced bookmark, so it was captured on this device.
+    minInlineChars: 2 * MAX_URL_BYTES,
+  });
 }
 
 // When Drive sync is (re)enabled, push every note kept device-local while sync was off up to
@@ -2245,6 +2279,16 @@ export async function boot() {
   watchKeyChanges(() => { refreshPanes().catch(() => {}); });
   const root = await bm.ensureRoot();
   await initUI(root);
+  // After the first paint: the sweep reads all of storage, and boot must not wait on it.
+  // It runs on every launch because a save can be cut off at any time (browser crash,
+  // worker killed), and a marked copy only becomes recoverable 30 minutes on.
+  recoverStrandedCaptures(root)
+    .then((count) => {
+      if (!count) return;
+      toast(`Recovered ${count} capture${count === 1 ? '' : 's'} that did not finish saving`);
+      refreshPanes().catch(() => {});
+    })
+    .catch((e) => { console.warn('[owl-note] Recovering unfinished saves failed:', e); });
 }
 
 if (typeof document !== 'undefined' && document.getElementById('panes')) {

@@ -1,6 +1,7 @@
 import { OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET, TOKEN_ENDPOINT } from './config.js';
 import { tokenRefreshBody, createPkce, buildAuthUrl, tokenExchangeBody } from './pkce.js';
 import { DRIVE_SCOPE } from './config.js';
+import { DRIVE_REQUEST_TIMEOUT_MS, fetchWithDeadline } from './deadline.js';
 
 const TOKENS = 'drive:tokens';
 const SKEW_MS = 60000; // refresh a minute early
@@ -27,11 +28,11 @@ export async function isConnected() {
 
 async function refresh(t) {
   assertConfigured();
-  const res = await fetch(TOKEN_ENDPOINT, {
+  const res = await fetchWithDeadline(TOKEN_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: tokenRefreshBody({ clientId: OAUTH_CLIENT_ID, clientSecret: OAUTH_CLIENT_SECRET, refreshToken: t.refreshToken }),
-  });
+  }, DRIVE_REQUEST_TIMEOUT_MS);
   if (!res.ok) throw needsAuth('Drive token refresh failed');
   const j = await res.json();
   const next = { refreshToken: t.refreshToken, accessToken: j.access_token, expiresAt: Date.now() + (j.expires_in || 3600) * 1000 };
@@ -60,11 +61,11 @@ export async function connect() {
   const url = buildAuthUrl({ clientId: OAUTH_CLIENT_ID, redirectUri, scope: DRIVE_SCOPE, challenge });
   const redirectUrl = await chrome.identity.launchWebAuthFlow({ url, interactive: true });
   const code = codeFromRedirect(redirectUrl);
-  const res = await fetch(TOKEN_ENDPOINT, {
+  const res = await fetchWithDeadline(TOKEN_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: tokenExchangeBody({ clientId: OAUTH_CLIENT_ID, clientSecret: OAUTH_CLIENT_SECRET, code, verifier, redirectUri }),
-  });
+  }, DRIVE_REQUEST_TIMEOUT_MS);
   if (!res.ok) throw needsAuth('Drive token exchange failed');
   const j = await res.json();
   if (!j.refresh_token) throw needsAuth('No refresh token (publish the consent screen to Production)');

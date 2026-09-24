@@ -46,7 +46,12 @@ export async function saveNote(note, folderId, existingBookmarkId, offload = off
     }
   }
 
-  await mirror.saveBackup(completeNote); // durability first — always, with full inline bytes
+  // Durability first — always, with full inline bytes. A NEW note's first copy is not
+  // listed anywhere until the writes below file it, so it records where it was going: a
+  // save cut off in between (the worker stopped during a slow Drive upload) otherwise
+  // leaves the note complete, full-size, and invisible. The app files such a copy as a
+  // device-local note once it is clearly abandoned (mirror.recoverStrandedNotes).
+  await mirror.saveBackup(completeNote, existingBookmarkId ? undefined : { pendingFolderId: folderId });
   const toSave = await offload(completeNote); // best-effort Drive offload of attachments (no-op when sync off / on failure)
   const prevFileId = completeNote._driveBody || null; // a prior Drive-backed body, if this note had one
   const { _driveBody, ...content } = toSave; // the stored payload never carries the body-pointer
@@ -58,7 +63,17 @@ export async function saveNote(note, folderId, existingBookmarkId, offload = off
   if (bytes > MAX_URL_BYTES) {
     // Over the bookmark sync cap. When Drive sync is on, offload the WHOLE note to Drive
     // and keep a small stub bookmark; otherwise fall back to device-local (today's behavior).
-    const big = await bigNote(content, payload, prevFileId);
+    let big = null;
+    try {
+      big = await bigNote(content, payload, prevFileId);
+    } catch (err) {
+      // A NEW note loses nothing by staying on this device, which is exactly where a failed
+      // attachment offload already leaves it. An existing synced note must not fall
+      // through: the device-local branch deletes its bookmark, and a passing network error
+      // is no reason to take a note off every other device.
+      if (existingBookmarkId) throw err;
+      console.warn('[owl-note] Drive note offload failed — note kept device-local:', err);
+    }
     if (big) {
       const stubPayload = await encode(big.stub, encodeOpts);
       let bookmarkId = existingBookmarkId;

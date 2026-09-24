@@ -313,6 +313,21 @@ export async function createPageCompositor(meta, firstDataUrl, firstPosition, de
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Putting the page back (scroll position, sticky headers, selection) is cosmetic, and
+// executeScript on a tab Chrome has frozen neither resolves nor rejects. Give the restore
+// a moment, then let the save go ahead regardless.
+export const RESTORE_WAIT_MS = 3000;
+
+async function settleWithin(promise, ms) {
+  let timer;
+  const timeout = new Promise((resolve) => { timer = setTimeout(resolve, ms); });
+  try {
+    await Promise.race([Promise.resolve(promise).catch(() => {}), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function injectionResult(results) {
   return results?.[0]?.result;
 }
@@ -391,7 +406,9 @@ export async function captureFullPage(tab, deps = {}) {
     };
   } finally {
     if (prepared) {
-      try { await executeScript({ target, func: restorePageAfterCapture }); } catch { /* navigation/restricted page */ }
+      let restoring = null;
+      try { restoring = executeScript({ target, func: restorePageAfterCapture }); } catch { /* navigation/restricted page */ }
+      if (restoring) await settleWithin(restoring, deps.restoreWaitMs ?? RESTORE_WAIT_MS);
     }
   }
 }
