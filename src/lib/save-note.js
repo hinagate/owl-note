@@ -64,6 +64,7 @@ export async function saveNote(note, folderId, existingBookmarkId, offload = off
     // Over the bookmark sync cap. When Drive sync is on, offload the WHOLE note to Drive
     // and keep a small stub bookmark; otherwise fall back to device-local (today's behavior).
     let big = null;
+    let driveFailed = false;
     try {
       big = await bigNote(content, payload, prevFileId);
     } catch (err) {
@@ -73,6 +74,7 @@ export async function saveNote(note, folderId, existingBookmarkId, offload = off
       // is no reason to take a note off every other device.
       if (existingBookmarkId) throw err;
       console.warn('[owl-note] Drive note offload failed — note kept device-local:', err);
+      driveFailed = true; // callers must not report this as synced, or as merely too large
     }
     if (big) {
       const stubPayload = await encode(big.stub, encodeOpts);
@@ -84,7 +86,7 @@ export async function saveNote(note, folderId, existingBookmarkId, offload = off
     } else {
       if (existingBookmarkId) await bm.deleteNote(existingBookmarkId);
       await mirror.saveBackup(completeNote, { folderId, localOnly: true });
-      result = { bookmarkId: null, status: 'capped' };
+      result = { bookmarkId: null, status: 'capped', ...(driveFailed ? { driveFailed: true } : {}) };
     }
   } else {
     // Fits in a bookmark. If it had been Drive-backed and shrank, clean up the Drive body.
@@ -98,7 +100,26 @@ export async function saveNote(note, folderId, existingBookmarkId, offload = off
 
   // Delete the Drive files of attachments the user removed from this note — but only if no
   // other note still references the same (content-hash-deduped) file.
+  //
+  // The note is saved by now, and this pass also works through cleanup left over from
+  // earlier saves, which can mean any number of downloads. So the save waits only a
+  // moment for it: the pass checkpoints its work before touching Drive and carries on in
+  // the background, and whatever it does not finish is retried on a later save or launch.
   const stillHere = new Set(attachmentFileIds(content));
-  await deleteUnreferencedFiles(prevAtt.filter((f) => !stillHere.has(f)));
+  const cleanup = deleteUnreferencedFiles(prevAtt.filter((f) => !stillHere.has(f)))
+    .catch((err) => { console.warn('[owl-note] Drive cleanup after save failed:', err); });
+  await settleWithin(cleanup, CLEANUP_WAIT_MS);
   return { ...result, note: completeNote };
+}
+
+export const CLEANUP_WAIT_MS = 30_000;
+
+async function settleWithin(promise, ms) {
+  let timer;
+  const timeout = new Promise((resolve) => { timer = setTimeout(resolve, ms); });
+  try {
+    await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }

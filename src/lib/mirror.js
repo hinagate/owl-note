@@ -1,4 +1,6 @@
 // src/lib/mirror.js
+import { deflatedLength } from './codec.js';
+
 const KEY = (id) => `note:${id}`;
 
 export async function saveBackup(note, opts = {}) {
@@ -55,55 +57,102 @@ export async function allLocalOnly() {
     .map((e) => ({ ...e.current, folderId: e.folderId }));
 }
 
-// A save cut off before its bookmark existed — the service worker stopped during a slow
-// Drive upload — leaves the new note's first copy complete, full-size, and listed nowhere.
+// A save cut off before its bookmark existed — the service worker stopped mid-upload, a
+// browser crash — leaves the new note's first copy complete, full-size, and listed nowhere.
 //
-// Saves now mark that copy `pending` (see saveBackup). It counts as abandoned only once
-// it is older than any live save can run: every Drive request has a deadline and the
-// worker's keep-alive gives up at 20 minutes, so 30 is safely past both. Filing a copy
-// whose save is still running would let the user edit it into a duplicate.
-export const PENDING_GRACE_MS = 30 * 60_000;
+// Saves mark that copy `pending` (see saveBackup). When the service worker knows the
+// saving worker died, it files the note at once (fileAbandonedSave). Otherwise a pending
+// copy counts as abandoned only once it is older than any live save can run: the slowest
+// bounded save takes about 50 minutes and the worker's keep-alive gives up at 60, so 90
+// is safely past both. Filing a copy whose save is still running would let the user
+// edit it into a duplicate.
+export const PENDING_GRACE_MS = 90 * 60_000;
 
-// Copies from before the marker existed get a stricter test, because nothing records
-// their intent. A note synced in from another device arrives through a bookmark, so it
-// can carry no more inline bytes than a bookmark holds; an already-compressed image
-// (JPEG/PNG/WebP/GIF data does not deflate further) larger than `minInlineChars`
-// therefore proves the copy was made on this device. `previous: null` means the save
-// that wrote it never reached its second write, and no folder means nothing filed it.
-const PRECOMPRESSED_IMAGE = /^data:image\/(?:jpeg|png|webp|gif);base64,/i;
+// Copies stranded before the marker existed carry no record of intent, so they must
+// prove they were made on this device. A note synced in from another device arrived
+// through a bookmark, and no build ever wrote a bookmark payload over 64 KB (sync drops
+// anything past about 8 KB), so a note that deflates to four times that cannot have come
+// from another device. The length of a data URI proves nothing: a blank or half-painted
+// page captures as a JPEG that deflates twentyfold and syncs as an ordinary bookmark.
+export const LEGACY_MIN_DEFLATED_BYTES = 4 * 65536;
+const INLINE_IMAGE = /^data:image\//i;
 
-export function isStrandedCopy(entry, { minInlineChars, now = Date.now(), graceMs = PENDING_GRACE_MS } = {}) {
-  if (!entry || entry.localOnly || !entry.current || !entry.current.id) return false;
-  if (entry.pending) return now - (Number(entry.pending.at) || 0) > graceMs;
-  if (entry.folderId != null || entry.previous !== null) return false;
-  return (entry.current.attachments || []).some((a) => typeof a?.dataUri === 'string'
-    && a.dataUri.length > minInlineChars && PRECOMPRESSED_IMAGE.test(a.dataUri));
+const withoutPending = ({ pending, ...rest }) => rest;
+
+// The cheap test: 'pending', 'legacy', or null. A legacy match must still prove its size.
+export function strandedKind(entry, { now = Date.now(), graceMs = PENDING_GRACE_MS } = {}) {
+  if (!entry || entry.localOnly || !entry.current || !entry.current.id) return null;
+  if (entry.pending) return now - (Number(entry.pending.at) || 0) > graceMs ? 'pending' : null;
+  if (entry.folderId != null || entry.previous !== null) return null;
+  const hasImage = (entry.current.attachments || []).some((a) => typeof a?.dataUri === 'string' && INLINE_IMAGE.test(a.dataUri));
+  return hasImage ? 'legacy' : null;
+}
+
+async function madeOnThisDevice(note, minDeflatedBytes) {
+  return (await deflatedLength(JSON.stringify(note))) > minDeflatedBytes;
+}
+
+// Recovery writes only after slow work (reading every bookmark), and anything that saved
+// the entry in the meantime owns it now. Write only if it is still the copy judged.
+function unchanged(fresh, judged) {
+  if (!fresh || fresh.localOnly) return false;
+  if (judged.pending) return fresh.pending?.at === judged.pending.at;
+  return !fresh.pending && fresh.previous === null && fresh.folderId == null
+    && fresh.current?.updated === judged.current.updated && fresh.current?.version === judged.current.version;
 }
 
 // File every stranded copy as a device-local note. `folderFor(pendingFolderId)` picks
 // its notebook (the one it was being saved to, when that still exists). A copy whose
 // bookmark DID get made lost only its last write: it is already listed, so it just
 // sheds the marker. `bookmarkedIds` is only asked for when there is a candidate, since
-// listing it means reading every bookmark. Returns how many notes came back.
-export async function recoverStrandedNotes({ folderFor, bookmarkedIds, minInlineChars, now = Date.now(), graceMs = PENDING_GRACE_MS }) {
+// listing it means reading every bookmark. Legacy copies are only considered when
+// `includeLegacy` is set: saves no longer create them, so one pass finds them all.
+// Returns how many notes came back.
+export async function recoverStrandedNotes({
+  folderFor, bookmarkedIds, includeLegacy = false, minDeflatedBytes = LEGACY_MIN_DEFLATED_BYTES,
+  now = Date.now(), graceMs = PENDING_GRACE_MS,
+}) {
   const all = await chrome.storage.local.get(null);
-  const candidates = Object.entries(all)
-    .filter(([k, e]) => k.startsWith('note:') && isStrandedCopy(e, { minInlineChars, now, graceMs }));
+  const candidates = [];
+  for (const [k, e] of Object.entries(all)) {
+    if (!k.startsWith('note:')) continue;
+    const kind = strandedKind(e, { now, graceMs });
+    if (kind === 'pending' || (kind === 'legacy' && includeLegacy && await madeOnThisDevice(e.current, minDeflatedBytes))) {
+      candidates.push([k, e]);
+    }
+  }
   if (!candidates.length) return 0;
   const listed = await bookmarkedIds();
-  const updates = {};
   let recovered = 0;
   for (const [k, e] of candidates) {
-    const { pending, ...rest } = e;
-    if (listed.has(e.current.id)) {
-      if (pending) updates[k] = rest;
-      continue;
-    }
-    updates[k] = { ...rest, folderId: await folderFor(pending?.folderId), localOnly: true };
-    recovered += 1;
+    const isListed = listed.has(e.current.id);
+    if (isListed && !e.pending) continue;
+    const next = isListed
+      ? withoutPending(e)
+      : { ...withoutPending(e), folderId: await folderFor(e.pending?.folderId), localOnly: true };
+    const fresh = (await chrome.storage.local.get(k))[k];
+    if (!unchanged(fresh, e)) continue;
+    await chrome.storage.local.set({ [k]: next });
+    if (!isListed) recovered += 1;
   }
-  if (Object.keys(updates).length) await chrome.storage.local.set(updates);
   return recovered;
+}
+
+// The worker that was saving `id` is known to be gone (its capture marker outlived it),
+// so this copy needs no grace period: nothing else is saving a note no list has shown.
+// Returns true if the note was filed as device-local.
+export async function fileAbandonedSave(id, { bookmarkedIds, folderFor }) {
+  const k = KEY(id);
+  const entry = (await chrome.storage.local.get(k))[k];
+  if (!entry || !entry.pending || entry.localOnly) return false;
+  const isListed = (await bookmarkedIds()).has(id);
+  const next = isListed
+    ? withoutPending(entry)
+    : { ...withoutPending(entry), folderId: await folderFor(entry.pending.folderId), localOnly: true };
+  const fresh = (await chrome.storage.local.get(k))[k];
+  if (!unchanged(fresh, entry)) return false;
+  await chrome.storage.local.set({ [k]: next });
+  return !isListed;
 }
 
 export async function isLocalOnly(id) {

@@ -44,6 +44,7 @@ describe('saveNote — a save cut off part-way', () => {
     const note = createNote({ title: 'Big', body: bigBody() });
     const res = await saveNote(note, root, undefined, identity, async () => null);
     expect(res.status).toBe('capped');
+    expect(res.driveFailed).toBeUndefined(); // Drive off is not a failure
     const entry = await mirror.getBackup(note.id);
     expect(entry.pending).toBeUndefined();
     expect(entry).toMatchObject({ localOnly: true, folderId: root });
@@ -63,6 +64,7 @@ describe('saveNote — a save cut off part-way', () => {
     const note = createNote({ title: 'Big', body: bigBody() });
     const res = await saveNote(note, root, undefined, identity, async () => { throw new Error('Drive request timed out'); });
     expect(res.status).toBe('capped');
+    expect(res.driveFailed).toBe(true); // so callers say "upload failed", not "synced" or "too large"
     expect(await bm.listNotes(root)).toHaveLength(0);
     expect(await mirror.localOnlyBackups(root)).toEqual([expect.objectContaining({ id: note.id })]);
   });

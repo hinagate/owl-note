@@ -1,6 +1,6 @@
 import { getAccessToken } from './auth.js';
 import { DRIVE_FILES_URL, DRIVE_UPLOAD_URL, ATTACH_FOLDER_NAME, MAX_ATTACH_BYTES } from './config.js';
-import { DRIVE_REQUEST_TIMEOUT_MS, DRIVE_DOWNLOAD_TIMEOUT_MS, uploadTimeoutMs, fetchWithDeadline } from './deadline.js';
+import { DRIVE_REQUEST_TIMEOUT_MS, uploadTimeoutMs, fetchWithDeadline, downloadWithStallDeadline } from './deadline.js';
 
 const FOLDER_KEY = 'drive:folderId';
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
@@ -63,8 +63,8 @@ export async function uploadFile({ name, mime, bytes, hash }) {
 }
 
 export async function getMedia(fileId) {
-  const res = await authedFetch(`${DRIVE_FILES_URL}/${fileId}?alt=media`, { timeoutMs: DRIVE_DOWNLOAD_TIMEOUT_MS });
-  return new Uint8Array(await res.arrayBuffer());
+  const token = await getAccessToken();
+  return downloadWithStallDeadline(`${DRIVE_FILES_URL}/${fileId}?alt=media`, { headers: { Authorization: `Bearer ${token}` } });
 }
 
 // Overwrite an existing file's bytes (simple media update). Returns the fileId.

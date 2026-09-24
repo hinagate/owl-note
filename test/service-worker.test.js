@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { installFakeChrome } from './helpers/fake-chrome.js';
 import * as sw from '../src/background/service-worker.js';
 import * as bm from '../src/lib/bookmarks.js';
@@ -359,5 +359,116 @@ describe('service worker — interrupted captures', () => {
     expect(badges).toEqual(['!']);
     expect(await chrome.storage.session.get(null)).toEqual({});
     expect(await sw.clearInterruptedCaptures()).toBe(false); // handled once
+  });
+});
+
+describe('service worker — every capture is kept awake, tracked and never left at 99%', () => {
+  const captured = { dataUri: 'data:image/jpeg;base64,AQID', mime: 'image/jpeg', width: 1, height: 1 };
+  const fullPage = { menuItemId: 'owl-capture-full-page', pageUrl: 'https://example.com/' };
+  const smartPage = { menuItemId: 'owl-capture-smart-page', pageUrl: 'https://example.com/' };
+  const selection = { menuItemId: 'owl-save-selection', selectionText: 'quoted', pageUrl: 'https://example.com/' };
+  const tab = { id: 17, windowId: 2, title: 'Page', url: 'https://example.com/' };
+
+  afterEach(() => { vi.useRealTimers(); });
+
+  function recordBadges(chrome) {
+    const badges = [];
+    chrome.action.setBadgeText = async ({ text }) => { badges.push(text); };
+    return badges;
+  }
+
+  // Chrome stops a worker 30 s after its last extension call; a pending upload does not
+  // count. Each handler must ping while its work is outstanding.
+  for (const [name, info, finish] of [
+    ['full-page capture', fullPage, captured],
+    ['smart page capture', smartPage, { markdown: 'text', attachments: [] }],
+    ['selection save', selection, { markdown: 'text', attachments: [] }],
+  ]) {
+    it(`keeps the worker awake during a ${name}`, async () => {
+      const chrome = installFakeChrome({ session: true });
+      chrome.runtime.getPlatformInfo = vi.fn(async () => ({}));
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+      let release;
+      const handler = info === fullPage ? sw.handleCaptureFullPage : info === smartPage ? sw.handleCaptureSmartPage : sw.handleSaveSelection;
+      const running = handler(info, tab, () => new Promise((resolve) => { release = resolve; }));
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect(chrome.runtime.getPlatformInfo.mock.calls.length).toBeGreaterThanOrEqual(2);
+      release(finish);
+      await running;
+      const after = chrome.runtime.getPlatformInfo.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect(chrome.runtime.getPlatformInfo.mock.calls.length).toBe(after); // stops once saved
+    });
+  }
+
+  it('records the capture\'s note id in its marker, for a worker that finds it orphaned', async () => {
+    const chrome = installFakeChrome({ session: true });
+    const marks = [];
+    const set = chrome.storage.session.set.bind(chrome.storage.session);
+    chrome.storage.session.set = async (obj) => { marks.push(...Object.values(obj)); return set(obj); };
+    const { note } = await sw.handleCaptureFullPage(fullPage, tab, async () => captured);
+    expect(marks.map((m) => m.noteId)).toContain(note.id);
+  });
+
+  it('tracks a selection save like a page capture, and flashes "!" when it fails', async () => {
+    const chrome = installFakeChrome({ session: true });
+    const badges = recordBadges(chrome);
+    let release;
+    const running = sw.handleSaveSelection(selection, tab, () => new Promise((resolve) => { release = resolve; }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(Object.keys(await chrome.storage.session.get(null))).toHaveLength(1);
+    release({ markdown: 'text', attachments: [] });
+    await running;
+    expect(badges.slice(-2)).toEqual(['…', '✓']);
+    expect(await chrome.storage.session.get(null)).toEqual({});
+
+    await sw.handleSaveSelection(selection, tab, async () => { throw new Error('page went away'); });
+    expect(badges.at(-1)).toBe('!');
+    expect(await chrome.storage.session.get(null)).toEqual({});
+  });
+
+  it('never lets an old "!" clear blank a newer capture\'s progress', async () => {
+    const chrome = installFakeChrome({ session: true });
+    const badges = recordBadges(chrome);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    await sw.handleCaptureFullPage(fullPage, tab, async () => { throw new Error('tab closed'); });
+    expect(badges.at(-1)).toBe('!');
+    let release;
+    const running = sw.handleCaptureFullPage(fullPage, tab, async (_tab, { onProgress }) => {
+      await onProgress({ completed: 3, total: 16 });
+      return new Promise((resolve) => { release = resolve; });
+    });
+    await vi.advanceTimersByTimeAsync(9000); // past the failed capture's 8 s clear
+    expect(badges.at(-1)).toBe('19%');
+    release(captured);
+    await running;
+  });
+
+  it('does not paint "!" over a capture this worker is running', async () => {
+    const chrome = installFakeChrome({ session: true });
+    let release;
+    const running = sw.handleCaptureFullPage(fullPage, tab, () => new Promise((resolve) => { release = resolve; }));
+    await new Promise((r) => setTimeout(r, 0));
+    await chrome.storage.session.set({ 'owl:captureInflight:gone:1': { instance: 'gone', at: 1 } });
+    const badges = recordBadges(chrome);
+    expect(await sw.clearInterruptedCaptures()).toBe(true);
+    expect(badges).toEqual([]);
+    release(captured);
+    await running;
+  });
+
+  it('files the interrupted capture\'s note at once, instead of leaving it hidden', async () => {
+    const chrome = installFakeChrome({ session: true });
+    const root = await bm.ensureRoot();
+    await chrome.storage.local.set({
+      'note:N1': { current: { id: 'N1', title: 'Page', body: 'x', attachments: [] }, previous: null, localOnly: false, pending: { folderId: root, at: Date.now() } },
+    });
+    await chrome.storage.session.set({ 'owl:captureInflight:gone:1': { instance: 'gone', at: 1, noteId: 'N1' } });
+    const titles = [];
+    chrome.action.setTitle = async ({ title }) => { titles.push(title); };
+
+    expect(await sw.clearInterruptedCaptures()).toBe(true);
+    expect(await getBackup('N1')).toMatchObject({ localOnly: true, folderId: root });
+    expect(titles.at(-1)).toMatch(/saved on this device only/);
   });
 });

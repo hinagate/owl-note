@@ -151,6 +151,11 @@ async function decodeOuter(payload) {
   return JSON.parse(await inflateRaw(base64urlToBytes(payload)));
 }
 
+// How many bytes `text` deflates to: the size it would occupy in a bookmark payload.
+export async function deflatedLength(text) {
+  return (await deflateRaw(String(text))).length;
+}
+
 // The note's id without decrypting it: the envelope keeps `id` in the clear for older
 // builds, and a legacy plaintext payload is the note itself. Cheap enough to run over
 // every bookmark, and it works for notes whose key this installation does not hold.

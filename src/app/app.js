@@ -1,6 +1,7 @@
 import * as bm from '../lib/bookmarks.js';
 import * as mirror from '../lib/mirror.js';
-import { encode, decode, selfTest, noteIdOf } from '../lib/codec.js';
+import { encode, decode, selfTest } from '../lib/codec.js';
+import { bookmarkedNoteIds, liveFolderOr } from '../lib/stranded.js';
 import { isMissingKeyError, reconcileKeyring, watchKeyChanges, importKeyring, exportKeyring } from '../lib/note-key.js';
 import { createNote, withUpdatedContent, contentHash, extractTitle, withPinned, orderNotes } from '../lib/note.js';
 import { renderSidebar } from './sidebar.js';
@@ -183,37 +184,19 @@ export async function toggleDriveSync(checked) {
 }
 
 // Bring back notes an interrupted save left in storage that no list reads (see
-// mirror.recoverStrandedNotes).
-async function bookmarkedNoteIds(rootId) {
-  const ids = new Set();
-  for (const r of await bm.allNotes(rootId)) {
-    try {
-      const id = await noteIdOf(r.payload);
-      if (id) ids.add(id);
-    } catch { /* a malformed payload names no note */ }
-  }
-  return ids;
-}
-
-// The notebook the save was headed for, if the user has not deleted it since.
-async function liveFolderOr(rootId, folderId) {
-  if (!folderId) return rootId;
-  try {
-    const [node] = await chrome.bookmarks.get(folderId);
-    return node && !node.url ? folderId : rootId;
-  } catch {
-    return rootId;
-  }
-}
+// mirror.recoverStrandedNotes). Copies stranded the old way, with no pending marker, can
+// no longer be created, so the pass that looks for them runs once per installation.
+const LEGACY_SWEEP_KEY = 'owl:strandedLegacySweepV1';
 
 export async function recoverStrandedCaptures(rootId = ui.rootId) {
-  return mirror.recoverStrandedNotes({
+  const includeLegacy = !(await chrome.storage.local.get(LEGACY_SWEEP_KEY))[LEGACY_SWEEP_KEY];
+  const recovered = await mirror.recoverStrandedNotes({
     folderFor: (folderId) => liveFolderOr(rootId, folderId),
     bookmarkedIds: () => bookmarkedNoteIds(rootId),
-    // Twice the bookmark sync cap: a compressed image this large cannot have arrived
-    // through a synced bookmark, so it was captured on this device.
-    minInlineChars: 2 * MAX_URL_BYTES,
+    includeLegacy,
   });
+  if (includeLegacy) await chrome.storage.local.set({ [LEGACY_SWEEP_KEY]: Date.now() });
+  return recovered;
 }
 
 // When Drive sync is (re)enabled, push every note kept device-local while sync was off up to
@@ -224,8 +207,10 @@ export async function reconcileLocalToDrive(save = saveNote) {
   for (const note of await mirror.allLocalOnly()) {
     const { folderId, ...clean } = note;
     try {
-      await save(clean, folderId ?? ui.rootId, undefined);
-      synced += 1;
+      // A failed Drive upload no longer throws for a note like this — saveNote keeps it
+      // device-local and says so with 'capped' — so count only what actually synced.
+      const res = await save(clean, folderId ?? ui.rootId, undefined);
+      if (res?.status !== 'capped') synced += 1;
     } catch { /* leave it local-only; retried on the next re-enable */ }
   }
   return synced;
@@ -1536,7 +1521,8 @@ function renderCurrentEditor(opts = {}) {
       // Auto-saves stay quiet — the editor's inline status confirms them and the size
       // meter already flags oversized notes. Only manual saves pop a toast.
       if (!auto) {
-        if (res.status === 'capped') toast('Too large to sync — saved locally only', true);
+        if (res.driveFailed) toast("Couldn't upload to Google Drive — saved on this device only", true);
+        else if (res.status === 'capped') toast('Too large to sync — saved locally only', true);
         else if (res.status === 'synced') toast('Saved — large note synced via Drive');
         else if (res.status === 'warn') toast('Large note — may not sync across devices', true);
         else toast('Saved');
@@ -1762,7 +1748,8 @@ export async function togglePin(handle) {
   const updated = withPinned(clean, !note.pinned);
   const folder = folderId ?? ui.activeFolder;
   const res = await saveNote(updated, folder, bookmarkId ?? undefined);
-  if (res.status === 'capped') toast('Too large to sync — saved locally only', true);
+  if (res.driveFailed) toast("Couldn't upload to Google Drive — saved on this device only", true);
+  else if (res.status === 'capped') toast('Too large to sync — saved locally only', true);
   if (ui.current && ui.current.id === note.id) ui.current.pinned = updated.pinned;
   await refreshNoteList();
 }
@@ -2279,14 +2266,17 @@ export async function boot() {
   watchKeyChanges(() => { refreshPanes().catch(() => {}); });
   const root = await bm.ensureRoot();
   await initUI(root);
-  // After the first paint: the sweep reads all of storage, and boot must not wait on it.
-  // It runs on every launch because a save can be cut off at any time (browser crash,
-  // worker killed), and a marked copy only becomes recoverable 30 minutes on.
-  recoverStrandedCaptures(root)
+  // After the first paint, and after the Ask index's own full read of storage, so the two
+  // never hold every note in memory at once. It runs on every launch because a save can be
+  // cut off at any time (a browser crash), and a marked copy only becomes recoverable 90
+  // minutes on; the service worker files the captures it knows were interrupted at once.
+  Promise.resolve(ui.indexReady)
+    .then(() => recoverStrandedCaptures(root))
     .then((count) => {
       if (!count) return;
       toast(`Recovered ${count} capture${count === 1 ? '' : 's'} that did not finish saving`);
-      refreshPanes().catch(() => {});
+      // The live refresh re-lists AND rebuilds the Ask index, so Ask can find them too.
+      liveRefreshNoteList().catch(() => {});
     })
     .catch((e) => { console.warn('[owl-note] Recovering unfinished saves failed:', e); });
 }

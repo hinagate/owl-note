@@ -10,7 +10,8 @@ import { decode } from '../lib/codec.js';
 import { captureFullPage } from '../lib/full-page-capture.js';
 import { captureSmartPage } from '../lib/smart-page-capture.js';
 import { captureSmartSelection } from '../lib/smart-selection-capture.js';
-import { saveBackup } from '../lib/mirror.js';
+import { saveBackup, fileAbandonedSave } from '../lib/mirror.js';
+import { bookmarkedNoteIds, liveFolderOr } from '../lib/stranded.js';
 import { contentHash, createNote } from '../lib/note.js';
 import { saveNote } from '../lib/save-note.js';
 import { buildQuickNote } from '../lib/quick-note.js';
@@ -37,6 +38,11 @@ const APP_TAB_KEY = 'owl:appTab';
 const WORKER_INSTANCE = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
 const CAPTURE_INFLIGHT_PREFIX = 'owl:captureInflight:';
 let captureSeq = 0;
+let activeCaptures = 0;
+
+// Every badge write takes a turn. The delayed clear after "!" or "✓" only runs if nothing
+// has written the badge since; otherwise it would blank a newer capture's progress.
+let badgeTurn = 0;
 // A one-shot signal the app tab watches (chrome.storage.onChanged): after a capture it
 // jumps to All notes (root) so the new note shows on top. Carries {id, at} — a fresh
 // timestamp each time so back-to-back captures always register as a change.
@@ -71,30 +77,42 @@ export async function captureRichSelection(info, tab, capture = captureSmartSele
 // bring OWL-Note to the front so the capture is immediately visible on top of All notes.
 export async function handleSaveSelection(info, tab, capture = captureRichSelection) {
   if (info.menuItemId !== SAVE_SELECTION_ID) return;
-  // A selection can carry images, and saving one uploads them to Drive like any capture.
-  await withKeepAlive(() => saveSelection(info, tab, capture));
+  // A selection with images shows the same progress badge as a page capture and uploads
+  // them to Drive, so it gets the same tracking: kept awake, marked as under way, a
+  // "saving" badge, and a failure badge instead of a "99%" that never changes.
+  await trackCapture((noteCreated) => saveSelection(info, tab, capture, noteCreated));
 }
 
-async function saveSelection(info, tab, capture) {
-  const selection = (info.selectionText || '').trim();
-  const url = info.pageUrl || (tab && tab.url) || '';
-  const title = (tab && tab.title) || ''; // best-effort; no `tabs` permission required
-  const rich = await capture(info, tab);
-  if (!selection && !rich?.markdown?.trim()) return;
-  const { title: noteTitle, body } = buildQuickNote({
-    title: rich?.title || title,
-    url,
-    selection,
-    selectionMarkdown: rich?.markdown || '',
-  });
-  const note = createNote({ title: noteTitle, body, attachments: rich?.attachments || [] });
-  const root = await ensureRoot();
-  await saveNote(note, root, undefined);
-  // Signal the (possibly already-open) app tab to reveal it, THEN focus/open the tab.
-  // Written first so an open tab reacts as it comes forward; best-effort, never fatal.
-  await signalQuickCapture(note, { openNote: true });
-  await focusOrOpenApp();
-  await flashSaved();
+async function saveSelection(info, tab, capture, noteCreated) {
+  try {
+    const selection = (info.selectionText || '').trim();
+    const url = info.pageUrl || (tab && tab.url) || '';
+    const title = (tab && tab.title) || ''; // best-effort; no `tabs` permission required
+    const rich = await capture(info, tab);
+    if (!selection && !rich?.markdown?.trim()) {
+      await clearCaptureBadge(); // the rich capture may have shown progress
+      return;
+    }
+    await showCaptureSaving();
+    const { title: noteTitle, body } = buildQuickNote({
+      title: rich?.title || title,
+      url,
+      selection,
+      selectionMarkdown: rich?.markdown || '',
+    });
+    const note = createNote({ title: noteTitle, body, attachments: rich?.attachments || [] });
+    await noteCreated(note.id);
+    const root = await ensureRoot();
+    await saveNote(note, root, undefined);
+    // Signal the (possibly already-open) app tab to reveal it, THEN focus/open the tab.
+    // Written first so an open tab reacts as it comes forward; best-effort, never fatal.
+    await signalQuickCapture(note, { openNote: true });
+    await focusOrOpenApp();
+    await flashSaved();
+  } catch (error) {
+    console.warn('[owl-note] Saving the selection failed:', error);
+    await flashCaptureError(error);
+  }
 }
 
 function cleanCaptureTitle(value) {
@@ -122,6 +140,7 @@ async function signalQuickCapture(note, { openNote = false } = {}) {
 }
 
 async function showCaptureProgress({ completed = 0, total = 1 } = {}) {
+  badgeTurn += 1;
   try {
     const percent = Math.min(99, Math.round((completed / Math.max(1, total)) * 100));
     await chrome.action?.setBadgeText?.({ text: `${percent}%` });
@@ -133,6 +152,7 @@ async function showCaptureProgress({ completed = 0, total = 1 } = {}) {
 // The tiles are in; what remains is the save, which can take minutes when a large capture
 // uploads to Drive. Say so, rather than leave "99%" looking stuck.
 async function showCaptureSaving() {
+  badgeTurn += 1;
   try {
     await chrome.action?.setBadgeText?.({ text: '…' });
     await chrome.action?.setBadgeBackgroundColor?.({ color: '#3567c8' });
@@ -140,37 +160,79 @@ async function showCaptureSaving() {
   } catch { /* progress is cosmetic */ }
 }
 
+async function clearCaptureBadge() {
+  badgeTurn += 1;
+  try {
+    await chrome.action?.setBadgeText?.({ text: '' });
+    await chrome.action?.setTitle?.({ title: 'Open OWL-Note' });
+  } catch { /* badge is cosmetic */ }
+}
+
 // Run a capture with the worker kept alive and a marker recording that it is under way.
+// The capture hands over its note's id once it has one (`noteCreated`), so a worker that
+// finds this marker orphaned can file that exact note instead of leaving it hidden.
 async function trackCapture(work) {
   const store = globalThis.chrome?.storage?.session;
   const key = `${CAPTURE_INFLIGHT_PREFIX}${WORKER_INSTANCE}:${++captureSeq}`;
-  try { await store?.set?.({ [key]: { instance: WORKER_INSTANCE, at: Date.now() } }); } catch { /* best-effort */ }
+  const at = Date.now();
+  const mark = async (extra) => {
+    try { await store?.set?.({ [key]: { instance: WORKER_INSTANCE, at, ...extra } }); } catch { /* best-effort */ }
+  };
+  await mark();
+  activeCaptures += 1;
   try {
-    return await withKeepAlive(work);
+    return await withKeepAlive(() => work((noteId) => mark({ noteId })));
   } finally {
+    activeCaptures -= 1;
     try { await store?.remove?.(key); } catch { /* best-effort */ }
   }
 }
 
+// A marker left by another worker means that worker was stopped mid-capture. Its note,
+// if it got that far, is known dead and is filed as device-local now rather than after
+// the app's grace period; then the stale "99%" is replaced.
 export async function clearInterruptedCaptures() {
   const store = globalThis.chrome?.storage?.session;
   if (!store?.get) return false;
   const all = await store.get(null);
-  const stale = Object.keys(all || {})
-    .filter((k) => k.startsWith(CAPTURE_INFLIGHT_PREFIX) && all[k]?.instance !== WORKER_INSTANCE);
+  const stale = Object.entries(all || {})
+    .filter(([k, v]) => k.startsWith(CAPTURE_INFLIGHT_PREFIX) && v?.instance !== WORKER_INSTANCE);
   if (!stale.length) return false;
-  await store.remove(stale);
-  await flashCaptureError(new Error('The last capture stopped before it finished'));
+  await store.remove(stale.map(([k]) => k));
+
+  let kept = 0;
+  const noteIds = stale.map(([, v]) => v?.noteId).filter(Boolean);
+  if (noteIds.length) {
+    try {
+      const root = await ensureRoot();
+      let listed = null;
+      const bookmarkedIds = async () => (listed ??= await bookmarkedNoteIds(root));
+      const folderFor = (folderId) => liveFolderOr(root, folderId);
+      for (const id of noteIds) {
+        if (await fileAbandonedSave(id, { bookmarkedIds, folderFor })) kept += 1;
+      }
+    } catch (error) {
+      console.warn('[owl-note] Could not file an interrupted capture; the app will retry:', error);
+    }
+  }
+  // A capture this worker is already running owns the badge; do not paint over it.
+  if (!activeCaptures) {
+    await flashCaptureError(new Error(kept
+      ? 'The last capture was interrupted, and is saved on this device only'
+      : 'The last capture stopped before it finished'));
+  }
   return true;
 }
 
 async function flashCaptureError(error) {
   const reason = String(error?.message || error || 'Capture failed').slice(0, 160);
+  const turn = ++badgeTurn;
   try {
     await chrome.action?.setBadgeText?.({ text: '!' });
     await chrome.action?.setBadgeBackgroundColor?.({ color: '#b3261e' });
     await chrome.action?.setTitle?.({ title: `OWL-Note — ${reason}` });
     setTimeout(() => {
+      if (turn !== badgeTurn) return;
       chrome.action?.setBadgeText?.({ text: '' });
       chrome.action?.setTitle?.({ title: 'Open OWL-Note' });
     }, 8000);
@@ -181,10 +243,10 @@ async function flashCaptureError(error) {
 // tab), stitch locally, then use the normal attachment and optional Drive path.
 export async function handleCaptureFullPage(info, tab, capture = captureFullPage) {
   if (info.menuItemId !== CAPTURE_FULL_PAGE_ID) return null;
-  return trackCapture(() => saveFullPageCapture(info, tab, capture));
+  return trackCapture((noteCreated) => saveFullPageCapture(info, tab, capture, noteCreated));
 }
 
-async function saveFullPageCapture(info, tab, capture) {
+async function saveFullPageCapture(info, tab, capture, noteCreated) {
   try {
     await showCaptureProgress({ completed: 0, total: 1 });
     const captured = await capture(tab, { onProgress: showCaptureProgress });
@@ -208,6 +270,7 @@ async function saveFullPageCapture(info, tab, capture) {
       selectionMarkdown: imageRef,
     });
     const note = createNote({ title, body, attachments: [attachment] });
+    await noteCreated(note.id);
     const root = await ensureRoot();
     const saved = await saveNote(note, root, undefined);
     // Unlike a clipped selection, a full-page screenshot is the user's explicit
@@ -228,10 +291,10 @@ async function saveFullPageCapture(info, tab, capture) {
 // can choose a faithful bitmap or a semantic note depending on what they need.
 export async function handleCaptureSmartPage(info, tab, capture = captureSmartPage) {
   if (info.menuItemId !== CAPTURE_SMART_PAGE_ID) return null;
-  return trackCapture(() => saveSmartPageCapture(info, tab, capture));
+  return trackCapture((noteCreated) => saveSmartPageCapture(info, tab, capture, noteCreated));
 }
 
-async function saveSmartPageCapture(info, tab, capture) {
+async function saveSmartPageCapture(info, tab, capture, noteCreated) {
   try {
     await showCaptureProgress({ completed: 0, total: 1 });
     const converted = await capture(tab, { onProgress: showCaptureProgress });
@@ -245,6 +308,7 @@ async function saveSmartPageCapture(info, tab, capture) {
       selectionMarkdown: converted.markdown,
     });
     const note = createNote({ title, body, attachments: converted.attachments || [] });
+    await noteCreated(note.id);
     const root = await ensureRoot();
     const saved = await saveNote(note, root, undefined);
     await signalQuickCapture(note, { openNote: true });
@@ -837,11 +901,12 @@ export function handleRuntimeMessage(message, sender, sendResponse) {
 
 // Brief ✓ on the toolbar icon as save confirmation (best-effort; no extra permission).
 async function flashSaved() {
+  const turn = ++badgeTurn;
   try {
     await chrome.action?.setBadgeText?.({ text: '✓' });
     await chrome.action?.setBadgeBackgroundColor?.({ color: '#2e7d32' });
     await chrome.action?.setTitle?.({ title: 'Open OWL-Note' });
-    setTimeout(() => chrome.action?.setBadgeText?.({ text: '' }), 2000);
+    setTimeout(() => { if (turn === badgeTurn) chrome.action?.setBadgeText?.({ text: '' }); }, 2000);
   } catch { /* badge is cosmetic */ }
 }
 

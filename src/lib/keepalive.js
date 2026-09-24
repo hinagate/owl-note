@@ -6,10 +6,13 @@
 // Any extension API call resets the timer, so ping a cheap one while the work runs.
 export const KEEPALIVE_INTERVAL_MS = 20_000;
 
-// Every await on the save path now has its own deadline, so this ceiling should never be
-// reached. It exists so that one missed bound cannot pin the worker awake indefinitely:
-// past it the worker is allowed to stop, and the next one clears the stale badge.
-export const KEEPALIVE_MAX_MS = 20 * 60_000;
+// Every await on the save path has its own deadline, so this ceiling should never be
+// reached. The slowest save still bounded is a dead connection under an 18 MB capture:
+// its attachment upload (~20 min) and then its note-body upload (~27 min) each run to
+// their deadline, about 50 minutes with the metadata calls. The ceiling exists so that
+// one missed bound cannot pin the worker awake indefinitely: past it the worker is
+// allowed to stop, and the next one clears the stale badge and files the note.
+export const KEEPALIVE_MAX_MS = 60 * 60_000;
 
 function pingExtensionApi() {
   try {
