@@ -14,7 +14,8 @@
 //   code/pre/kbd/samp — source text, where a pronunciation is meaningless
 //   .katex            — math; annotating its glyphs would wreck the layout
 //   ruby              — already annotated; nesting ruby renders unpredictably
-const SKIP = 'code, pre, kbd, samp, .katex, ruby';
+//   .mermaid-diagram  — SVG text laid out to the pixel; HTML ruby inside it is invalid
+const SKIP = 'code, pre, kbd, samp, .katex, ruby, .mermaid-diagram';
 
 /**
  * @param {Element} root subtree to annotate, mutated in place

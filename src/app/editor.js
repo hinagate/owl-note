@@ -11,6 +11,7 @@ import { nextTableRow, renumberOrderedList } from '../lib/format.js';
 import { tableCellTarget, tableCellLineBreak, isTableCellSelection, alignTableAt } from '../lib/table.js';
 import { showDrawPanel } from './draw-panel.js';
 import { annotateRuby } from '../lib/ruby-annotate.js';
+import { decorateMermaid, diagramImageUrl } from '../lib/mermaid-render.js';
 import { officeClipboardMarkdown } from '../lib/office-clipboard.js';
 import { createZoomBar } from './preview-zoom.js';
 
@@ -649,9 +650,24 @@ export function renderEditor(
   }
 
   function openLightbox(img) {
-    lightboxOpener = img;
-    lightboxImage.src = img.currentSrc || img.src;
-    lightboxImage.alt = img.alt || 'Enlarged note image';
+    showInLightbox(img.currentSrc || img.src, img.alt || 'Enlarged note image', img);
+  }
+
+  // A diagram opens in the same viewer as a photo, as an image of itself sized to the
+  // window: the viewer's fit, zoom, pan and keyboard handling then all apply unchanged.
+  function openDiagramLightbox(box) {
+    const svg = box.querySelector('svg');
+    const src = svg && diagramImageUrl(svg, window.innerWidth * 0.94, window.innerHeight * 0.9);
+    if (src) showInLightbox(src, 'Enlarged diagram', box, { diagram: true });
+  }
+
+  function showInLightbox(src, alt, opener, { diagram = false } = {}) {
+    lightboxOpener = opener;
+    lightboxImage.src = src;
+    lightboxImage.alt = alt;
+    // Diagrams are drawn on a transparent background, which the dark backdrop would swallow.
+    lightboxImage.classList.toggle('diagram', diagram);
+    lightbox.setAttribute('aria-label', diagram ? 'Enlarged diagram' : 'Enlarged note image');
     lightboxImage.draggable = false;
     lightbox.hidden = false;
     lightboxPanX = 0;
@@ -679,18 +695,27 @@ export function renderEditor(
     }
   }
 
+  const ENLARGEABLE = 'img, .mermaid-diagram[role="button"]';
+  function openEnlargeable(target) {
+    if (target.matches('img')) openLightbox(target);
+    else openDiagramLightbox(target);
+  }
+
   content.addEventListener('click', (e) => {
-    const img = e.target.closest?.('img');
-    if (!img || !content.contains(img)) return;
+    const target = e.target.closest?.(ENLARGEABLE);
+    if (!target || !content.contains(target)) return;
+    // A diagram's labels are selectable text; finishing a drag-select over one is not
+    // a request to enlarge it.
+    if (!target.matches('img') && window.getSelection?.()?.isCollapsed === false) return;
     e.preventDefault();
     e.stopPropagation();
-    openLightbox(img);
+    openEnlargeable(target);
   });
   content.addEventListener('keydown', (e) => {
-    const img = e.target.closest?.('img');
-    if (!img || !content.contains(img) || (e.key !== 'Enter' && e.key !== ' ')) return;
+    const target = e.target.closest?.(ENLARGEABLE);
+    if (!target || !content.contains(target) || (e.key !== 'Enter' && e.key !== ' ')) return;
     e.preventDefault();
-    openLightbox(img);
+    openEnlargeable(target);
   });
 
   // The source range currently mirrored from a preview selection, or null.
@@ -1024,6 +1049,10 @@ export function renderEditor(
   }
 
   const refresh = () => {
+    // What each diagram showed before this rebuild: a diagram being typed into keeps
+    // that drawing until its new one is ready (decorateMermaid's `previous`).
+    const previousDiagrams = [...content.querySelectorAll('.mermaid-diagram')]
+      .map((box) => box.querySelector('svg')?.outerHTML ?? null);
     content.innerHTML = '';
     const t = titleInput.value.trim();
     if (t) { // always show the rendered title heading in the preview
@@ -1040,6 +1069,9 @@ export function renderEditor(
     const previewBody = withImagePlaceholders(inlineImages(ta.value, previewAttachments));
     bodyEl.innerHTML = renderMarkdown(linkifyFileRefs(previewBody)); // local images inline; remote images show progress until hydrated
     content.appendChild(bodyEl);
+    // Before the code-block decorators: a diagram replaces its code block. Not awaited —
+    // a diagram seen before appears at once, a new one fills in when it is ready.
+    decorateMermaid(content, { enlargeable: true, previous: previousDiagrams }).catch(() => {});
     decorateCodeBlocks(content);
     wireFileLinks(content);
     decoratePreviewImages(content);

@@ -1,4 +1,5 @@
 import { renderMarkdown } from './markdown.js';
+import { decorateMermaid } from './mermaid-render.js';
 import { inlineImagesAsync, linkifyFileRefs } from './note-images.js';
 import { getBytes } from './attachment-store.js';
 import { A4_PAGE_HEIGHT, A4_PAGE_WIDTH, createRasterPdf } from './raster-pdf.js';
@@ -120,6 +121,12 @@ export async function buildNotePdf(note, options = {}) {
   document.body.appendChild(host);
 
   try {
+    // Every diagram must be drawn before the page is photographed; a capture taken
+    // while one still says "Rendering diagram…" would print that instead.
+    await decorateMermaid(content);
+    // A broken diagram shows its source in a <pre> of its own, made after the wrapping
+    // above was applied; without it, long lines run off the page.
+    for (const pre of content.querySelectorAll('.mermaid-diagram pre')) pre.style.cssText += ';white-space:pre-wrap;overflow-wrap:anywhere';
     await document.fonts?.ready;
     await waitForImages(host);
     const pageWidth = A4_PAGE_WIDTH;

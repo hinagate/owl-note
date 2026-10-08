@@ -1,5 +1,6 @@
 import { build } from 'esbuild';
-import { cpSync, mkdirSync, existsSync, rmSync, readFileSync } from 'node:fs';
+import { cpSync, mkdirSync, existsSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { thirdPartyNotices } from './scripts/third-party-notices.mjs';
 import { writeIpaTable } from './scripts/build-ipa-dict.mjs';
 import { writeKanaTable } from './scripts/build-kana-dict.mjs';
 import { writePinyinTable } from './scripts/build-pinyin-dict.mjs';
@@ -131,5 +132,22 @@ if (existsSync(mammothBrowser)) cpSync(mammothBrowser, 'dist/mammoth.browser.min
 const html2canvasBrowser = 'node_modules/html2canvas/dist/html2canvas.min.js';
 if (existsSync(html2canvasBrowser)) cpSync(html2canvasBrowser, 'dist/html2canvas.min.js');
 else throw new Error(`Missing html2canvas browser artifact: ${html2canvasBrowser}`);
+
+// Mermaid diagrams follow the same rule, using Mermaid's official ES-module build: an
+// entry point plus one chunk per diagram type, copied byte-for-byte into dist/mermaid/
+// with their relative layout intact, so the entry's imports resolve. app.js imports it
+// on first use (src/lib/mermaid-render.js), so a note with no diagram never parses it.
+// Source maps stay behind: the release audit refuses them.
+const mermaidDist = 'node_modules/mermaid/dist';
+if (!existsSync(`${mermaidDist}/mermaid.esm.min.mjs`)) throw new Error(`Missing Mermaid ES-module build: ${mermaidDist}`);
+cpSync(`${mermaidDist}/mermaid.esm.min.mjs`, 'dist/mermaid/mermaid.esm.min.mjs');
+cpSync(`${mermaidDist}/chunks/mermaid.esm.min`, 'dist/mermaid/chunks/mermaid.esm.min', {
+  recursive: true,
+  filter: (src) => !src.endsWith('.map'),
+});
+// Mermaid's licence, and those of the code it bundles, must travel with the copy.
+const mermaidNotices = thirdPartyNotices(process.cwd(), 'mermaid');
+writeFileSync('dist/mermaid/THIRD_PARTY_NOTICES.txt', mermaidNotices.text);
+console.log(`Mermaid notices -> dist/mermaid/THIRD_PARTY_NOTICES.txt (${mermaidNotices.count} packages)`);
 
 console.log('Build complete -> dist/');

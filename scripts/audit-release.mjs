@@ -117,13 +117,41 @@ for (const path of [
   'html2canvas.min.js',
   'ort-wasm-simd-threaded.asyncify.mjs',
   'ort-wasm-simd-threaded.asyncify.wasm',
+  'mermaid/mermaid.esm.min.mjs',
 ]) assertPackaged(path, 'Required runtime file');
+
+// Mermaid ships as an entry plus a directory of chunks; every packaged chunk must be an
+// exact copy of one from the installed package, and none may be missing.
+const mermaidChunks = 'mermaid/chunks/mermaid.esm.min';
+const installedMermaidChunks = join(projectRoot, 'node_modules/mermaid/dist/chunks/mermaid.esm.min');
+const packagedMermaidChunks = join(releaseDir, mermaidChunks);
+// Without the installed package there is nothing to compare the packaged copy against,
+// and an unverifiable copy must not pass.
+if (!existsSync(installedMermaidChunks)) {
+  fail('node_modules/mermaid is not installed, so the packaged Mermaid cannot be verified (run npm ci)');
+} else {
+  const installed = readdirSync(installedMermaidChunks).filter((name) => !name.endsWith('.map')).sort();
+  const packaged = existsSync(packagedMermaidChunks) ? readdirSync(packagedMermaidChunks).sort() : [];
+  if (installed.join('\n') !== packaged.join('\n')) {
+    fail(`${mermaidChunks} does not match the installed Mermaid chunks (${packaged.length} packaged, ${installed.length} installed)`);
+  }
+  // The copy is only as reviewed as the version it came from.
+  const pinned = packageJson?.dependencies?.mermaid;
+  const installedVersion = readJson(join(projectRoot, 'node_modules/mermaid/package.json'), 'Installed Mermaid package.json')?.version;
+  if (pinned !== installedVersion) fail(`Installed Mermaid ${installedVersion} is not the pinned ${pinned}`);
+}
+assertPackaged('mermaid/THIRD_PARTY_NOTICES.txt', 'Mermaid licence notices');
 
 const exactVendorCopies = [
   ['mammoth.browser.min.js', 'node_modules/mammoth/mammoth.browser.min.js'],
   ['html2canvas.min.js', 'node_modules/html2canvas/dist/html2canvas.min.js'],
   ['ort-wasm-simd-threaded.asyncify.mjs', 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.mjs'],
   ['ort-wasm-simd-threaded.asyncify.wasm', 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.wasm'],
+  ['mermaid/mermaid.esm.min.mjs', 'node_modules/mermaid/dist/mermaid.esm.min.mjs'],
+  ...(existsSync(installedMermaidChunks)
+    ? readdirSync(installedMermaidChunks).filter((name) => !name.endsWith('.map'))
+      .map((name) => [`${mermaidChunks}/${name}`, `node_modules/mermaid/dist/chunks/mermaid.esm.min/${name}`])
+    : []),
 ];
 for (const [releasePath, sourcePath] of exactVendorCopies) {
   const packagedPath = join(releaseDir, releasePath);
@@ -156,6 +184,8 @@ const knownDocumentationUrls = new Set([
   'https://github.com/highlightjs/highlight.js',
   'https://github.com/huggingface/transformers.js',
   'https://huggingface.co/docs/transformers.js',
+  // A source-code citation in a comment inside Mermaid's bundled event handling.
+  'https://github.com/jquery/jquery/blob/master/src/event.js',
 ]);
 const remoteLoaderPatterns = [
   /\b(?:import|importScripts)\s*\(\s*["'`]https?:\/\//i,

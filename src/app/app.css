@@ -335,6 +335,21 @@ body.resizing { user-select: none; cursor: col-resize; }
 .copy-code:hover { background: #f1f3f5; color: var(--text); }
 .preview code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13.5px; }
 .preview :not(pre) > code { background: #f1f3f5; padding: 1px 5px; border-radius: 4px; }
+/* Mermaid diagrams (src/lib/mermaid-render.js) behave like photos: shrunk to fit the
+   preview column, and clicked to open full-window, where they can be zoomed and panned. */
+.mermaid-diagram { margin: 0 0 1em; text-align: center; }
+.mermaid-diagram svg { max-width: 100%; height: auto; }
+.mermaid-pending { padding: 12px 14px; border-radius: 8px; background: #f6f8fa; color: var(--muted); font-size: 13px; text-align: left; }
+/* Same cursor and focus ring as a photo. Labels are not selectable — a double-click on
+   one should enlarge the diagram, as it would a photo, not select a word. */
+.mermaid-diagram[role="button"] { cursor: zoom-in; border-radius: 6px; }
+.mermaid-diagram[role="button"] svg { user-select: none; }
+.mermaid-diagram[role="button"]:focus-visible { outline: 3px solid rgba(45, 190, 96, 0.4); outline-offset: 3px; }
+/* The last good drawing, kept while an edited diagram is being redrawn or is broken. */
+.mermaid-stale svg { display: block; margin: 0 auto; opacity: 0.45; }
+.mermaid-error, .mermaid-stale { text-align: left; }
+/* Mermaid's parse errors are multi-line, with a ----^ pointer under the bad spot. */
+.mermaid-error-message { margin-bottom: 6px; color: var(--danger); font-size: 13px; white-space: pre-wrap; font-family: ui-monospace, Menlo, Consolas, monospace; }
 
 .preview a { color: var(--accent-dark); }
 /* Embedded images (e.g. base64 photos imported from Evernote) are stored at their
@@ -375,6 +390,8 @@ body.resizing { user-select: none; cursor: col-resize; }
    containing it would leave the image too narrow to read on THIS viewport. */
 .image-lightbox-image.fit-width { max-width: 94vw; max-height: none; }
 .image-lightbox-image.dragging { cursor: grabbing; transition: none; }
+/* Diagrams have a transparent background; give them the page they were drawn on. */
+.image-lightbox-image.diagram { background: #fff; padding: 20px; }
 .image-lightbox-zoom {
   position: fixed; top: 18px; left: 50%; transform: translateX(-50%); min-width: 58px; padding: 4px 10px;
   border-radius: 999px; background: rgba(0, 0, 0, 0.45); color: #fff; font-size: 12px; text-align: center;

@@ -143,3 +143,28 @@ describe('note PDF capture', () => {
     expect(text.endsWith('%%EOF\n')).toBe(true);
   });
 });
+
+describe('note PDF — Mermaid diagrams', () => {
+  it('draws every diagram before the page is captured', async () => {
+    const { _setMermaidImporter } = await import('../src/lib/mermaid-render.js');
+    const render = vi.fn(async (id) => {
+      await new Promise((r) => setTimeout(r, 10)); // slower than the rest of the page
+      return { svg: `<svg id="${id}" xmlns="http://www.w3.org/2000/svg"><text>diagram</text></svg>` };
+    });
+    _setMermaidImporter(async () => ({ default: { initialize: vi.fn(), render } }));
+    let captured = null;
+    const rasterize = vi.fn(async (host) => {
+      captured = captured ?? {
+        diagrams: host.querySelectorAll('.mermaid-diagram svg').length,
+        pending: host.querySelectorAll('.mermaid-pending').length,
+      };
+      return capturedCanvas(true);
+    });
+    try {
+      await buildNotePdf({ title: 'With a diagram', body: '```mermaid\ngraph TD\n a-->b\n```', attachments: [] }, { rasterize });
+    } finally {
+      _setMermaidImporter(null);
+    }
+    expect(captured).toEqual({ diagrams: 1, pending: 0 });
+  });
+});
