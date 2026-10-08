@@ -235,7 +235,33 @@ body.resizing { user-select: none; cursor: col-resize; }
 .suggest-title:disabled { cursor: default; }
 .suggest-title.busy { opacity: 0.6; animation: suggest-pulse 1s ease-in-out infinite; }
 @keyframes suggest-pulse { 50% { opacity: 0.25; } }
-.editor-split { display: grid; grid-template-columns: 0.5fr 6px 0.5fr; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.editor-split { display: grid; grid-template-columns: 0.5fr 6px 0.5fr; flex: 1 1 auto; min-height: 0; overflow: hidden; position: relative; }
+/* "Reading mode hides the editor." — shown when the reader types, pastes or drops a file
+   into the reading view. Sits over the top of the preview, its arrow pointing up at the
+   « button (the first one in the editor bar), which pulses once alongside it. */
+.edit-hidden-hint {
+  position: absolute; top: 9px; left: 12px; z-index: 6;
+  display: flex; align-items: center; gap: 10px; max-width: calc(100% - 24px);
+  padding: 7px 8px 7px 12px; border-radius: 8px;
+  background: #1f2328; color: #fff; font-size: 13px; line-height: 1.3;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+}
+.edit-hidden-hint[hidden] { display: none; }
+.edit-hidden-hint.no-arrow::before { display: none; } /* the bar wrapped: « is not right above */
+.edit-hidden-hint::before {
+  content: ''; position: absolute; top: -6px; left: 12px;
+  border: 6px solid transparent; border-top: 0; border-bottom-color: #1f2328;
+}
+.edit-hidden-hint-show {
+  border: 0; border-radius: 6px; padding: 5px 10px; white-space: nowrap; cursor: pointer;
+  background: var(--accent); color: #fff; font: inherit; font-weight: 600;
+}
+.edit-hidden-hint-show:hover { background: var(--accent-dark); }
+.editor-bar .toggle-edit.attention { animation: edit-toggle-pulse 0.6s ease-in-out 2; }
+@keyframes edit-toggle-pulse { 50% { box-shadow: 0 0 0 4px rgba(45, 190, 96, 0.45); border-color: var(--accent); } }
+@media (prefers-reduced-motion: reduce) {
+  .editor-bar .toggle-edit.attention { animation: none; box-shadow: 0 0 0 3px rgba(45, 190, 96, 0.45); border-color: var(--accent); }
+}
 /* Left column: the title field stacked above the body textarea; holds the divider to the preview. */
 .edit-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--border); position: relative; }
 /* Body editor: a highlight backdrop sits behind a transparent textarea so attachment

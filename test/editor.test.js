@@ -356,3 +356,173 @@ describe('shouldFitWidth (which images are scrolled instead of contained)', () =
     expect(shouldFitWidth(2736, 17541, 0, 0)).toBeNull();
   });
 });
+
+describe('a long insertion is one edit', () => {
+  // Chrome's execCommand('insertText') with multi-line text fires one nested `input`
+  // event per inserted line. Handling each one rebuilt the whole preview, so pasting a
+  // large Excel range or tidying a long note froze the page.
+  function chromeLikeExecCommand(ta) {
+    return vi.fn((command, showUi, text) => {
+      const start = ta.selectionStart;
+      let value = ta.value.slice(0, start) + ta.value.slice(ta.selectionEnd);
+      let pos = start;
+      text.split('\n').forEach((line, i) => {
+        const piece = i ? `\n${line}` : line;
+        value = value.slice(0, pos) + piece + value.slice(pos);
+        pos += piece.length;
+        ta.value = value;
+        ta.selectionStart = ta.selectionEnd = pos;
+        ta.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+      });
+      return true;
+    });
+  }
+
+  it('rebuilds the preview and reports the change once, with the whole text', () => {
+    const onChange = vi.fn();
+    const el = document.getElementById('editor');
+    const api = renderEditor(el, { body: 'old', onChange, onSave: vi.fn() });
+    const ta = el.querySelector('textarea.note-body');
+    Object.defineProperty(document, 'execCommand', { value: chromeLikeExecCommand(ta), configurable: true });
+    try {
+      const rows = Array.from({ length: 300 }, (_, i) => `| row ${i} | ${i * 2} |`).join('\n');
+      api.replaceBody(rows);
+      expect(document.execCommand).toHaveBeenCalledTimes(1);
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ body: rows }));
+      expect(el.querySelector('.preview').textContent).toContain('row 299');
+    } finally {
+      delete document.execCommand;
+    }
+  });
+
+  it('still handles a single typed character as before', () => {
+    const onChange = vi.fn();
+    const el = document.getElementById('editor');
+    renderEditor(el, { body: 'a', onChange, onSave: vi.fn() });
+    const ta = el.querySelector('textarea.note-body');
+    ta.value = 'ab';
+    ta.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+    ta.value = 'abc';
+    ta.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+    expect(onChange).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('the save status', () => {
+  it('does not say Saved while edits made during the save are still waiting', async () => {
+    let finish;
+    const onSave = vi.fn(() => new Promise((resolve) => { finish = resolve; }));
+    const el = document.getElementById('editor');
+    renderEditor(el, { body: 'a', onChange: vi.fn(), onSave });
+    const ta = el.querySelector('textarea.note-body');
+    const status = el.querySelector('.save-status');
+    ta.value = 'a b';
+    ta.dispatchEvent(new Event('input'));
+    el.querySelector('button.save').click();
+    expect(status.textContent).toBe('Saving…');
+    ta.value = 'a b c'; // typed while the save runs
+    ta.dispatchEvent(new Event('input'));
+    finish({});
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(status.textContent).toBe('Unsaved…');
+  });
+
+  it('a replaced editor saves edits typed during its last save at once, not after the autosave delay', async () => {
+    let finish;
+    const onSave = vi.fn(() => new Promise((resolve) => { finish = resolve; }));
+    const el = document.getElementById('editor');
+    const api = renderEditor(el, { body: 'a', onChange: vi.fn(), onSave });
+    const ta = el.querySelector('textarea.note-body');
+    ta.value = 'a b';
+    ta.dispatchEvent(new Event('input'));
+    ta.dispatchEvent(new Event('blur')); // first save starts
+    ta.value = 'a b c';
+    ta.dispatchEvent(new Event('input'));
+    ta.dispatchEvent(new Event('blur')); // queued behind it
+    api.destroy(); // another note opened
+    finish({});
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalledTimes(2), { timeout: 500 });
+    expect(onSave.mock.calls[1][0].body).toBe('a b c');
+  });
+
+  it('an insertion that finishes after the editor was replaced lands in its own note, not in what has focus now', async () => {
+    // An image still being read when the reader clicked "New note": by the time it is
+    // inserted, the new note's title has focus, and execCommand edits whatever has focus.
+    const onSave = vi.fn(async () => ({}));
+    const el = document.getElementById('editor');
+    const api = renderEditor(el, { body: 'A body', onChange: vi.fn(), onSave });
+    const nextTitle = document.createElement('input');
+    document.body.append(nextTitle);
+    api.destroy();
+    nextTitle.focus();
+    const exec = vi.fn(() => true);
+    Object.defineProperty(document, 'execCommand', { value: exec, configurable: true });
+    try {
+      api.replaceBody('A body\n![shot](owl-img:1)');
+    } finally {
+      delete document.execCommand;
+    }
+    expect(exec).not.toHaveBeenCalled();
+    expect(nextTitle.value).toBe('');
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalledTimes(1), { timeout: 500 }); // at once, not after the autosave delay
+    expect(onSave.mock.calls[0][0].body).toBe('A body\n![shot](owl-img:1)');
+  });
+
+  it('never saves text the reader threw away, whatever arrives after', async () => {
+    // Delete, or Reload to take another device's version: the old editor is discarded.
+    // Removing a focused textarea fires blur in Chrome, and a late insertion can land too.
+    const onSave = vi.fn(async () => ({}));
+    const el = document.getElementById('editor');
+    const api = renderEditor(el, { body: 'mine', onChange: vi.fn(), onSave });
+    const ta = el.querySelector('textarea.note-body');
+    ta.value = 'mine, unsaved';
+    ta.dispatchEvent(new Event('input'));
+    api.destroy({ discard: true });
+    ta.dispatchEvent(new Event('blur'));
+    api.replaceBody('mine, unsaved\n![late](owl-img:1)');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('counts as busy while a title is being suggested or a file picker is open', async () => {
+    let answer;
+    const el = document.getElementById('editor');
+    const api = renderEditor(el, { body: 'milk', onSave: vi.fn(), onSuggestTitle: () => new Promise((r) => { answer = r; }) });
+    expect(api.isBusy()).toBe(false);
+    el.querySelector('.suggest-title').click();
+    expect(api.isBusy()).toBe(true); // its answer would land in this note
+    answer('Shopping');
+    await vi.waitFor(() => expect(api.isBusy()).toBe(false));
+    const picker = el.querySelector('input[type=file][accept="image/*"]');
+    picker.click = () => {}; // the OS dialog
+    el.querySelector('.insert-image').click();
+    expect(api.isBusy()).toBe(true);
+    picker.dispatchEvent(new Event('cancel'));
+    expect(api.isBusy()).toBe(false);
+    api.destroy();
+  });
+
+  it('says so when the note was deleted elsewhere', async () => {
+    const el = document.getElementById('editor');
+    renderEditor(el, { body: 'a', onSave: vi.fn(async () => { throw new Error('This note was deleted'); }) });
+    const ta = el.querySelector('textarea.note-body');
+    ta.value = 'a b';
+    ta.dispatchEvent(new Event('input'));
+    el.querySelector('button.save').click();
+    await vi.waitFor(() => expect(el.querySelector('.save-status').textContent).toBe('Deleted elsewhere — not saved'));
+  });
+
+  it('says Saved once everything typed is saved', async () => {
+    const onSave = vi.fn(async () => ({}));
+    const el = document.getElementById('editor');
+    renderEditor(el, { body: 'a', onChange: vi.fn(), onSave });
+    const ta = el.querySelector('textarea.note-body');
+    ta.value = 'a b';
+    ta.dispatchEvent(new Event('input'));
+    el.querySelector('button.save').click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(el.querySelector('.save-status').textContent).toBe('Saved ✓');
+  });
+});

@@ -34,6 +34,14 @@ export function shouldFitWidth(naturalWidth, naturalHeight, availableWidth, avai
   return containedWidth < availableWidth * FIT_WIDTH_BELOW;
 }
 
+// Whether the reader's last press was on the note (the editor, or the note list) — kept
+// across editors, because "+ New note" and a note card rebuild the editor and leave focus
+// on the page itself, yet the keys typed next are meant for the note. See the reading-mode
+// hint in renderEditor.
+let lastPressAtNote = false;
+
+const isMac = () => /mac/i.test(globalThis.navigator?.userAgentData?.platform || globalThis.navigator?.platform || '');
+
 export function renderEditor(
   container,
   { title = '', body = '', attachments = [], created = null, updated = null, onChange = () => {}, onSave = () => {}, onDelete = null, focusTitle = false, measure = null, breadcrumb = [], onNavigate = () => {}, onSuggestTitle = null, shareActions = [], recoverAttachments = null, loadImageBytes = getBytes, phonetics = null, previewZoom = null, readOnly = false, readOnlyNotice = '' },
@@ -120,6 +128,9 @@ export function renderEditor(
   let onRemoteReload = null;
   remoteReload.addEventListener('click', () => { remoteBar.hidden = true; onRemoteReload?.(); });
   remoteDismiss.addEventListener('click', () => { remoteBar.hidden = true; });
+  // Pressing either must not move focus out of the note: that blur saves the local text,
+  // and for Reload it would write over the very version the reader asked for.
+  for (const button of [remoteReload, remoteDismiss]) button.addEventListener('mousedown', (e) => e.preventDefault());
   remoteBar.append(remoteText, remoteReload, remoteDismiss);
 
   const statusRow = document.createElement('div');
@@ -222,7 +233,8 @@ export function renderEditor(
     viewBtn.title = panes.isEditCollapsed() ? 'Show editor' : 'Preview only — hide editor';
   };
   setViewLabel();
-  viewBtn.addEventListener('click', () => { panes.toggleEditPane(); setViewLabel(); syncPreviewLock(); refresh(); });
+  function toggleEditPane() { panes.toggleEditPane(); setViewLabel(); syncPreviewLock(); refresh(); }
+  viewBtn.addEventListener('click', toggleEditPane);
 
   // "Reading mode" hint — sits to the RIGHT of the Hide-list button, shown only in preview-only.
   const readingHint = document.createElement('span');
@@ -289,6 +301,7 @@ export function renderEditor(
   const titleRow = document.createElement('div');
   titleRow.className = 'title-row';
   titleRow.appendChild(titleInput);
+  let suggestingTitle = false; // the model is writing a title for this note (see isBusy)
   if (onSuggestTitle) {
     const suggestBtn = document.createElement('button');
     suggestBtn.type = 'button';
@@ -300,6 +313,7 @@ export function renderEditor(
       // Busy affordance + guard against a second click while the model runs.
       suggestBtn.disabled = true;
       suggestBtn.classList.add('busy');
+      suggestingTitle = true;
       try {
         // Keep the editor dumb: hand the host the raw body and let it decide
         // (empty-note / unavailable toasts live in app.js). A non-empty string
@@ -312,6 +326,7 @@ export function renderEditor(
           titleInput.dispatchEvent(new Event('input', { bubbles: true }));
         }
       } finally {
+        suggestingTitle = false;
         suggestBtn.disabled = false; // always re-enable, even on failure
         suggestBtn.classList.remove('busy');
       }
@@ -473,7 +488,22 @@ export function renderEditor(
   const preview = document.createElement('div');
   preview.className = 'preview';
 
-  split.append(editPane, preview);
+  // Shown when the reader types, pastes or drags a file into the reading view, where it
+  // would otherwise go nowhere (a dropped file even opened in a new tab). It sits just
+  // under the « button and offers the same thing: bring the editor back.
+  const editHint = document.createElement('div');
+  editHint.className = 'edit-hidden-hint';
+  editHint.hidden = true;
+  editHint.setAttribute('role', 'status');
+  const editHintText = document.createElement('span');
+  editHintText.textContent = 'Reading mode hides the editor.';
+  const editHintShow = document.createElement('button');
+  editHintShow.type = 'button';
+  editHintShow.className = 'edit-hidden-hint-show';
+  editHintShow.textContent = '« Show editor';
+  editHint.append(editHintText, editHintShow);
+
+  split.append(editPane, preview, editHint);
   panes.initEditSplitter(split); // draggable edit/preview divider — restores the saved ratio
   split.classList.toggle('edit-collapsed', panes.isEditCollapsed());
 
@@ -482,7 +512,127 @@ export function renderEditor(
   // (Hoisted so the viewBtn click handler above can call it; run once now for initial state.)
   function syncPreviewLock() {
     readingHint.hidden = !panes.isEditCollapsed();
+    if (!panes.isEditCollapsed()) hideEditHint();
   }
+
+  // --- The "editor is hidden" hint: when it shows, and what it reacts to. ---
+  const EDIT_HINT_MS = 6000;
+  let editHintTimer = null;
+  let lastPulse = 0;
+  let hintHovered = false;
+  let hintFocused = false;
+  const readingOnly = () => panes.isEditCollapsed() && !readOnly && !destroyed;
+
+  // Point the arrow at « only when it sits right above the reading view: once the editor
+  // bar wraps onto several rows, other buttons are in between and it would point at one.
+  function placeEditHint() {
+    const button = viewBtn.getBoundingClientRect();
+    const area = split.getBoundingClientRect();
+    const above = button.width > 0 && area.top - button.bottom < 24;
+    editHint.classList.toggle('no-arrow', !above);
+    editHint.style.left = above ? `${Math.max(8, Math.round(button.left + button.width / 2 - area.left - 18))}px` : '';
+  }
+  // The hint stays while the reader is reaching for its button.
+  function armEditHintTimer() {
+    clearTimeout(editHintTimer);
+    editHintTimer = hintHovered || hintFocused ? null : setTimeout(hideEditHint, EDIT_HINT_MS);
+  }
+  function showEditHint() {
+    if (!readingOnly()) return;
+    editHint.hidden = false;
+    placeEditHint();
+    // Draw the eye to the « button too, but not on every key of a burst.
+    const now = Date.now();
+    if (now - lastPulse > 1500) {
+      lastPulse = now;
+      viewBtn.classList.remove('attention');
+      void viewBtn.offsetWidth; // restart the animation
+      viewBtn.classList.add('attention');
+    }
+    armEditHintTimer();
+  }
+  function hideEditHint() {
+    clearTimeout(editHintTimer);
+    editHintTimer = null;
+    editHint.hidden = true;
+    hintHovered = false;
+    hintFocused = false;
+    viewBtn.classList.remove('attention');
+  }
+  editHintShow.addEventListener('click', () => {
+    if (panes.isEditCollapsed()) toggleEditPane();
+    ta.focus();
+  });
+  // A resize, or the note list shown or hidden, can wrap the editor bar under it.
+  const hintLayoutRO = typeof ResizeObserver === 'function'
+    ? new ResizeObserver(() => { if (!editHint.hidden) placeEditHint(); })
+    : null;
+  hintLayoutRO?.observe(bar);
+  hintLayoutRO?.observe(split);
+  editHint.addEventListener('pointermove', () => { if (!hintHovered) { hintHovered = true; armEditHintTimer(); } });
+  editHint.addEventListener('pointerleave', () => { hintHovered = false; if (!editHint.hidden) armEditHintTimer(); });
+  editHint.addEventListener('focusin', () => { hintFocused = true; armEditHintTimer(); });
+  editHint.addEventListener('focusout', (e) => {
+    if (editHint.contains(e.relatedTarget)) return;
+    hintFocused = false;
+    if (!editHint.hidden) armEditHintTimer();
+  });
+
+  // Where a typed character or a paste would have been meant for the note: anywhere in the
+  // editor or the note list except a field that takes text itself. After a click into the
+  // reading view — or on "+ New note", which rebuilds the editor — focus is left on the
+  // page itself, so there it is the last press that tells.
+  const TEXT_ENTRY = 'input, textarea, select, [contenteditable=""], [contenteditable="true"]';
+  // Enter, Backspace and Delete already do something on these (open, activate, delete notes).
+  const OWN_KEYS = 'button, a[href], summary, [role="button"], [tabindex], #note-list';
+  function aimedAtNote(target, { character }) {
+    if (!(target instanceof Element) || !lightbox.hidden) return false;
+    if (target === document.body || target === document.documentElement) return lastPressAtNote;
+    if (target.closest(TEXT_ENTRY)) return false;
+    if (!container.contains(target) && !target.closest('#note-list')) return false;
+    return character || !target.closest(OWN_KEYS);
+  }
+  const onNote = (target) => container.contains(target) || !!target?.closest?.('#note-list');
+  const onHintPointerDown = (e) => { lastPressAtNote = onNote(e.target); };
+  const onHintFocusIn = (e) => { if (!onNote(e.target)) lastPressAtNote = false; };
+  const onHintKeydown = (e) => {
+    if (!readingOnly() || e.defaultPrevented || typeof e.key !== 'string') return;
+    if (e.key === 'Escape') { if (!editHint.hidden) hideEditHint(); return; }
+    // Shortcuts are left alone (a paste arrives as its own event), but AltGr — Ctrl+Alt on
+    // Windows — and Option on a Mac are how many keyboards type @, € or {.
+    const optionOnMac = e.altKey && !e.ctrlKey && !e.metaKey && isMac();
+    if ((e.ctrlKey || e.metaKey || e.altKey) && !e.getModifierState?.('AltGraph') && !optionOnMac) return;
+    const character = (e.key.length === 1 && e.key !== ' ') || e.key === 'Process' || e.isComposing;
+    const editing = e.key === 'Enter' || e.key === 'Backspace' || e.key === 'Delete';
+    if ((character || editing) && aimedAtNote(e.target, { character })) showEditHint();
+  };
+  const onHintPaste = (e) => {
+    if (readingOnly() && aimedAtNote(e.target, { character: true })) showEditHint();
+  };
+  document.addEventListener('pointerdown', onHintPointerDown, true);
+  document.addEventListener('focusin', onHintFocusIn, true);
+  document.addEventListener('keydown', onHintKeydown);
+  document.addEventListener('paste', onHintPaste);
+  // A file dragged over the reading view: refuse it, which also keeps Chrome from opening
+  // it in a new tab, and say why. With the drop refused Chrome never delivers it, so the
+  // hint shows while the file is dragged over.
+  // A photo dragged within the page also lists 'Files'; only a drag from outside is a file
+  // the reader meant to add.
+  let dragFromPage = false;
+  const onHintDragStart = () => { dragFromPage = true; };
+  const onHintDragEnd = () => { dragFromPage = false; };
+  document.addEventListener('dragstart', onHintDragStart, true);
+  document.addEventListener('dragend', onHintDragEnd, true);
+  const carriesFiles = (e) => !dragFromPage && [...(e.dataTransfer?.types || [])].includes('Files');
+  split.addEventListener('dragover', (e) => {
+    if (!readingOnly() || !carriesFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'none';
+    showEditHint();
+  });
+  split.addEventListener('drop', (e) => {
+    if (readingOnly() && carriesFiles(e)) e.preventDefault();
+  });
   syncPreviewLock();
 
   // Live size meter — a note is stored inside a bookmark URL, so it must stay
@@ -897,9 +1047,7 @@ export function renderEditor(
     try {
       ta.focus();
       ta.setSelectionRange(start, end);
-      let ok = false;
-      try { ok = !!(document.execCommand && document.execCommand('insertText', false, text)); } catch { ok = false; }
-      if (!ok) {
+      if (!ownsFocus() || !execInsertAsOneEdit(text)) {
         ta.value = ta.value.slice(0, start) + text + ta.value.slice(end);
         ta.selectionStart = ta.selectionEnd = start + text.length;
         ta.dispatchEvent(new Event('input', { bubbles: true }));
@@ -907,6 +1055,36 @@ export function renderEditor(
     } finally {
       insertingText = wasInsertingText;
     }
+  }
+
+  // execCommand('insertText') with multi-line text can fire one nested `input` event per
+  // inserted line, and each one rebuilt the whole preview: pasting a 600-line Excel
+  // range or tidying a long note froze the page for half a minute (measured), where a
+  // native Ctrl+V of the same text takes milliseconds. The nested events are collected
+  // and handled once, as the single edit they are. Returns false when execCommand is
+  // unavailable (jsdom), leaving the caller to splice the text itself.
+  let batchingInput = false;
+  let batchedInput = null;
+
+  // execCommand edits whatever has focus. An insertion that finishes after this editor
+  // was replaced — an image still being read when the reader clicked "New note" — would
+  // otherwise land in the next note's title, and never reach this note at all.
+  const ownsFocus = () => !destroyed && document.activeElement === ta;
+
+  function execInsertAsOneEdit(text) {
+    if (batchingInput) return !!document.execCommand?.('insertText', false, text);
+    batchingInput = true;
+    batchedInput = null;
+    let ok = false;
+    try {
+      ok = !!(document.execCommand && document.execCommand('insertText', false, text));
+    } catch {
+      ok = false;
+    } finally {
+      batchingInput = false;
+    }
+    if (ok && batchedInput) fireChange(batchedInput);
+    return ok;
   }
 
   // [Task E10] Replace the ENTIRE body with `text`, preserving the textarea's native
@@ -921,8 +1099,7 @@ export function renderEditor(
     const value = String(text ?? '');
     ta.focus();
     ta.setSelectionRange(0, ta.value.length);
-    let ok = false;
-    try { ok = !!(document.execCommand && document.execCommand('insertText', false, value)); } catch { ok = false; }
+    const ok = ownsFocus() && execInsertAsOneEdit(value);
     if (!ok) {
       ta.value = value;
       ta.selectionStart = ta.selectionEnd = value.length;
@@ -1052,7 +1229,7 @@ export function renderEditor(
     // What each diagram showed before this rebuild: a diagram being typed into keeps
     // that drawing until its new one is ready (decorateMermaid's `previous`).
     const previousDiagrams = [...content.querySelectorAll('.mermaid-diagram')]
-      .map((box) => box.querySelector('svg')?.outerHTML ?? null);
+      .map((box) => box.querySelector('svg'));
     content.innerHTML = '';
     const t = titleInput.value.trim();
     if (t) { // always show the rendered title heading in the preview
@@ -1071,7 +1248,7 @@ export function renderEditor(
     content.appendChild(bodyEl);
     // Before the code-block decorators: a diagram replaces its code block. Not awaited —
     // a diagram seen before appears at once, a new one fills in when it is ready.
-    decorateMermaid(content, { enlargeable: true, previous: previousDiagrams }).catch(() => {});
+    decorateMermaid(content, { enlargeable: true, live: true, previous: previousDiagrams }).catch(() => {});
     decorateCodeBlocks(content);
     wireFileLinks(content);
     decoratePreviewImages(content);
@@ -1155,6 +1332,9 @@ export function renderEditor(
   };
 
   const fireChange = (event) => {
+    // One insertion arriving as many nested events (see execInsertAsOneEdit): note it,
+    // and let the insertion handle it once, when it has finished.
+    if (batchingInput) { batchedInput = { inputType: event?.inputType || 'insertText' }; return; }
     // Replacing a multi-line table through execCommand can emit one nested input
     // event per inserted line. The outer event performs the single refresh/save
     // notification after alignment finishes; handling the nested events would
@@ -1163,7 +1343,7 @@ export function renderEditor(
     linkedRange = null; // offsets are stale the moment the text moves under them
     alignTable();
     renumberList(event && event.inputType);
-    refresh();
+    if (!destroyed) refresh(); // a replaced editor's preview is not on screen
     onChange({ title: titleInput.value, body: ta.value, attachments: atts });
     scheduleAutoSave();
   };
@@ -1173,7 +1353,10 @@ export function renderEditor(
   const SAVE_DELAY = 2500;
   let saveTimer = null;
   let saving = false;
-  let resaveQueued = false;
+  let resaveQueued = false; // edits arrived while a save ran; save again when it ends…
+  let resaveNow = false; // …at once, because a blur, a flush or a Save click asked for it
+  let resaveManual = false; // …as a manual save, because it was a Save click
+  let discarded = false; // the reader threw this text away (Delete, Reload): never save it
   // What this editor last loaded or successfully saved. An auto-save that matches it
   // is a no-op: blur and the tab-hide flush both fire with NO edit at all, and on a
   // second device that rewrites the note from whatever this tab holds — silently
@@ -1187,12 +1370,16 @@ export function renderEditor(
     statusRow.hidden = updatedLabel.hidden && !s;
   };
   function scheduleAutoSave() {
+    clearTimeout(saveTimer);
+    // An editor already replaced by another note saves at once: reopening its note waits
+    // for that save (see the app's settleSaves), and nobody is typing here any more.
+    if (destroyed) { doSave({ auto: true }); return; }
     setStatus('Unsaved…');
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => doSave({ auto: true }), SAVE_DELAY);
+    saveTimer = setTimeout(() => doSave({ auto: true, fromTimer: true }), SAVE_DELAY);
   }
-  async function doSave({ auto }) {
+  async function doSave({ auto, fromTimer = false }) {
     clearTimeout(saveTimer);
+    if (discarded) return;
     // A read-only note (currently: anything in Trash) must never be written back.
     // Guarding here rather than only hiding the Save button closes the autosave
     // timer and every keyboard path in one place.
@@ -1203,7 +1390,12 @@ export function renderEditor(
     // Nothing actually changed — don't rewrite the note (see savedSnapshot above).
     // A manual Save stays unconditional: the click is explicit intent and still reports "Saved".
     if (auto && !isDirty()) { setStatus(''); return; }
-    if (saving) { resaveQueued = true; return; } // a save is already in flight — coalesce edits made during it
+    if (saving) { // a save is already in flight — coalesce edits made during it
+      resaveQueued = true;
+      if (!fromTimer) resaveNow = true;
+      if (!auto) resaveManual = true;
+      return;
+    }
     const snap = snapshot(); // the exact content this save persists; edits made during it stay dirty
     saving = true;
     setStatus('Saving…');
@@ -1212,12 +1404,27 @@ export function renderEditor(
       savedSnapshot = snap;
       remoteBar.hidden = true; // this version won; the remote-change notice no longer applies
       if (saved) setTimestamps({ created: saved.created, updated: saved.updated });
-      setStatus('Saved ✓');
-    } catch {
-      setStatus('Save failed');
+      // Edits typed while this save ran are still waiting on their own timer; claiming
+      // "Saved" now would invite the reader to switch away before they are.
+      setStatus(isDirty() ? 'Unsaved…' : 'Saved ✓');
+    } catch (err) {
+      setStatus(/deleted/i.test(String(err?.message)) ? 'Deleted elsewhere — not saved' : 'Save failed');
     } finally {
       saving = false;
-      if (resaveQueued) { resaveQueued = false; scheduleAutoSave(); }
+      if (resaveQueued) {
+        // Edits typed during that save. A blur, a flush or a Save click asked for them to
+        // be saved now — the reader may be leaving the note — so they are, and a Save
+        // click still runs as one, reporting "Saved". Only a request from the autosave
+        // timer waits out the usual delay again.
+        const manual = resaveManual;
+        const now = resaveNow || destroyed;
+        resaveQueued = false;
+        resaveNow = false;
+        resaveManual = false;
+        if (manual) doSave({ auto: false });
+        else if (now) doSave({ auto: true });
+        else scheduleAutoSave();
+      }
     }
   }
 
@@ -1304,11 +1511,16 @@ export function renderEditor(
     return (before && !before.endsWith('\n') ? '\n' : '') + ref + '\n';
   }
 
+  // Files still being read for insertion: the note is about to change, so it must not be
+  // swapped for another device's version under them (see isBusy).
+  let insertsInFlight = 0;
+
   // Shared image insertion pipeline used by Draw, the 🖼 button, paste, and drop.
   async function insertImageFile(file) {
     const label = imgBtn.textContent;
     imgBtn.disabled = true;
     imgBtn.textContent = 'Adding…';
+    insertsInFlight += 1;
     try {
       const uri = await imageFileToDataUri(file);
       // Store the image in attachments and insert a short owl-img ref (no base64 in the body).
@@ -1319,13 +1531,20 @@ export function renderEditor(
       const snippet = attachmentSnippet(ref, start, end);
       insertText(snippet, start, end); // keeps undo alive
     } finally {
+      insertsInFlight -= 1;
       imgBtn.disabled = false;
       imgBtn.textContent = label;
     }
   }
 
   // Insert a picked photo as a (auto-downscaled) base64 image at the cursor.
-  imgBtn.addEventListener('click', () => imgInput.click());
+  // A file picker is open: what it returns goes into this note (see isBusy).
+  let pickerOpen = false;
+  for (const input of [imgInput, fileInput]) {
+    input.addEventListener('change', () => { pickerOpen = false; });
+    input.addEventListener('cancel', () => { pickerOpen = false; });
+  }
+  imgBtn.addEventListener('click', () => { pickerOpen = true; imgInput.click(); });
   imgInput.addEventListener('change', async () => {
     const file = imgInput.files && imgInput.files[0];
     imgInput.value = ''; // allow re-picking the same file
@@ -1335,7 +1554,9 @@ export function renderEditor(
   // Shared ordinary-file pipeline used by the File button, paste, and drop.
   // Files become compact owl-file refs while their bytes live in attachments.
   async function insertAttachmentFile(file) {
-    const bytes = new Uint8Array(await file.arrayBuffer());
+    insertsInFlight += 1;
+    let bytes;
+    try { bytes = new Uint8Array(await file.arrayBuffer()); } finally { insertsInFlight -= 1; }
     let bin = ''; for (let k = 0; k < bytes.length; k++) bin += String.fromCharCode(bytes[k]);
     const dataUri = `data:${file.type || 'application/octet-stream'};base64,${btoa(bin)}`;
     const { ref, attachments: merged } = attachFile({ name: file.name || 'file', mime: file.type, dataUri }, atts);
@@ -1361,7 +1582,7 @@ export function renderEditor(
     }
   }
 
-  fileBtn.addEventListener('click', () => fileInput.click());
+  fileBtn.addEventListener('click', () => { pickerOpen = true; fileInput.click(); });
   fileInput.addEventListener('change', async () => {
     const file = fileInput.files && fileInput.files[0];
     fileInput.value = '';
@@ -1510,8 +1731,22 @@ export function renderEditor(
     // dirty; a clean editor is reloaded outright instead of asking.
     notifyRemoteChange: ({ onReload = null } = {}) => { onRemoteReload = onReload; remoteBar.hidden = false; },
     flush: () => doSave({ auto: true }),
-    destroy: () => {
+    save: () => doSave({ auto: false }), // as the Save button: stores the text even if unchanged
+    // A file is being read for insertion, or a drawing is open for this note.
+    isBusy: () => insertsInFlight > 0 || suggestingTitle || pickerOpen || !!document.querySelector('.draw-backdrop'),
+    // discard: the reader threw this text away (the note was deleted, or replaced by
+    // the version from another device), so nothing still pending here may save it.
+    destroy: ({ discard = false } = {}) => {
       destroyed = true;
+      clearTimeout(editHintTimer);
+      document.removeEventListener('pointerdown', onHintPointerDown, true);
+      document.removeEventListener('focusin', onHintFocusIn, true);
+      document.removeEventListener('keydown', onHintKeydown);
+      document.removeEventListener('paste', onHintPaste);
+      document.removeEventListener('dragstart', onHintDragStart, true);
+      document.removeEventListener('dragend', onHintDragEnd, true);
+      hintLayoutRO?.disconnect();
+      if (discard) { discarded = true; resaveQueued = false; }
       clearTimeout(saveTimer);
       clearTimeout(renumberTimer); // stop a pending list renumber
       document.removeEventListener('visibilitychange', refreshRelative);

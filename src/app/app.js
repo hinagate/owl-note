@@ -88,6 +88,20 @@ async function measureNoteSize({ title, body, attachments = [] }) {
   };
 }
 
+// The open note was moved to another notebook: its next save must file it there, not
+// back where it was opened from.
+function followOpenNote(handle, folderId) {
+  const session = ui.session;
+  if (!session || !handle || (handle !== session.bookmarkId && handle !== session.localId)) return;
+  session.folder = folderId;
+  if (session.localId) {
+    session.localFolderId = folderId;
+    if (ui.activeLocalId === session.localId) ui.activeLocalFolderId = folderId;
+  }
+  // A later re-render of this note starts its session from ui.current's folder.
+  for (const note of [session.note, ui.current]) if (note && note.id === session.note?.id) note.folderId = folderId;
+}
+
 export async function dropNote(handle, folderId) {
   if (await mirror.isLocalOnly(handle)) await mirror.setFolder(handle, folderId);
   else await bm.moveNote(handle, folderId);
@@ -204,16 +218,70 @@ export async function recoverStrandedCaptures(rootId = ui.rootId) {
 // whose upload fails stays local-only and is retried on the next re-enable. Returns count synced.
 export async function reconcileLocalToDrive(save = saveNote) {
   let synced = 0;
-  for (const note of await mirror.allLocalOnly()) {
-    const { folderId, ...clean } = note;
+  for (const listed of await mirror.allLocalOnly()) {
+    // Work from the copy as it is when its turn comes: the open editor may have saved this
+    // very note meanwhile (clicking the toggle blurred it), even taken it off this device.
+    const session = ui.session?.localId === listed.id ? ui.session : null;
+    const promote = async () => {
+      const entry = await mirror.getBackup(listed.id);
+      if (!entry?.localOnly || !entry.current) return null;
+      const { folderId, ...clean } = { ...entry.current, folderId: entry.folderId };
+      const res = await save(clean, folderId ?? ui.rootId, undefined);
+      if (res?.status !== 'capped') adoptNewBookmark(listed.id, res, session);
+      return res;
+    };
     try {
+      let run;
+      if (session) {
+        // The open note: run in turn with its own saves, so that none of them starts
+        // before this one has given it a bookmark — each would create one otherwise.
+        session.pending += 1;
+        run = session.queue.then(promote);
+        session.queue = run.catch(() => {});
+      } else {
+        await settleSaves(listed.id);
+        run = promote();
+      }
+      // Opening or deleting this note waits for this, as for a save of it: opened as the
+      // device-local note it still is, its first save would make a second bookmark, and a
+      // delete would be undone by the bookmark made here.
+      // A save of this note it queued behind may already have moved it into a bookmark,
+      // leaving nothing to do: then that save's result is the one to report.
+      const before = savesInFlight.get(listed.id);
+      const done = run.then((res) => (res?.bookmarkId
+        ? { note: res.note, bookmarkId: res.bookmarkId, localId: null }
+        : (res ? { note: res.note, bookmarkId: null, localId: listed.id } : (before ?? null))), () => before ?? null);
+      savesInFlight.set(listed.id, done);
+      let res;
+      try {
+        res = await run;
+      } finally {
+        if (savesInFlight.get(listed.id) === done) savesInFlight.delete(listed.id);
+        if (session) session.pending -= 1;
+      }
       // A failed Drive upload no longer throws for a note like this — saveNote keeps it
       // device-local and says so with 'capped' — so count only what actually synced.
-      const res = await save(clean, folderId ?? ui.rootId, undefined);
-      if (res?.status !== 'capped') synced += 1;
+      if (res && res.status !== 'capped') synced += 1;
     } catch { /* leave it local-only; retried on the next re-enable */ }
   }
   return synced;
+}
+
+// The note open in the editor is device-local and was just given a bookmark elsewhere.
+// Its next save must update that bookmark — creating one more would duplicate the note.
+function adoptNewBookmark(id, res, session) {
+  if (!session || session.localId !== id || !res?.bookmarkId) return;
+  session.bookmarkId = res.bookmarkId;
+  session.localId = null;
+  session.localFolderId = null;
+  if (session.note && res.note) {
+    if (res.note._driveBody) session.note._driveBody = res.note._driveBody;
+    else delete session.note._driveBody;
+  }
+  if (ui.session !== session) return; // the reader has moved to another note meanwhile
+  ui.activeBookmarkId = res.bookmarkId;
+  ui.activeLocalId = null;
+  ui.activeLocalFolderId = null;
 }
 
 // ── Phonetic readings (M10) ─────────────────────────────────────────────────────
@@ -259,6 +327,7 @@ function neededTables(text) {
 async function loadPhoneticsTables(text) {
   const missing = neededTables(text)
     .filter((lang) => !ui.phoneticsTables[lang] && !ui.phoneticsLoading.has(lang));
+  for (const lang of missing) phoneticsFailed.delete(lang); // the reader asked: try again
   if (!missing.length) return neededTables(text).every((lang) => ui.phoneticsTables[lang]);
 
   for (const lang of missing) ui.phoneticsLoading.add(lang);
@@ -290,17 +359,25 @@ async function loadPhoneticsTables(text) {
  * `busy` is enough; the render already in progress picks it up, and the async tail
  * re-renders once the table lands.
  */
+// Tables that failed to load this session. Not fetched again on their own: the render
+// after a failure would ask again, fail again, and render again, forever. Turning
+// phonetics on again (loadPhoneticsTables) does retry them.
+const phoneticsFailed = new Set();
+
 function syncPhoneticsTables(text) {
   if (!ui.phonetics) return;
   const missing = neededTables(text)
-    .filter((lang) => !ui.phoneticsTables[lang] && !ui.phoneticsLoading.has(lang));
+    .filter((lang) => !ui.phoneticsTables[lang] && !ui.phoneticsLoading.has(lang) && !phoneticsFailed.has(lang));
   if (!missing.length) return;
 
   for (const lang of missing) ui.phoneticsLoading.add(lang);
   ui.phoneticsBusy = true;
   void Promise.all(missing.map((lang) => ensureTable(tableUrl(lang))
     .then((table) => { ui.phoneticsTables[lang] = table; })
-    .catch((error) => { console.warn(`Phonetic table for ${lang} failed to load:`, error); })
+    .catch((error) => {
+      phoneticsFailed.add(lang);
+      console.warn(`Phonetic table for ${lang} failed to load:`, error);
+    })
     .finally(() => { ui.phoneticsLoading.delete(lang); })))
     .finally(() => {
       ui.phoneticsBusy = ui.phoneticsLoading.size > 0;
@@ -411,7 +488,7 @@ const QUICK_CAPTURE_KEY = 'owl:quickCapture';
 let lastQuickCaptureToken = null;
 let quickCaptureQueue = Promise.resolve();
 
-const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, editorNoteId: null, toolbar: null, currentPreviewOnly: false, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1, indexReady: null, driveEnabled: false, phonetics: false, phoneticsTables: { en: null, ja: null, zh: null }, phoneticsLoading: new Set(), phoneticsBusy: false, previewZoom: DEFAULT_ZOOM };
+const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, session: null, editorNoteId: null, toolbar: null, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1, indexReady: null, driveEnabled: false, phonetics: false, phoneticsTables: { en: null, ja: null, zh: null }, phoneticsLoading: new Set(), phoneticsBusy: false, previewZoom: DEFAULT_ZOOM };
 
 export function resetUI() {
   ui.rootId = null;
@@ -423,6 +500,7 @@ export function resetUI() {
   ui.current = null;
   if (ui.editor && ui.editor.destroy) ui.editor.destroy();
   ui.editor = null;
+  ui.session = null; // so a save still in flight from before the reset changes nothing here
   ui.query = '';
   ui.notes = [];
   ui.notebooks = [];
@@ -438,6 +516,9 @@ export function resetUI() {
   ui.phoneticsTables = { en: null, ja: null, zh: null };
   ui.phoneticsLoading = new Set();
   ui.phoneticsBusy = false;
+  phoneticsFailed.clear();
+  savesInFlight.clear();
+  openTicket += 1; // an open still waiting on a save from before the reset gives way
   ui.previewZoom = DEFAULT_ZOOM;
   // Drop the Ask drawer/controller so the next initUI rebinds to the fresh DOM
   // (test harnesses replace document.body between runs).
@@ -957,6 +1038,7 @@ export async function initUI(rootId) {
     ui.hashWired = true;
   }
   wireLiveRefresh();
+  trackPresses();
   // Build the ask index in the background — a FLOATING promise so indexing never
   // delays first paint. .catch keeps a build failure from surfacing as an unhandled
   // rejection (best-effort, like healNoteUrls above); ui.indexReady lets tests await it.
@@ -1016,10 +1098,83 @@ export async function loadNotes(folderId) {
 
 const DRAFT_ID = '__draft__';
 
+// Saves still running, by note id. A save can outlive its editor: clicking another note
+// blurs the editor, and its save finishes after the next note is open. Reopening the
+// note before then loaded the list's copy from before the edit — the list is refreshed
+// only once the save lands — and the next autosave wrote that old text back over it.
+const savesInFlight = new Map();
+const SAVE_WAIT_MS = 15_000; // never leave a click unanswered longer than this
+// Counts requests to open a note, so one still waiting on a save can tell that the
+// reader has since asked for another and give way to it.
+let openTicket = 0;
+
+// Wait for every save of note `id` still running, including the follow-up an editor
+// makes for edits typed while its first save ran. Resolves null if there was none, else
+// { stored }: where the note now is and what it holds ({ note, bookmarkId, localId }), or
+// null if the last save failed or did not finish in time.
+async function settleSaves(id, { maxWaitMs = SAVE_WAIT_MS, onSlow = null } = {}) {
+  const giveUp = Date.now() + maxWaitMs;
+  const slow = onSlow && id && savesInFlight.has(id) ? setTimeout(onSlow, SAVE_WAIT_MS) : null;
+  let waited = null;
+  try {
+    for (let running; id && (running = savesInFlight.get(id)) && Date.now() < giveUp;) {
+      const stored = Number.isFinite(maxWaitMs)
+        ? await Promise.race([running, new Promise((resolve) => { setTimeout(() => resolve(null), giveUp - Date.now()); })])
+        : await running;
+      waited = { stored };
+      await new Promise((resolve) => { setTimeout(resolve, 0); }); // a follow-up save registers here
+    }
+  } finally {
+    clearTimeout(slow);
+  }
+  return waited;
+}
+// Opening or deleting a note waits for its saves however long they take — a Drive upload
+// can run past a minute — since acting on it any sooner can duplicate the note or undo
+// the delete. A later click on another note still wins (openTicket); this says why
+// nothing has happened yet.
+const STILL_SAVING = { maxWaitMs: Infinity, onSlow: () => toast('Still saving this note — one moment…') };
+
+// The press that moves focus out of the editor — on a note card or "+ New note" — starts
+// a blur-save, and that save's list refresh rebuilt the list before the button came up:
+// the click then landed on nothing and had to be repeated. List refreshes wait for the
+// press to end (and for its click to be handled), never longer than PRESS_WAIT_MS.
+const PRESS_WAIT_MS = 1500;
+let pressesTracked = false;
+let pressing = false;
+let pressEnded = [];
+function trackPresses() {
+  if (pressesTracked) return;
+  pressesTracked = true;
+  const end = () => {
+    pressing = false;
+    const resume = pressEnded;
+    pressEnded = [];
+    setTimeout(() => { for (const fn of resume) fn(); }, 0); // after the click this press ends in
+  };
+  document.addEventListener('pointerdown', () => { pressing = true; }, true);
+  document.addEventListener('pointerup', end, true);
+  document.addEventListener('pointercancel', end, true); // also fired when a drag starts
+  window.addEventListener('blur', end);
+}
+async function pressOver() {
+  // Resumed one task after the press ends, by when the next press may have begun.
+  const giveUp = Date.now() + PRESS_WAIT_MS;
+  while (pressing && Date.now() < giveUp) {
+    await new Promise((resolve) => { pressEnded.push(resolve); setTimeout(resolve, giveUp - Date.now()); });
+  }
+}
+
 async function refreshNoteList() {
+  await pressOver();
   const inTrash = ui.activeFolder === ui.trashId;
   const driveEnabled = await isEnabled();
-  let notes = await loadNotes(ui.activeFolder);
+  if (!ui.rootId || !ui.activeFolder) return; // the app was reset meanwhile (tests)
+  const folder = ui.activeFolder;
+  let notes = await loadNotes(folder);
+  // A press may have started while the notes loaded: redraw only once it is over.
+  await pressOver();
+  if (ui.activeFolder !== folder || !ui.rootId) return; // a newer refresh lists the new notebook
   if (ui.query) notes = searchNotes(notes, ui.query);
   const list = orderNotes(notes);
   const isDraft = ui.isNew && ui.current && !ui.activeBookmarkId && !ui.query;
@@ -1131,9 +1286,29 @@ async function trashAction(kind, handle) {
 
 // Load the open note's current stored content into the editor, replacing the copy
 // it was opened with. Only called once the two are known to differ.
-function adoptRemoteNote(fresh) {
+// discard: the reader chose this version over the text in the editor (Reload). Loaded on
+// its own (the editor held nothing unsaved), the old editor is let go normally.
+function adoptRemoteNote(fresh, { discard = false } = {}) {
   ui.current = fresh;
-  renderCurrentEditor();
+  renderCurrentEditor({ discardEdits: discard });
+}
+
+// Reload on the "changed on another device" bar. A save of the local text may already be
+// running — the bar stays up until a save lands — and it would then write that text over
+// the version the reader just chose. Wait for it, and if it did, store their choice again.
+let reloadingId = null;
+async function reloadRemoteNote(fresh) {
+  reloadingId = fresh.id;
+  try {
+    adoptRemoteNote(fresh, { discard: true });
+    const chosen = ui.editor; // holds the version the reader chose, even if they move on
+    // However long it takes: nothing waits on this, and giving up would let that save
+    // put back the text the reader just turned down.
+    const settled = await settleSaves(fresh.id, { maxWaitMs: Infinity });
+    if (settled?.stored) await chosen?.save?.();
+  } finally {
+    reloadingId = null;
+  }
 }
 
 // Refreshing the note list re-reads every bookmark, but the OPEN note lives in
@@ -1142,12 +1317,16 @@ function adoptRemoteNote(fresh) {
 // (and, on its next save, writes back) the pre-sync text.
 async function reconcileOpenNote() {
   if (!ui.current || !ui.activeBookmarkId || !ui.editor) return; // draft or device-local note: nothing remote to follow
+  // A save of the open note is running, and its own bookmark write is what fired this.
+  // Look again once it lands, in case a change from elsewhere arrived meanwhile.
+  if (ui.session?.pending > 0) { ui.session.reconcileSkipped = true; return; }
+  if (reloadingId && reloadingId === ui.current.id) return; // storing the reader's choice
   let fresh;
   try {
     const payload = await bm.payloadAt(ui.activeBookmarkId);
     if (!payload) return; // note gone or no longer a note — the list refresh already handled it
     const stored = await decode(payload);
-    if (stored.id !== ui.current.id) return; // a different note occupies this bookmark now
+    if (!ui.current || stored.id !== ui.current.id) return; // a different note occupies this bookmark now (or none is open)
     // payloadAt gives the note only; keep the device-local fields the editor needs
     // (breadcrumb folder, creation fallback). An edit never moves a note — a move
     // fires onMoved and is handled by the list refresh.
@@ -1159,16 +1338,31 @@ async function reconcileOpenNote() {
   // (resolveNote's fallback). Adopting that would truncate the editor — wait for a
   // cycle where the real body loads instead.
   if (fresh._driveBody && fresh.hash && contentHash(fresh.body) !== fresh.hash) return;
+  if (!ui.current || !ui.editor || fresh.id !== ui.current.id) return; // closed or switched meanwhile
   if (fresh.body === ui.current.body && fresh.title === ui.current.title) return; // already in sync
+  // Stored exactly as this editor last loaded or saved it: whatever changed was another
+  // note. Comparing with ui.current alone (which holds the unsaved text) raised the
+  // "changed on another device" bar whenever any bookmark changed while the reader typed.
+  const base = ui.session?.baseline;
+  if (base && fresh.body === base.body && fresh.title === base.title) return;
   // This app's own save fires onChanged too. If the editor already shows exactly what
   // is stored, just re-base ui.current — re-rendering would take the caret with it.
-  if (fresh.body === ui.editor.getBody() && fresh.title === ui.editor.getTitle()) { ui.current = fresh; return; }
-  // Unsaved edits here: never discard them. Offer the choice instead.
-  if (ui.editor.isDirty?.()) {
-    ui.editor.notifyRemoteChange?.({ onReload: () => adoptRemoteNote(fresh) });
+  if (fresh.body === ui.editor.getBody() && fresh.title === ui.editor.getTitle()) {
+    ui.current = fresh;
+    if (ui.session) { // the open editor's next save builds on this copy
+      ui.session.note = fresh;
+      ui.session.baseline = { title: fresh.title ?? '', body: fresh.body ?? '' };
+    }
+    return;
+  }
+  // Unsaved edits here, or a file or drawing on its way in: never discard them. Offer the
+  // choice instead.
+  if (ui.editor.isDirty?.() || ui.editor.isBusy?.()) {
+    ui.editor.notifyRemoteChange?.({ onReload: () => reloadRemoteNote(fresh) });
     return;
   }
   adoptRemoteNote(fresh);
+  if (fresh.id === ui.current?.id) markActiveCard(ui.activeBookmarkId);
 }
 
 // Keep the note list live: re-render when bookmarks change outside the app's own
@@ -1348,7 +1542,10 @@ async function refreshPanes() {
       const handles = ui.selected.has(draggedHandle)
         ? [...ui.selected]
         : [draggedHandle];
-      for (const handle of handles) await dropNote(handle, folderId);
+      for (const handle of handles) {
+        await dropNote(handle, folderId);
+        followOpenNote(handle, folderId);
+      }
       ui.selected = new Set(); ui.anchor = null; ui.focus = -1;
       await refreshPanes();
       toast(handles.length === 1 ? 'Note moved' : `${handles.length} notes moved`);
@@ -1450,7 +1647,9 @@ function renderCurrentEditor(opts = {}) {
   // every re-render, not just note switches, so toggling phonetics no longer
   // throws you back to the top of a long note either.
   if (ui.editor && ui.editorNoteId) rememberViewState(ui.editorNoteId, ui.editor.getViewState?.());
-  if (ui.editor && ui.editor.destroy) ui.editor.destroy(); // cancel the prior editor's pending auto-save
+  // Cancel the prior editor's pending auto-save. discardEdits: the reader threw its text
+  // away (deleted the note, or took another device's version), so nothing may save it.
+  if (ui.editor && ui.editor.destroy) ui.editor.destroy({ discard: !!opts.discardEdits });
   // A note switch can bring a script whose table isn't in memory yet — opening a Japanese
   // note with phonetics already on pulls the kana table here.
   syncPhoneticsTables(ui.current ? ui.current.body : '');
@@ -1461,11 +1660,104 @@ function renderCurrentEditor(opts = {}) {
   // A locked note is ciphertext we cannot read. It MUST be read-only: saving would
   // write the placeholder over the encrypted contents and destroy them for good.
   const isLocked = !!(ui.current && ui.current.locked);
-  ui.editor = renderEditor(document.getElementById('editor'), {
-    readOnly: inTrash || isLocked,
+  // A Drive-backed note whose body could not be fetched opens showing its short stored
+  // preview. Editing that would save the preview over the whole note.
+  const previewOnly = !!ui.current && previewOnlyNotes.has(ui.current);
+  // Which note this editor saves into, and where that note is stored. A save can finish
+  // after the reader has moved on: clicking "New note" blurs the old editor, and its
+  // blur-save resolves after the new editor exists. That save used to read and write the
+  // app-wide ui.current / ui.activeBookmarkId, so it pointed the app back at the old
+  // note's bookmark and the new note's next autosave overwrote the old note. Each note
+  // now has its own session, and only the session still open updates ui.
+  //
+  // Re-rendering the note already open (a phonetics toggle, say) while one of its saves
+  // is still running keeps that session: the save may be creating the note, or moving it
+  // between a bookmark and this device, and the new editor must save where it lands.
+  const previous = ui.session?.note && ui.session.note.id === ui.current?.id ? ui.session : null;
+  const session = !opts.discardEdits && previous?.pending > 0 ? previous : {
+    note: ui.current,
+    bookmarkId: ui.activeBookmarkId,
+    localId: ui.activeLocalId,
+    localFolderId: ui.activeLocalFolderId,
+    // The notebook the note is filed in (for a new note, the one being viewed).
+    folder: ui.activeLocalId
+      ? (ui.activeLocalFolderId ?? ui.activeFolder)
+      : (ui.current?.folderId ?? previous?.folder ?? ui.activeFolder),
+    pending: 0, // saves queued or running
+    queue: Promise.resolve(), // they run one at a time, each building on the last
+    // The text as this session last loaded or saved it: what a change from elsewhere is
+    // measured against (see reconcileOpenNote).
+    baseline: { title: ui.current?.title ?? '', body: ui.current?.body ?? '' },
+  };
+  ui.session = session;
+  const isCurrent = () => ui.session === session;
+  let editor = null;
+  const isOnScreen = () => isCurrent() && (editor === null || ui.editor === editor);
+
+  async function saveInto({ title, body, attachments }, { auto = false } = {}) {
+    const existing = session.note && (session.bookmarkId || session.localId);
+    const note = existing
+      ? withUpdatedContent(session.note, { title, body, attachments })
+      : createNote({ title, body, attachments });
+    // An existing note stays in its own notebook. A new one is filed, on its first save,
+    // in the notebook being viewed (never Trash) while it is still the note open.
+    const viewed = ui.activeFolder !== ui.trashId ? ui.activeFolder : session.folder;
+    const folder = existing || !isCurrent() ? session.folder : viewed;
+    const res = await saveNote(note, folder, session.bookmarkId);
+    const savedNote = res.note || note;
+    session.note = savedNote;
+    session.bookmarkId = res.bookmarkId;
+    session.localId = res.bookmarkId ? null : savedNote.id;
+    session.localFolderId = res.bookmarkId ? null : folder;
+    session.folder = folder;
+    session.baseline = { title: savedNote.title ?? '', body: savedNote.body ?? '' };
+    if (isCurrent()) {
+      ui.current = savedNote;
+      ui.activeBookmarkId = session.bookmarkId;
+      ui.activeLocalId = session.localId;
+      ui.activeLocalFolderId = session.localFolderId;
+      ui.isNew = false;
+    }
+    // Keep the ask index in sync with this save. Synchronous in-memory op — do NOT
+    // await it. upsertNote replaces the note's stale chunks when its content hash
+    // changed (edit), or just refreshes citation meta when only the folder moved.
+    askIndex.upsertNote({
+      ...savedNote, // id, title, body, hash
+      bookmarkId: session.bookmarkId || null,
+      folderId: folder,
+      localOnly: !!session.localId,
+    });
+    // Mirror the save into the vector index too, when semantic search is on. Same
+    // fire-and-forget, .catch-guarded discipline as the lexical upsert above; hash-
+    // diff means an unchanged body (e.g. a folder-only move) re-embeds nothing.
+    upsertSemantic(savedNote);
+    // [Task E16] Count this successful save toward the one-time review ask. Fire-and-
+    // forget (its body is fully .catch-guarded) so it never delays or blocks the save;
+    // a cheap in-memory guard stops all counting once the ask has been shown.
+    countSaveTowardReview();
+    // Auto-saves stay quiet — the editor's inline status confirms them and the size
+    // meter already flags oversized notes. Only manual saves pop a toast.
+    if (!auto) {
+      if (res.driveFailed) toast("Couldn't upload to Google Drive — saved on this device only", true);
+      else if (res.status === 'capped') toast('Too large to sync — saved locally only', true);
+      else if (res.status === 'synced') toast('Saved — large note synced via Drive');
+      else if (res.status === 'warn') toast('Large note — may not sync across devices', true);
+      else toast('Saved');
+    }
+    // Auto-save only needs the list (snippet/title) refreshed, not the whole shell —
+    // and nor does a save from an editor no longer on screen, whose full refresh would
+    // rebuild the editor the reader is typing in now.
+    if (auto || !isOnScreen()) await refreshNoteList();
+    else await refreshPanes();
+    return savedNote;
+  }
+
+  ui.editor = editor = renderEditor(document.getElementById('editor'), {
+    readOnly: inTrash || isLocked || previewOnly,
     readOnlyNotice: isLocked
       ? 'Locked — the key for this note is not on this device.'
-      : (inTrash ? 'In Trash — read only. Restore this note to edit it.' : ''),
+      : (inTrash ? 'In Trash — read only. Restore this note to edit it.'
+        : (previewOnly ? 'Only the start of this note could be loaded from Google Drive. Reopen it when Drive is reachable to edit it.' : '')),
     title: ui.current ? ui.current.title : '',
     body: ui.current ? ui.current.body : '',
     attachments: ui.current ? (ui.current.attachments || []) : [],
@@ -1476,6 +1768,7 @@ function renderCurrentEditor(opts = {}) {
     focusTitle: !!opts.focusTitle,
     measure: measureNoteSize,
     onChange: ({ title, body, attachments }) => {
+      if (!isOnScreen()) return; // a replaced editor must not write into the note now open
       if (ui.current) { ui.current.title = title; ui.current.body = body; ui.current.attachments = attachments; }
       // A note is usually empty when it opens, so typing is where its script first shows.
       // No-op once the tables it needs are in memory.
@@ -1486,51 +1779,37 @@ function renderCurrentEditor(opts = {}) {
       // same-note refreshes by design.
       askPanel?.refreshChip?.();
     },
-    onSave: async ({ title, body, attachments }, { auto = false } = {}) => {
-      const existing = ui.current && (ui.activeBookmarkId || ui.activeLocalId);
-      const note = existing
-        ? withUpdatedContent(ui.current, { title, body, attachments })
-        : createNote({ title, body, attachments });
-      const folder = ui.activeLocalId
-        ? (ui.activeLocalFolderId ?? ui.activeFolder)
-        : (ui.activeFolder === ui.rootId ? ui.rootId : ui.activeFolder);
-      const res = await saveNote(note, folder, ui.activeBookmarkId);
-      const savedNote = res.note || note;
-      ui.current = savedNote;
-      ui.activeBookmarkId = res.bookmarkId;
-      ui.activeLocalId = res.bookmarkId ? null : savedNote.id;
-      ui.activeLocalFolderId = res.bookmarkId ? null : folder;
-      ui.isNew = false;
-      // Keep the ask index in sync with this save. Synchronous in-memory op — do NOT
-      // await it. upsertNote replaces the note's stale chunks when its content hash
-      // changed (edit), or just refreshes citation meta when only the folder moved.
-      askIndex.upsertNote({
-        ...savedNote, // id, title, body, hash
-        bookmarkId: ui.activeBookmarkId || null,
-        folderId: ui.activeLocalId ? (ui.activeLocalFolderId ?? folder) : folder,
-        localOnly: !!ui.activeLocalId,
-      });
-      // Mirror the save into the vector index too, when semantic search is on. Same
-      // fire-and-forget, .catch-guarded discipline as the lexical upsert above; hash-
-      // diff means an unchanged body (e.g. a folder-only move) re-embeds nothing.
-      upsertSemantic(savedNote);
-      // [Task E16] Count this successful save toward the one-time review ask. Fire-and-
-      // forget (its body is fully .catch-guarded) so it never delays or blocks the save;
-      // a cheap in-memory guard stops all counting once the ask has been shown.
-      countSaveTowardReview();
-      // Auto-saves stay quiet — the editor's inline status confirms them and the size
-      // meter already flags oversized notes. Only manual saves pop a toast.
-      if (!auto) {
-        if (res.driveFailed) toast("Couldn't upload to Google Drive — saved on this device only", true);
-        else if (res.status === 'capped') toast('Too large to sync — saved locally only', true);
-        else if (res.status === 'synced') toast('Saved — large note synced via Drive');
-        else if (res.status === 'warn') toast('Large note — may not sync across devices', true);
-        else toast('Saved');
+    onSave: (content, options) => {
+      // Reopening this note, deleting it, or syncing it to Drive waits for this save
+      // (see settleSaves). Keyed by the note as it was when the save was asked for.
+      const key = session.note?.id;
+      // Queued behind another save — a slow Drive upload, say: keep this text on the
+      // device meanwhile, so closing the tab or a crash before its turn does not lose it.
+      // (Device-local notes only: a bookmarked note reopens from its bookmark, never from
+      // this copy, and one deleted elsewhere must not be left behind in it.)
+      if (session.pending > 0 && session.note && session.localId) {
+        const early = withUpdatedContent(session.note, content);
+        void mirror.getBackup(early.id)
+          .then((entry) => (entry?.localOnly ? mirror.saveBackup(early) : null))
+          .catch(() => {});
       }
-      // Auto-save only needs the list (snippet/title) refreshed, not the whole shell.
-      if (auto) await refreshNoteList();
-      else await refreshPanes();
-      return savedNote;
+      session.pending += 1;
+      const run = session.queue.then(() => saveInto(content, options));
+      session.queue = run.catch(() => {});
+      // Resolves to where the note now is and what it holds (null if the save failed), so
+      // that reopening it can show exactly that.
+      const stored = () => ({ note: session.note, bookmarkId: session.bookmarkId, localId: session.localId });
+      const done = run.then(stored, () => null).then((result) => {
+        session.pending -= 1;
+        if (key && savesInFlight.get(key) === done) savesInFlight.delete(key);
+        if (session.pending === 0 && session.reconcileSkipped) {
+          session.reconcileSkipped = false;
+          if (ui.session === session) void reconcileOpenNote().catch((e) => console.warn('open-note reconcile failed', e));
+        }
+        return result;
+      });
+      if (key) savesInFlight.set(key, done);
+      return run;
     },
     onDelete: ui.current ? () => deleteCurrentNote() : null,
     breadcrumb: ui.current ? folderPath(noteFolderId) : [],
@@ -1573,6 +1852,14 @@ function renderCurrentEditor(opts = {}) {
 
 async function deleteCurrentNote() {
   if (!ui.current) return;
+  // Clicking Delete blurred the editor, which started a save. Let it land first: a note
+  // trashed mid-save was filed straight back by that save, and a new note "discarded"
+  // while its first save ran was created by it anyway.
+  const session = ui.session;
+  await settleSaves(session?.note?.id, STILL_SAVING);
+  // Its own card may have been clicked meanwhile, reopening it in a new editor: that is
+  // still the note being deleted. Only another note means the reader moved on.
+  if (!ui.current || (ui.session !== session && ui.current.id !== session?.note?.id)) return;
   const saved = ui.activeBookmarkId || ui.activeLocalId;
   if (saved) {
     if (!confirm('Move this note to Trash?')) return;
@@ -1589,7 +1876,9 @@ async function deleteCurrentNote() {
   ui.current = null;
   ui.activeBookmarkId = null;
   ui.activeLocalId = null;
-  renderCurrentEditor();
+  // Nothing still pending in the old editor — an image that finishes loading, say — may
+  // save the note again: that would create a discarded draft or pull a note out of Trash.
+  renderCurrentEditor({ discardEdits: true });
   await refreshPanes();
   toast(saved ? 'Moved to Trash' : 'Discarded');
 }
@@ -1658,6 +1947,7 @@ export async function deleteNotebook(id) {
 }
 
 function newNote() {
+  openTicket += 1; // an open still waiting on a save gives way to this
   ui.current = createNote({ title: 'New note', body: '' });
   ui.activeBookmarkId = null;
   ui.activeLocalId = null;
@@ -1667,8 +1957,23 @@ function newNote() {
 }
 
 async function openLocalNote(id) {
+  const ticket = ++openTicket;
+  const settled = await settleSaves(id, STILL_SAVING);
+  if (settled) {
+    if (ticket !== openTicket) return; // another note was asked for meanwhile
+    // That save may have moved it back into bookmarks (it shrank under the cap).
+    const { stored } = settled;
+    if (stored?.bookmarkId) { await openBookmark(stored.bookmarkId, { ...stored.note, bookmarkId: stored.bookmarkId }); return; }
+  }
   const backup = await mirror.getBackup(id);
-  if (!backup || !backup.current) return;
+  if (!backup || !backup.current || ticket !== openTicket) return;
+  // Moved into a bookmark since the list was drawn: opened as device-local, its next save
+  // would make a second bookmark. Open the bookmark instead.
+  if (!backup.localOnly) {
+    if (!(ui.notes || []).some((n) => n.id === id && n.bookmarkId)) await refreshNoteList();
+    const listed = (ui.notes || []).find((n) => n.id === id && n.bookmarkId);
+    if (listed && ticket === openTicket) { await openBookmark(listed.bookmarkId); return; }
+  }
   markActiveCard(id); // ahead of renderCurrentEditor, which is the slow part here
   ui.current = backup.current;
   ui.activeBookmarkId = null;
@@ -1682,8 +1987,13 @@ async function openLocalNote(id) {
 // Resolve a (possibly Drive-backed) note to its full body. For a stub, prefer the local
 // mirror when it holds the same content (origin device — no fetch), else pull the full
 // payload from Drive. Falls back to the preview if Drive is unreachable, so it still opens.
+// Notes opened showing only their stored preview because Drive could not be reached (see
+// resolveNote). Kept beside the note object rather than on it, so the mark can never be
+// written into a saved payload, and rather than on ui, so a background resolve of the same
+// note (reconcileOpenNote) can neither lock a fully loaded editor nor unlock this one.
+const previewOnlyNotes = new WeakSet();
+
 async function resolveNote(n) {
-  ui.currentPreviewOnly = false;
   if (!n || !n._driveBody) return n;
   const backup = await mirror.getBackup(n.id);
   if (backup && backup.current && backup.current.body !== undefined && backup.current.hash === n.hash) {
@@ -1693,10 +2003,9 @@ async function resolveNote(n) {
     const full = await decode(await noteDrive.loadNoteBody(n._driveBody));
     return { ...full, _driveBody: n._driveBody, bookmarkId: n.bookmarkId, folderId: n.folderId, dateAdded: n.dateAdded };
   } catch {
-    // Flagged on ui, not on the note, so the marker can never be written into a
-    // saved payload. Cleared on every open by the assignment in openBookmark.
-    ui.currentPreviewOnly = true;
-    return { ...n, body: n.preview || '' }; // Drive unavailable — open with the preview
+    const preview = { ...n, body: n.preview || '' }; // Drive unavailable — open with the preview
+    previewOnlyNotes.add(preview);
+    return preview;
   }
 }
 
@@ -1715,11 +2024,39 @@ function markActiveCard(handle) {
   }
 }
 
-async function openBookmark(bookmarkId) {
-  const found = (ui.notes || []).find((n) => n.bookmarkId === bookmarkId);
+// known: the note itself, when the caller already has it rather than a list entry.
+async function openBookmark(bookmarkId, known = null) {
+  let found = known || (ui.notes || []).find((n) => n.bookmarkId === bookmarkId);
   if (!found) return;
   markActiveCard(bookmarkId); // before the await, so the click feels answered
-  ui.current = await resolveNote(found);
+  const ticket = ++openTicket;
+  const settled = await settleSaves(found.id, STILL_SAVING);
+  if (settled) {
+    if (ticket !== openTicket) return; // another note was asked for meanwhile
+    // Open what that save stored, not the list's older copy (which a search, or another
+    // notebook selected meanwhile, may no longer even show). A note that outgrew
+    // bookmarks during it lives on as a device-local copy.
+    const { stored } = settled;
+    if (stored?.localId) { await openLocalNote(stored.localId); return; }
+    if (stored?.note && stored.bookmarkId) {
+      // Its content from the save; where it lives from the list, which follows a move
+      // (a drag onto another notebook) made while the save ran.
+      found = {
+        ...found,
+        ...stored.note,
+        bookmarkId: stored.bookmarkId,
+        folderId: found.folderId ?? stored.note.folderId,
+        dateAdded: found.dateAdded ?? stored.note.dateAdded,
+      };
+      // Where its body lives on Drive is the save's to say: if it shrank back into its
+      // bookmark, the list's older pointer names a file that save just deleted.
+      if (!stored.note._driveBody) delete found._driveBody;
+      bookmarkId = stored.bookmarkId;
+    }
+  }
+  const resolved = await resolveNote(found); // may wait on Drive
+  if (ticket !== openTicket) return; // another note was asked for meanwhile
+  ui.current = resolved;
   ui.activeBookmarkId = bookmarkId;
   ui.activeLocalId = null;
   ui.isNew = false;
@@ -1757,6 +2094,7 @@ export async function togglePin(handle) {
 export async function openByHash() {
   const payload = location.hash.replace(/^#/, '');
   if (!payload) return;
+  const ticket = ++openTicket; // an open still waiting on a save gives way to this one
   try {
     let note;
     try {
@@ -1774,7 +2112,9 @@ export async function openByHash() {
     let match = null;
     try { match = (await bm.allNotes(ui.rootId)).find((r) => r.payload === payload); } catch { /* tree read failed */ }
     const matched = match ? { ...note, folderId: match.folderId, bookmarkId: match.bookmarkId } : note;
-    ui.current = note.locked ? matched : await resolveNote(matched);
+    const resolved = note.locked ? matched : await resolveNote(matched);
+    if (ticket !== openTicket) return; // another note was asked for meanwhile
+    ui.current = resolved;
     ui.activeBookmarkId = match ? match.bookmarkId : null;
     ui.activeLocalId = null;
     ui.isNew = false; // an opened note is not a new-note draft
@@ -1820,7 +2160,7 @@ function exportCurrentOwlNote() {
   // A Drive-backed note whose body could not be fetched opens showing its stored
   // preview. Packaging that would write a truncated note into a file labelled as a
   // backup — the same silent under-export the JSON backup was just removed for.
-  if (ui.currentPreviewOnly) {
+  if (previewOnlyNotes.has(ui.current)) {
     toast("Can't back up this note — its full text is in Drive and could not be loaded", true);
     return;
   }

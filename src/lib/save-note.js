@@ -40,10 +40,12 @@ export async function saveNote(note, folderId, existingBookmarkId, offload = off
   let existingKeyId = null;
   if (existingBookmarkId) {
     const prevPayload = await bm.payloadAt(existingBookmarkId);
-    if (prevPayload) {
-      try { existingKeyId = await encryptionKeyId(prevPayload); } catch { /* malformed legacy payload: save with the active key */ }
-      try { prevAtt = attachmentFileIds(await decode(prevPayload)); } catch { /* unreadable */ }
-    }
+    // The note was deleted (in another tab, or on another device) while it was open here.
+    // Saving would fail at the bookmark anyway, after uploading a new copy of it to Drive
+    // that nothing would ever refer to — on every attempt.
+    if (!prevPayload) throw new Error('This note was deleted');
+    try { existingKeyId = await encryptionKeyId(prevPayload); } catch { /* malformed legacy payload: save with the active key */ }
+    try { prevAtt = attachmentFileIds(await decode(prevPayload)); } catch { /* unreadable */ }
   }
 
   // Durability first — always, with full inline bytes. A NEW note's first copy is not
@@ -60,6 +62,7 @@ export async function saveNote(note, folderId, existingBookmarkId, offload = off
   const bytes = urlByteLength(payload);
 
   let result;
+  let driveBody = prevFileId; // where the note's body is kept on Drive once this save is done
   if (bytes > MAX_URL_BYTES) {
     // Over the bookmark sync cap. When Drive sync is on, offload the WHOLE note to Drive
     // and keep a small stub bookmark; otherwise fall back to device-local (today's behavior).
@@ -82,6 +85,7 @@ export async function saveNote(note, folderId, existingBookmarkId, offload = off
       if (bookmarkId) await bm.updateNote(bookmarkId, content.title, stubPayload);
       else bookmarkId = await bm.createNote(folderId, content.title, stubPayload);
       await mirror.saveBackup(completeNote, { localOnly: false });
+      driveBody = big.fileId;
       result = { bookmarkId, status: 'synced' };
     } else {
       if (existingBookmarkId) await bm.deleteNote(existingBookmarkId);
@@ -90,11 +94,18 @@ export async function saveNote(note, folderId, existingBookmarkId, offload = off
     }
   } else {
     // Fits in a bookmark. If it had been Drive-backed and shrank, clean up the Drive body.
-    if (prevFileId) { try { await deleteNoteBody(prevFileId); } catch { /* best-effort cleanup */ } }
     let bookmarkId = existingBookmarkId;
     if (bookmarkId) await bm.updateNote(bookmarkId, content.title, payload);
     else bookmarkId = await bm.createNote(folderId, content.title, payload);
-    await mirror.saveBackup(completeNote, { localOnly: false });
+    driveBody = null;
+    // The local copy must not point at the old body either: the cleanup below treats any
+    // note that still refers to a file as a reason to keep it.
+    const { _driveBody: _oldBody, ...inBookmark } = completeNote;
+    await mirror.saveBackup(prevFileId ? inBookmark : completeNote, { localOnly: false });
+    // One try, never queued for later: until sync catches up, another device may still
+    // have this note over the cap and be updating this very file. A failed delete (offline)
+    // leaves the file in Drive rather than risk deleting that copy.
+    if (prevFileId) { try { await deleteNoteBody(prevFileId); } catch { /* best-effort cleanup */ } }
     result = { bookmarkId, status: bytes > WARN_URL_BYTES ? 'warn' : 'ok' };
   }
 
@@ -109,7 +120,15 @@ export async function saveNote(note, folderId, existingBookmarkId, offload = off
   const cleanup = deleteUnreferencedFiles(prevAtt.filter((f) => !stillHere.has(f)))
     .catch((err) => { console.warn('[owl-note] Drive cleanup after save failed:', err); });
   await settleWithin(cleanup, CLEANUP_WAIT_MS);
-  return { ...result, note: completeNote };
+  // The caller saves this note again from what is returned here, so it must say where the
+  // body now lives on Drive. Without that, a note offloaded for the first time uploaded a
+  // new Drive file on every later save (the earlier ones were left behind), and a note
+  // that shrank back into its bookmark kept pointing at the file just deleted, so growing
+  // it again failed to save every time.
+  const saved = { ...completeNote };
+  if (driveBody) saved._driveBody = driveBody;
+  else delete saved._driveBody;
+  return { ...result, note: saved };
 }
 
 export const CLEANUP_WAIT_MS = 30_000;

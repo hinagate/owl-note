@@ -74,10 +74,69 @@ describe('service worker handlers', () => {
   it('mirrors a note when its bookmark changes', async () => {
     const root = await bm.ensureRoot();
     const note = createNote({ body: 'hello' });
-    const id = await bm.createNote(root, note.title, await encode(note));
-    await sw.handleBookmarkChanged(id, { url: bm.buildNoteUrl(await encode(note)) });
+    const payload = await encode(note);
+    const id = await bm.createNote(root, note.title, payload);
+    await sw.handleBookmarkChanged(id, { url: bm.buildNoteUrl(payload) });
     const backup = await getBackup(note.id);
     expect(backup.current.body).toBe('hello');
+  });
+
+  it('ignores an event the bookmark has already moved past', async () => {
+    // A waking worker can handle a write after the next one has landed, or after the note
+    // left its bookmark for this device. Mirroring that old text would roll the note back.
+    const { saveBackup } = await import('../src/lib/mirror.js');
+    const root = await bm.ensureRoot();
+    const note = createNote({ body: 'first' });
+    const first = await encode(note);
+    const id = await bm.createNote(root, note.title, first);
+    const newer = { ...note, body: 'second', version: note.version + 1 };
+    await bm.updateNote(id, note.title, await encode(newer));
+    await saveBackup(newer, { localOnly: false });
+    await sw.handleBookmarkChanged(id, { url: bm.buildNoteUrl(first) }); // the stale event
+    expect((await getBackup(note.id)).current.body).toBe('second');
+    await bm.deleteNote(id); // now device-local, with no bookmark
+    await saveBackup(newer, { folderId: root, localOnly: true });
+    await sw.handleBookmarkChanged(id, { url: bm.buildNoteUrl(first) });
+    expect((await getBackup(note.id)).localOnly).toBe(true);
+  });
+
+  it('keeps the full local copy of a Drive-backed note when its bookmark holds only the stub', async () => {
+    const { saveBackup } = await import('../src/lib/mirror.js');
+    const root = await bm.ensureRoot();
+    const note = createNote({ body: 'the whole long body' });
+    await saveBackup(note, { localOnly: false });
+    const stub = { id: note.id, title: note.title, version: note.version, hash: note.hash, _driveBody: 'FID', preview: 'the whole' };
+    const payload = await encode(stub);
+    const id = await bm.createNote(root, note.title, payload);
+    await sw.handleBookmarkChanged(id, { url: bm.buildNoteUrl(payload) });
+    expect((await getBackup(note.id)).current.body).toBe('the whole long body');
+  });
+
+  it('records a note given a bookmark elsewhere as no longer device-local', async () => {
+    // Another device shrank the note back under the cap and synced its bookmark here.
+    const { saveBackup, isLocalOnly } = await import('../src/lib/mirror.js');
+    const root = await bm.ensureRoot();
+    const note = createNote({ body: 'too big once' });
+    await saveBackup(note, { folderId: root, localOnly: true });
+    const newer = { ...note, body: 'small again', version: note.version + 1 };
+    const payload = await encode(newer);
+    const id = await bm.createNote(root, note.title, payload);
+    await sw.handleBookmarkChanged(id, { url: bm.buildNoteUrl(payload) });
+    expect(await isLocalOnly(note.id)).toBe(false);
+    expect((await getBackup(note.id)).current.body).toBe('small again');
+  });
+
+  it('leaves a note alone while the app, mid-save, has it marked device-local', async () => {
+    // The app may be taking the note out of this very bookmark: its own last write says
+    // where the note lives. Writing this copy over it could leave the note in no list.
+    const { saveBackup, isLocalOnly } = await import('../src/lib/mirror.js');
+    const root = await bm.ensureRoot();
+    const note = createNote({ body: 'growing past the cap' });
+    const payload = await encode(note);
+    const id = await bm.createNote(root, note.title, payload);
+    await saveBackup(note, { folderId: root, localOnly: true });
+    await sw.handleBookmarkChanged(id, { url: bm.buildNoteUrl(payload) });
+    expect(await isLocalOnly(note.id)).toBe(true);
   });
 
   it('handleSaveSelection saves a quoted-text fallback + source URL in root', async () => {

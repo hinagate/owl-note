@@ -41,6 +41,18 @@ describe('note-drive', () => {
     expect(client.uploadFile).not.toHaveBeenCalled();
   });
 
+  it('saveNoteBody stores the body in a new file when the old one is gone from Drive', async () => {
+    client.updateMedia.mockRejectedValue(new Error('Drive API 404 for https://www.googleapis.com/upload/drive/v3/files/OLD'));
+    client.uploadFile.mockResolvedValue('NEW');
+    expect(await saveNoteBody('n1', 'PAYLOAD', 'OLD')).toBe('NEW');
+  });
+
+  it('saveNoteBody still reports other Drive failures', async () => {
+    client.updateMedia.mockRejectedValue(new Error('Drive API 503 for https://www.googleapis.com/upload/drive/v3/files/OLD'));
+    await expect(saveNoteBody('n1', 'PAYLOAD', 'OLD')).rejects.toThrow('503');
+    expect(client.uploadFile).not.toHaveBeenCalled();
+  });
+
   it('loadNoteBody decodes the fetched bytes back to the payload string', async () => {
     client.getMedia.mockResolvedValue(new TextEncoder().encode('PAYLOAD'));
     expect(await loadNoteBody('F')).toBe('PAYLOAD');

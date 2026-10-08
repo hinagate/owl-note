@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderMarkdown } from '../src/lib/markdown.js';
-import { decorateMermaid, renderMermaid, loadMermaid, diagramImageUrl, _setMermaidImporter, MERMAID_ENTRY } from '../src/lib/mermaid-render.js';
+import { decorateMermaid, renderMermaid, loadMermaid, diagramImageUrl, _setMermaidImporter, MERMAID_ENTRY, EDIT_PAUSE_MS } from '../src/lib/mermaid-render.js';
 import { annotateRuby } from '../src/lib/ruby-annotate.js';
 import { installFakeChrome } from './helpers/fake-chrome.js';
 
@@ -37,6 +37,12 @@ beforeEach(() => {
 });
 afterEach(() => _setMermaidImporter(null));
 
+// A drawing as the preview held it before a rebuild.
+const drawing = (text) => {
+  const holder = document.createElement('div');
+  holder.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><text>${text}</text></svg>`;
+  return holder.firstElementChild;
+};
 const fence = (src) => '```mermaid\n' + src + '\n```';
 const host = (markdown) => {
   const el = document.createElement('div');
@@ -133,20 +139,18 @@ describe('Mermaid diagrams in rendered Markdown', () => {
     expect(html).toContain('marker-end'); // and so do arrowheads
   });
 
-  it('tries again later when the renderer itself could not load', async () => {
-    let attempts = 0;
-    _setMermaidImporter(async () => {
-      attempts += 1;
-      if (attempts === 1) throw new Error('net::ERR_FILE_NOT_FOUND');
-      return { default: fake };
-    });
+  it('says so, and stops trying, when the renderer itself could not load', async () => {
+    // Chrome answers every later import of a module that failed to load with the same
+    // failure, so trying again on each keystroke would only flash the error again.
+    const importer = vi.fn(async () => { throw new Error('net::ERR_FILE_NOT_FOUND'); });
+    _setMermaidImporter(importer);
     const first = host(fence('graph TD\n retry'));
     await decorateMermaid(first);
-    expect(first.querySelector('.mermaid-error-message').textContent).toMatch(/could not load/);
-    const second = host(fence('graph TD\n retry'));
-    await decorateMermaid(second);
-    expect(second.querySelector('svg')).toBeTruthy();
-    expect(attempts).toBe(2);
+    expect(first.querySelector('.mermaid-error-message').textContent).toMatch(/could not load\. Reopen OWL-Note/);
+    const second = host(fence('graph TD\n other'));
+    decorateMermaid(second);
+    expect(second.querySelector('.mermaid-error-message').textContent).toMatch(/could not load/); // at once
+    expect(importer).toHaveBeenCalledTimes(1);
   });
 
   it('cleans up the scratch element Mermaid can leave behind on failure', async () => {
@@ -306,7 +310,7 @@ describe('fixes from the first real-Chrome round', () => {
   it('keeps the last drawing on screen while an edited diagram redraws, instead of a placeholder', async () => {
     fake = fakeMermaid({ delay: 20 });
     _setMermaidImporter(async () => ({ default: fake }));
-    const previous = ['<svg xmlns="http://www.w3.org/2000/svg" id="old"><text>old drawing</text></svg>'];
+    const previous = [drawing('old drawing')];
     const el = host(fence('graph TD\n a-->b2'));
     const painting = decorateMermaid(el, { previous });
     const box = el.querySelector('.mermaid-diagram');
@@ -321,7 +325,7 @@ describe('fixes from the first real-Chrome round', () => {
   it('keeps the last good drawing, faded, with the error above it while the diagram is mid-edit', async () => {
     fake = fakeMermaid({ fail: 'half' });
     _setMermaidImporter(async () => ({ default: fake }));
-    const previous = ['<svg xmlns="http://www.w3.org/2000/svg" id="old"><text>last good</text></svg>'];
+    const previous = [drawing('last good')];
     const el = host(fence('graph TD\n half -->'));
     await decorateMermaid(el, { previous });
     const box = el.querySelector('.mermaid-diagram');
@@ -336,7 +340,7 @@ describe('fixes from the first real-Chrome round', () => {
     fake = fakeMermaid({ delay: 10 });
     _setMermaidImporter(async () => ({ default: fake }));
     const el = host([fence('graph TD\n new1'), fence('graph TD\n new2')].join('\n\n'));
-    const painting = decorateMermaid(el, { previous: ['<svg xmlns="http://www.w3.org/2000/svg"><text>only one before</text></svg>'] });
+    const painting = decorateMermaid(el, { previous: [drawing('only one before')] });
     expect(el.textContent).not.toContain('only one before');
     await painting;
   });
@@ -358,17 +362,47 @@ describe('fixes from the first real-Chrome round', () => {
 });
 
 describe('a diagram that never finishes drawing', () => {
-  it('gives up on it after the deadline, and the diagrams after it still draw', async () => {
+  it('gives up on it after the deadline, and draws the ones after it once Mermaid lets go', async () => {
+    // Mermaid queues its own renders, so while one hangs every later one would wait
+    // behind it and time out too. They are held back instead, then drawn.
+    let release;
     const stuck = fakeMermaid();
     stuck.render = vi.fn(async (id, text) => (text.includes('hang')
-      ? new Promise(() => {}) // an image whose host never answers
+      ? new Promise((resolve) => { release = () => resolve({ svg: '<svg xmlns="http://www.w3.org/2000/svg"></svg>' }); }) // an image whose host does not answer
       : { svg: `<svg xmlns="http://www.w3.org/2000/svg" id="${id}" viewBox="0 0 10 10"><text>${text.trim()}</text></svg>` }));
     _setMermaidImporter(async () => ({ default: stuck }), { timeoutMs: 30 });
     const el = host([fence('graph TD\n hang'), fence('graph TD\n after')].join('\n\n'));
-    await decorateMermaid(el);
+    await decorateMermaid(el, { live: true });
     const [first, second] = el.querySelectorAll('.mermaid-diagram');
     expect(first.querySelector('.mermaid-error-message').textContent).toMatch(/took too long to draw/);
-    expect(second.querySelector('svg').textContent).toContain('after');
+    expect(second.classList.contains('mermaid-pending')).toBe(true);
+    expect(second.textContent).toMatch(/Diagrams are paused/);
+    expect(stuck.render).toHaveBeenCalledTimes(1); // nothing was started behind the stuck one
+
+    release();
+    await vi.waitFor(() => expect(second.querySelector('svg')?.textContent).toContain('after'));
+    expect(second.classList.contains('mermaid-pending')).toBe(false);
+    expect(first.querySelector('.mermaid-error-message').textContent).toMatch(/took too long to draw/); // not tried again
+    expect(stuck.render).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves a PDF as it was captured when the stuck render lets go', async () => {
+    // The PDF host is measured once and then photographed slab by slab; a diagram drawn
+    // into it mid-capture would shift everything after it.
+    let release;
+    const stuck = fakeMermaid();
+    stuck.render = vi.fn(async (id, text) => (text.includes('hang')
+      ? new Promise((resolve) => { release = () => resolve({ svg: '<svg xmlns="http://www.w3.org/2000/svg"></svg>' }); })
+      : { svg: `<svg xmlns="http://www.w3.org/2000/svg" id="${id}" viewBox="0 0 10 10"><text>${text.trim()}</text></svg>` }));
+    _setMermaidImporter(async () => ({ default: stuck }), { timeoutMs: 30 });
+    await decorateMermaid(host(fence('graph TD\n hang')), { live: true });
+    const pdf = host(fence('graph TD\n report')); // attached to the page, as note-pdf.js does
+    await decorateMermaid(pdf);
+    expect(pdf.textContent).toMatch(/Diagrams are paused/);
+    release();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(pdf.querySelector('svg')).toBeNull();
+    expect(pdf.textContent).toMatch(/Diagrams are paused/);
   });
 
   it('is not retried on every keystroke once it has timed out', async () => {
@@ -389,6 +423,208 @@ describe('the render cache', () => {
     expect(fake.render).toHaveBeenCalledTimes(65);
     await renderMermaid('graph TD\n n0'); // the oldest was dropped
     expect(fake.render).toHaveBeenCalledTimes(66);
+  });
+
+  it('keeps a diagram that is still being shown, however many newer ones arrive', async () => {
+    for (let i = 0; i < 64; i += 1) await renderMermaid(`graph TD\n n${i}`);
+    await renderMermaid('graph TD\n n0'); // shown again: now the most recently used
+    await renderMermaid('graph TD\n n64'); // pushes out the least recently used, n1
+    expect(fake.render).toHaveBeenCalledTimes(65);
+    await renderMermaid('graph TD\n n0');
+    expect(fake.render).toHaveBeenCalledTimes(65);
+    await renderMermaid('graph TD\n n1');
+    expect(fake.render).toHaveBeenCalledTimes(66);
+  });
+});
+
+describe('typing into a diagram', () => {
+  // A rebuild handing decorateMermaid the given drawings as what each diagram showed.
+  const retypeWith = (el, text, previous) => {
+    el.innerHTML = renderMarkdown(fence(text));
+    return decorateMermaid(el, { live: true, previous });
+  };
+  // One keystroke: the preview is rebuilt, handing decorateMermaid what each diagram showed.
+  const retype = (el, text) => {
+    const previous = [...el.querySelectorAll('.mermaid-diagram')].map((box) => box.querySelector('svg'));
+    el.innerHTML = renderMarkdown(fence(text));
+    return decorateMermaid(el, { live: true, previous });
+  };
+
+  it('draws only the text the typing stopped at, not every keystroke', async () => {
+    fake = fakeMermaid({ delay: 5 });
+    _setMermaidImporter(async () => ({ default: fake }));
+    const el = host(fence('graph TD\n a'));
+    await decorateMermaid(el);
+    let painting;
+    for (const text of ['graph TD\n a-', 'graph TD\n a--', 'graph TD\n a-->', 'graph TD\n a-->b']) {
+      painting = retype(el, text);
+      await new Promise((r) => setTimeout(r, 30)); // faster than the pause before a redraw
+    }
+    await painting;
+    expect(fake.calls).toEqual(['graph TD\n a\n', 'graph TD\n a-->b\n']);
+    expect(el.querySelector('.mermaid-diagram svg').textContent).toContain('a-->b');
+  });
+
+  it('moves an unchanged drawing back in instead of parsing it again', async () => {
+    const el = host(fence('graph TD\n same'));
+    await decorateMermaid(el, { enlargeable: true });
+    const svg = el.querySelector('.mermaid-diagram svg');
+    el.innerHTML = renderMarkdown(fence('graph TD\n same'));
+    decorateMermaid(el, { enlargeable: true, previous: [svg] });
+    const box = el.querySelector('.mermaid-diagram');
+    expect(box.querySelector('svg')).toBe(svg);
+    expect(box.getAttribute('role')).toBe('button');
+  });
+
+  it('keeps the last good drawing for a mistake it has already seen', async () => {
+    fake = fakeMermaid({ fail: 'half' });
+    _setMermaidImporter(async () => ({ default: fake }));
+    await decorateMermaid(host(fence('graph TD\n half -->'))); // the error is now cached
+    const el = host(fence('graph TD\n half -->'));
+    decorateMermaid(el, { previous: [drawing('last good')] });
+    const box = el.querySelector('.mermaid-diagram');
+    expect(box.classList.contains('mermaid-stale')).toBe(true);
+    expect(box.querySelector('svg').textContent).toBe('last good');
+    expect(box.querySelector('pre')).toBeNull();
+  });
+
+  it('pauses once for an edit that changes several diagrams, not once per diagram', async () => {
+    const texts = Array.from({ length: 6 }, (_, i) => `graph TD\n n${i}`);
+    const el = host(texts.map(fence).join('\n\n'));
+    await decorateMermaid(el);
+    const previous = [...el.querySelectorAll('.mermaid-diagram')].map((box) => box.querySelector('svg'));
+    el.innerHTML = renderMarkdown(texts.map((t) => fence(`${t}x`)).join('\n\n')); // e.g. one undo
+    const started = performance.now();
+    await decorateMermaid(el, { previous });
+    expect(performance.now() - started).toBeLessThan(EDIT_PAUSE_MS * 3);
+    expect(el.querySelectorAll('.mermaid-diagram svg')).toHaveLength(6);
+  });
+
+  it('keeps the faded drawing on screen when a late error arrives for a box already replaced', async () => {
+    let failFirst;
+    fake.render = vi.fn((id, text) => (text.includes('S1')
+      ? new Promise((_, reject) => { failFirst = () => reject(new Error('Parse error')); })
+      : Promise.reject(new Error('Parse error'))));
+    const el = host(fence('graph TD\n S0'));
+    const drawn = drawing('drawn S0');
+    let rebuilt = retypeWith(el, 'graph TD\n S1', [drawn]); // its render is still running…
+    await vi.waitFor(() => expect(fake.render).toHaveBeenCalled());
+    rebuilt = retypeWith(el, 'graph TD\n S2', [el.querySelector('.mermaid-diagram svg')]); // …when the next keystroke lands
+    failFirst();
+    await new Promise((r) => setTimeout(r, 20)); // S1's error has landed; S2 is still in its pause
+    const box = el.querySelector('.mermaid-diagram');
+    expect(box.querySelector('svg')).toBe(drawn); // still on screen, not pulled into the replaced box
+    await rebuilt;
+  });
+
+  it('keeps a drawing on screen that has dropped out of the cache instead of drawing it again', async () => {
+    const texts = Array.from({ length: 70 }, (_, i) => `graph TD\n m${i}`);
+    const el = host(texts.map(fence).join('\n\n'));
+    await decorateMermaid(el);
+    const before = fake.render.mock.calls.length;
+    for (let round = 0; round < 2; round += 1) {
+      const previous = [...el.querySelectorAll('.mermaid-diagram')].map((box) => box.querySelector('svg'));
+      el.innerHTML = renderMarkdown(`${texts.map(fence).join('\n\n')}\n\nA new paragraph ${round}`);
+      const painting = decorateMermaid(el, { previous });
+      expect(el.querySelectorAll('.mermaid-pending')).toHaveLength(0);
+      await painting;
+    }
+    expect(fake.render.mock.calls.length).toBe(before);
+  });
+
+  it('still draws a diagram for a PDF after the preview that asked for it has moved on', async () => {
+    fake = fakeMermaid({ delay: 20 });
+    _setMermaidImporter(async () => ({ default: fake }));
+    const preview = host(fence('graph TD\n shared'));
+    decorateMermaid(preview, { previous: [drawing('old')] });
+    preview.innerHTML = ''; // the next keystroke replaced it
+    const pdf = document.createElement('div'); // laid out away from the page
+    pdf.innerHTML = renderMarkdown(fence('graph TD\n shared'));
+    await decorateMermaid(pdf);
+    expect(pdf.querySelector('.mermaid-diagram svg')).toBeTruthy();
+  });
+});
+
+describe('fixes from the second real-Chrome round', () => {
+  it('keeps the alignment Mermaid sets on titles and labels', async () => {
+    fake.render = vi.fn(async (id) => ({ svg: `<svg id="${id}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><text dominant-baseline="middle">t</text></svg>` }));
+    const el = host(fence('journey\n title t'));
+    await decorateMermaid(el);
+    expect(el.querySelector('text').getAttribute('dominant-baseline')).toBe('middle');
+  });
+
+  it('gives journey section titles a colour that shows against their box', async () => {
+    await decorateMermaid(host(fence('journey\n title t')));
+    expect(fake.initialize.mock.calls[0][0].themeCSS).toMatch(/text\.journey-section\s*\{\s*fill:/);
+  });
+
+  it('lays a diagram out at the width it will be shown at', async () => {
+    const width = vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(640);
+    let seen;
+    fake.render = vi.fn(async (id, text, container) => {
+      seen = { width: container?.style.width, inPage: container?.isConnected };
+      return { svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"></svg>' };
+    });
+    await decorateMermaid(host(fence('gantt\n title t')));
+    width.mockRestore();
+    expect(seen).toEqual({ width: '640px', inPage: true });
+    expect([...document.body.children].some((child) => child.style.left === '-10000px')).toBe(false); // removed after
+  });
+
+  it('lays a diagram out at the width of a box still on the page, not one a keystroke replaced', async () => {
+    // A box that has left the page measures 0.
+    const width = vi.spyOn(Element.prototype, 'clientWidth', 'get').mockImplementation(function () { return this.isConnected ? 640 : 0; });
+    let seen;
+    fake.render = vi.fn(async (id, text, container) => {
+      seen = container?.style.width;
+      return { svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"></svg>' };
+    });
+    const el = host(fence('gantt\n title t'));
+    const first = decorateMermaid(el);
+    el.innerHTML = renderMarkdown(fence('gantt\n title t')); // rebuilt before the render started
+    await Promise.all([first, decorateMermaid(el)]);
+    width.mockRestore();
+    expect(fake.render).toHaveBeenCalledTimes(1);
+    expect(seen).toBe('640px');
+  });
+
+  it('does not paint boxes a later keystroke replaced', async () => {
+    fake = fakeMermaid({ delay: 10 });
+    _setMermaidImporter(async () => ({ default: fake }));
+    const el = host(fence('graph TD\n a-->b'));
+    const first = decorateMermaid(el, { live: true });
+    const replaced = el.querySelector('.mermaid-diagram');
+    el.innerHTML = renderMarkdown(fence('graph TD\n a-->b'));
+    await Promise.all([first, decorateMermaid(el, { live: true })]);
+    expect(replaced.querySelector('svg')).toBeNull();
+    expect(el.querySelector('.mermaid-diagram svg')).toBeTruthy();
+  });
+
+  it('says plainly when one diagram type\'s part of the renderer could not load', async () => {
+    fake.render = vi.fn(async () => {
+      throw new TypeError('Failed to fetch dynamically imported module: chrome-extension://abc/mermaid/chunks/mermaid.esm.min/flowDiagram-X.mjs');
+    });
+    const el = host(fence('graph TD\n a-->b'));
+    await decorateMermaid(el);
+    expect(el.querySelector('.mermaid-error-message').textContent).toBe('Diagram error: Part of the diagram renderer could not load. Reopen OWL-Note to try again.');
+  });
+
+  it('refuses a diagram longer than Mermaid allows with its own message, without loading Mermaid', async () => {
+    const importer = vi.fn(async () => ({ default: fake }));
+    _setMermaidImporter(importer);
+    const el = host(fence(`graph TD\n${' a-->b\n'.repeat(8000)}`));
+    await decorateMermaid(el);
+    expect(el.querySelector('.mermaid-error-message').textContent).toBe('Diagram error: This diagram is too long to draw (over 50,000 characters).');
+    expect(importer).not.toHaveBeenCalled();
+  });
+
+  it('explains a diagram with too many connections in plain words', async () => {
+    fake.render = vi.fn(async () => {
+      throw new Error('Edge limit exceeded. 500 edges found, but the limit is 500.\n\nInitialize mermaid with maxEdges set to a higher number to allow more edges.\nYou cannot set this config via configuration inside the diagram as it is a secure config.\nYou have to call mermaid.initialize.');
+    });
+    const el = host(fence('graph TD\n a-->b'));
+    await decorateMermaid(el);
+    expect(el.querySelector('.mermaid-error-message').textContent).toBe('Diagram error: This diagram has too many connections to draw (the limit is 500).');
   });
 });
 

@@ -10,7 +10,7 @@ import { decode } from '../lib/codec.js';
 import { captureFullPage } from '../lib/full-page-capture.js';
 import { captureSmartPage } from '../lib/smart-page-capture.js';
 import { captureSmartSelection } from '../lib/smart-selection-capture.js';
-import { saveBackup, fileAbandonedSave } from '../lib/mirror.js';
+import { saveBackup, getBackup, fileAbandonedSave } from '../lib/mirror.js';
 import { bookmarkedNoteIds, liveFolderOr } from '../lib/stranded.js';
 import { contentHash, createNote } from '../lib/note.js';
 import { saveNote } from '../lib/save-note.js';
@@ -914,8 +914,23 @@ export async function handleBookmarkChanged(id, changeInfo) {
   const url = changeInfo && changeInfo.url;
   if (!isNoteUrl(url)) return;
   try {
+    // A worker waking up can handle an event after the note has moved on: written again,
+    // or taken out of its bookmark onto this device. Mirror only what the bookmark holds now.
+    const [live] = await chrome.bookmarks.get(id).catch(() => []);
+    if (!live || live.url !== url) return;
     const note = await decode(payloadFromUrl(url));
-    await saveBackup(note);
+    // An over-cap note's bookmark holds only a stub; its body is in Drive. Copying the stub
+    // over the local copy would throw away the one full copy this device has.
+    if (note._driveBody && note.body === undefined) return;
+    // The app is mid-save on this note and has it marked device-local: it may be taking
+    // the note out of this very bookmark right now. Its own final write says where the
+    // note lives; writing this copy over it could leave the note in no list at all.
+    const entry = await getBackup(note.id);
+    if (entry?.localOnly && (entry.current?.version ?? 0) >= (note.version ?? 0)) return;
+    // A note with a bookmark is not device-local. Saying so, rather than keeping the old
+    // flag, matters when the app has just moved a note back into its bookmark: this runs
+    // while that save finishes and would otherwise write the stale flag back over it.
+    await saveBackup(note, { localOnly: false });
   } catch {
     /* malformed payload — ignore, the live bookmark is unchanged */
   }
