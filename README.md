@@ -85,6 +85,7 @@ Save a selected region as structured Markdown while preserving headings, emphasi
 - Automatic saving
 - Code syntax highlighting
 - KaTeX math
+- Mermaid diagrams in the preview and PDFs (click to enlarge)
 - Photos and file attachments
 - Draggable image preview
 - Nested notebooks and multi‑select organization
@@ -150,6 +151,12 @@ Works with Chrome, Edge, and other Chromium‑based browsers. See Releases or th
 **GPL‑3.0**
 
 Source code: **[https://github.com/hinagate/owl-note](https://github.com/hinagate/owl-note)**
+
+#### Mermaid
+
+Diagrams are drawn by [Mermaid](https://github.com/mermaid-js/mermaid) (MIT), shipped
+unmodified under `mermaid/` in the extension. The licence notices for Mermaid and the code
+it bundles are in `mermaid/THIRD_PARTY_NOTICES.txt`.
 
 #### Pronunciation data
 
