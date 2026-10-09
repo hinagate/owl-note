@@ -518,6 +518,7 @@ export function resetUI() {
   ui.phoneticsBusy = false;
   phoneticsFailed.clear();
   savesInFlight.clear();
+  deleting = false;
   openTicket += 1; // an open still waiting on a save from before the reset gives way
   ui.previewZoom = DEFAULT_ZOOM;
   // Drop the Ask drawer/controller so the next initUI rebinds to the fresh DOM
@@ -1133,7 +1134,10 @@ async function settleSaves(id, { maxWaitMs = SAVE_WAIT_MS, onSlow = null } = {})
 // can run past a minute — since acting on it any sooner can duplicate the note or undo
 // the delete. A later click on another note still wins (openTicket); this says why
 // nothing has happened yet.
-const STILL_SAVING = { maxWaitMs: Infinity, onSlow: () => toast('Still saving this note — one moment…') };
+const stillSaving = (stillWanted) => ({
+  maxWaitMs: Infinity,
+  onSlow: () => { if (stillWanted()) toast('Still saving this note — one moment…'); },
+});
 
 // The press that moves focus out of the editor — on a note card or "+ New note" — starts
 // a blur-save, and that save's list refresh rebuilt the list before the button came up:
@@ -1850,16 +1854,29 @@ function renderCurrentEditor(opts = {}) {
   askPanel?.refreshChip?.();
 }
 
+// A Delete still waiting for its note's save: pressing Delete again (nothing seems to
+// happen while it waits) must not ask twice.
+let deleting = false;
 async function deleteCurrentNote() {
-  if (!ui.current) return;
+  if (!ui.current || deleting) return;
+  deleting = true;
+  try {
+    await deleteOpenNote();
+  } finally {
+    deleting = false;
+  }
+}
+
+async function deleteOpenNote() {
   // Clicking Delete blurred the editor, which started a save. Let it land first: a note
   // trashed mid-save was filed straight back by that save, and a new note "discarded"
   // while its first save ran was created by it anyway.
   const session = ui.session;
-  await settleSaves(session?.note?.id, STILL_SAVING);
   // Its own card may have been clicked meanwhile, reopening it in a new editor: that is
   // still the note being deleted. Only another note means the reader moved on.
-  if (!ui.current || (ui.session !== session && ui.current.id !== session?.note?.id)) return;
+  const stillThisNote = () => !!ui.current && (ui.session === session || ui.current.id === session?.note?.id);
+  await settleSaves(session?.note?.id, stillSaving(stillThisNote));
+  if (!stillThisNote()) return;
   const saved = ui.activeBookmarkId || ui.activeLocalId;
   if (saved) {
     if (!confirm('Move this note to Trash?')) return;
@@ -1958,7 +1975,8 @@ function newNote() {
 
 async function openLocalNote(id) {
   const ticket = ++openTicket;
-  const settled = await settleSaves(id, STILL_SAVING);
+  markActiveCard(id); // before any wait, so the click feels answered
+  const settled = await settleSaves(id, stillSaving(() => ticket === openTicket));
   if (settled) {
     if (ticket !== openTicket) return; // another note was asked for meanwhile
     // That save may have moved it back into bookmarks (it shrank under the cap).
@@ -1971,8 +1989,9 @@ async function openLocalNote(id) {
   // would make a second bookmark. Open the bookmark instead.
   if (!backup.localOnly) {
     if (!(ui.notes || []).some((n) => n.id === id && n.bookmarkId)) await refreshNoteList();
+    if (ticket !== openTicket) return; // another note was asked for meanwhile
     const listed = (ui.notes || []).find((n) => n.id === id && n.bookmarkId);
-    if (listed && ticket === openTicket) { await openBookmark(listed.bookmarkId); return; }
+    if (listed) { await openBookmark(listed.bookmarkId); return; }
   }
   markActiveCard(id); // ahead of renderCurrentEditor, which is the slow part here
   ui.current = backup.current;
@@ -2030,7 +2049,7 @@ async function openBookmark(bookmarkId, known = null) {
   if (!found) return;
   markActiveCard(bookmarkId); // before the await, so the click feels answered
   const ticket = ++openTicket;
-  const settled = await settleSaves(found.id, STILL_SAVING);
+  const settled = await settleSaves(found.id, stillSaving(() => ticket === openTicket));
   if (settled) {
     if (ticket !== openTicket) return; // another note was asked for meanwhile
     // Open what that save stored, not the list's older copy (which a search, or another

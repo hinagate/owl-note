@@ -781,3 +781,69 @@ describe('fixes from the focused real-Chrome round', () => {
     }
   });
 });
+
+describe('fixes from the last review', () => {
+  const card = (title) => [...document.querySelectorAll('#note-list .card')].find((c) => c.textContent.includes(title));
+  const editorTitle = () => document.querySelector('#editor .note-title')?.value;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const slowDown = (obj, name, ms) => {
+    const original = obj[name];
+    obj[name] = async (...args) => { await sleep(ms); return original.apply(obj, args); };
+    return () => { obj[name] = original; };
+  };
+
+  it('a click on another note wins over a stale device-local card that is still being redirected', async () => {
+    const app = await import('../src/app/app.js');
+    const bm = await import('../src/lib/bookmarks.js');
+    const { createNote } = await import('../src/lib/note.js');
+    const { encode } = await import('../src/lib/codec.js');
+    const root = await bm.ensureRoot();
+    await bm.createNote(root, 'Books', await encode({ id: 'b1', title: 'Books', body: 'dune', created: 1000 }));
+    const big = { ...createNote({ title: 'Log', body: bigBody() }), created: 500 };
+    await app.saveNote(big, root);
+    await app.initUI(root);
+    await waitFor(() => editorTitle() === 'Log');
+    card('Books').click();
+    await waitFor(() => editorTitle() === 'Books');
+    const stale = card('Log');
+    await app.saveNote({ ...big, body: 'short now', version: big.version + 1 }, root); // given a bookmark, unseen
+    const restore = slowDown(chrome.bookmarks, 'getChildren', 60); // its list refresh is slow
+    try {
+      stale.click();
+      await sleep(20);
+      card('Books').click(); // the reader changes their mind
+      await sleep(600);
+      expect(editorTitle()).toBe('Books');
+    } finally {
+      restore();
+    }
+  });
+
+  it('pressing Delete twice while the save runs asks once', async () => {
+    const app = await import('../src/app/app.js');
+    const bm = await import('../src/lib/bookmarks.js');
+    const { encode } = await import('../src/lib/codec.js');
+    const root = await bm.ensureRoot();
+    await bm.createNote(root, 'Plan', await encode({ id: 'p1', title: 'Plan', body: 'start', created: 2000 }));
+    await app.initUI(root);
+    await waitFor(() => editorTitle() === 'Plan');
+    const restore = slowDown(chrome.bookmarks, 'update', 300);
+    const restoreMove = slowDown(chrome.bookmarks, 'move', 30); // moving to Trash takes a moment
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    try {
+      document.querySelector('textarea.note-body').value = 'start more';
+      document.querySelector('textarea.note-body').dispatchEvent(new Event('input', { bubbles: true }));
+      document.querySelector('textarea.note-body').dispatchEvent(new Event('blur'));
+      document.querySelector('#editor .delete').click();
+      await sleep(50);
+      document.querySelector('#editor .delete').click(); // nothing seemed to happen
+      await waitFor(() => document.getElementById('toast').textContent === 'Moved to Trash', 5000);
+      await sleep(200);
+      expect(confirm).toHaveBeenCalledTimes(1);
+    } finally {
+      confirm.mockRestore();
+      restore();
+      restoreMove();
+    }
+  });
+});
