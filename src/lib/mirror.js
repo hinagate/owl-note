@@ -43,9 +43,11 @@ export async function healMissing(existingIds) {
 // reads the bookmark tree instead and is complete; the keys ship separately as a
 // recovery-key file. Nothing should reconstruct a note backup from the mirror.
 
+// Device-local notes filed in `folderId` — or, given a Set, in any of those notebooks.
 export async function localOnlyBackups(folderId) {
+  const filedHere = folderId instanceof Set ? (id) => folderId.has(id) : (id) => id === folderId;
   return (await allEntries())
-    .filter((e) => e.localOnly && e.folderId === folderId)
+    .filter((e) => e.localOnly && filedHere(e.folderId))
     .map((e) => ({ ...e.current, bookmarkId: null, localOnly: true, folderId: e.folderId }));
 }
 

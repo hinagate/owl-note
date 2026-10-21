@@ -159,18 +159,29 @@ export async function listNotes(folderId) {
 }
 
 export async function allNotes(rootId) {
-  const out = [];
+  return (await notesInTree(rootId)).notes;
+}
+
+// Every note under `rootId` at any depth, and the ids of every notebook walked to find
+// them (rootId included) — both from one pass over the tree.
+export async function notesInTree(rootId) {
+  const notes = [];
+  const folderIds = [rootId];
+  // A note moved deeper while the walk runs (a drag, another device's sync) is met
+  // again in its new notebook; listing it twice broke the Ask index's rebuild.
+  const seen = new Set();
   async function walk(id) {
     for (const c of await chrome.bookmarks.getChildren(id)) {
       if (c.url) {
-        if (isNoteUrl(c.url)) out.push({ bookmarkId: c.id, folderId: id, title: c.title, url: c.url, payload: payloadFromUrl(c.url), dateAdded: c.dateAdded });
+        if (isNoteUrl(c.url) && !seen.has(c.id) && seen.add(c.id)) notes.push({ bookmarkId: c.id, folderId: id, title: c.title, url: c.url, payload: payloadFromUrl(c.url), dateAdded: c.dateAdded });
       } else {
+        folderIds.push(c.id);
         await walk(c.id);
       }
     }
   }
   await walk(rootId);
-  return out;
+  return { notes, folderIds };
 }
 
 // The compressed payload of a single note bookmark (null if it isn't a note / is gone).

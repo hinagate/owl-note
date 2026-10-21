@@ -531,6 +531,37 @@ describe('app integration', () => {
     expect(visible.some((n) => n.title === 'Hidden')).toBe(false);
   });
 
+  it('lists the notes of nested notebooks under their parent, each still filed where it lives', async () => {
+    const app = await import('../src/app/app.js');
+    const bm = await import('../src/lib/bookmarks.js');
+    const mirror = await import('../src/lib/mirror.js');
+    const { encode } = await import('../src/lib/codec.js');
+    const { createNote } = await import('../src/lib/note.js');
+    const root = await bm.ensureRoot();
+    await app.initUI(root);
+    const parent = await bm.createNotebook(root, 'Work');
+    const child = await bm.createNotebook(parent, 'Research');
+    const grandchild = await bm.createNotebook(child, 'Papers');
+    const sibling = await bm.createNotebook(root, 'Home');
+    const file = async (folder, title) => {
+      const note = createNote({ title, body: title });
+      await bm.createNote(folder, note.title, await encode(note));
+    };
+    await file(parent, 'Plan');
+    await file(child, 'Survey');
+    await file(grandchild, 'Paper');
+    await file(sibling, 'Groceries');
+    const local = createNote({ title: 'Local scan', body: 'x' });
+    await mirror.saveBackup(local, { folderId: grandchild, localOnly: true });
+
+    const inParent = await app.loadNotes(parent);
+    expect(inParent.map((n) => n.title).sort()).toEqual(['Local scan', 'Paper', 'Plan', 'Survey']);
+    expect(inParent.find((n) => n.title === 'Survey').folderId).toBe(child); // saves keep it in Research
+    expect(inParent.find((n) => n.title === 'Local scan').folderId).toBe(grandchild);
+    expect((await app.loadNotes(child)).map((n) => n.title).sort()).toEqual(['Local scan', 'Paper', 'Survey']);
+    expect((await app.loadNotes(root)).map((n) => n.title)).toContain('Local scan'); // All notes, too
+  });
+
   it('deletes a notebook and moves its notes to Trash', async () => {
     const app = await import('../src/app/app.js');
     const bm = await import('../src/lib/bookmarks.js');

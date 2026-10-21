@@ -690,15 +690,21 @@ export function renderEditor(
     lightboxImage.style.transform = `${pan}scale(${lightboxScale})`;
   }
 
+  // The image's fitted size, before any zoom. offsetWidth/Height are layout sizes, which
+  // a transform never changes. The transformed box (getBoundingClientRect) is no good
+  // here: the transform transition is still at its START when a wheel step measures it,
+  // so dividing that box by the new scale gave a size one step stale — the pan clamp
+  // then yanked the image back toward the middle and every zoom step lurched.
+  function lightboxBaseSize() {
+    return { width: lightboxImage.offsetWidth, height: lightboxImage.offsetHeight };
+  }
+
   function clampLightboxPan() {
-    // getBoundingClientRect includes the current transform; dividing by scale
-    // recovers the image's fitted size. jsdom reports zeroes, so tests retain the
-    // raw drag delta while real browser views stay bounded to the image edges.
-    const rect = lightboxImage.getBoundingClientRect();
+    // jsdom reports zeroes, so tests retain the raw drag delta while real browser
+    // views stay bounded to the image edges.
+    const { width: baseWidth, height: baseHeight } = lightboxBaseSize();
     const viewportWidth = lightbox.clientWidth || window.innerWidth;
     const viewportHeight = lightbox.clientHeight || window.innerHeight;
-    const baseWidth = lightboxScale ? rect.width / lightboxScale : rect.width;
-    const baseHeight = lightboxScale ? rect.height / lightboxScale : rect.height;
     if (!baseWidth || !baseHeight || !viewportWidth || !viewportHeight) return;
     const maxX = Math.max(0, (baseWidth * lightboxScale - viewportWidth) / 2);
     const maxY = Math.max(0, (baseHeight * lightboxScale - viewportHeight) / 2);
@@ -731,25 +737,23 @@ export function renderEditor(
     lightboxImage.classList.toggle('fit-width', decision);
   }
 
-  // Whether the image currently extends past the viewport, per axis. Panning and
-  // wheel-scrolling both key off this rather than off the zoom level: a width-fitted
-  // capture overflows vertically at scale 1, where a scale>1 test would refuse to move.
+  // Whether the image currently extends past the viewport, per axis. Panning keys off
+  // this rather than off the zoom level: a width-fitted capture overflows vertically at
+  // scale 1, where a scale>1 test would refuse to move.
   function lightboxOverflow() {
-    const rect = lightboxImage.getBoundingClientRect();
+    const { width, height } = lightboxBaseSize();
     const viewportWidth = lightbox.clientWidth || window.innerWidth;
     const viewportHeight = lightbox.clientHeight || window.innerHeight;
     // jsdom reports zeroes for every box, and an unmeasurable image must not silently
     // become unpannable. Fall back to the zoom level, which is what this used to test
     // and is still true in a real browser: magnifying past the fitted size overflows.
-    if (!rect.width || !rect.height || !viewportWidth || !viewportHeight) {
+    if (!width || !height || !viewportWidth || !viewportHeight) {
       const zoomed = lightboxScale > 1;
       return { x: zoomed, y: zoomed, any: zoomed };
     }
-    return {
-      x: rect.width > viewportWidth + 1,
-      y: rect.height > viewportHeight + 1,
-      any: rect.width > viewportWidth + 1 || rect.height > viewportHeight + 1,
-    };
+    const x = width * lightboxScale > viewportWidth + 1;
+    const y = height * lightboxScale > viewportHeight + 1;
+    return { x, y, any: x || y };
   }
 
   // How far this image can usefully be magnified. Scale 1 is the FITTED size, not
@@ -762,16 +766,39 @@ export function renderEditor(
   const LIGHTBOX_MAX_SCALE = 8;
   function maxLightboxScale() {
     const natural = lightboxImage.naturalWidth;
-    // getBoundingClientRect includes the live transform, so dividing by the current
-    // scale recovers the fitted width — the same trick clampLightboxPan uses.
-    const rect = lightboxImage.getBoundingClientRect().width;
-    const fitted = lightboxScale ? rect / lightboxScale : rect;
+    const fitted = lightboxBaseSize().width;
     if (!natural || !fitted) return LIGHTBOX_MIN_MAX_SCALE; // jsdom / not yet laid out
     return Math.min(LIGHTBOX_MAX_SCALE, Math.max(LIGHTBOX_MIN_MAX_SCALE, (natural / fitted) * 2));
   }
 
-  function setLightboxScale(value) {
-    lightboxScale = Math.min(maxLightboxScale(), Math.max(0.5, Math.round(value * 100) / 100));
+  // Zooming out stops at half the fitted size — or, for a capture far taller than the
+  // window, at the size that shows all of it, so the wheel can take in the whole page
+  // and then zoom back in on the part under the pointer.
+  const LIGHTBOX_MIN_SCALE = 0.5;
+  function minLightboxScale() {
+    const { width, height } = lightboxBaseSize();
+    const viewportWidth = lightbox.clientWidth || window.innerWidth;
+    const viewportHeight = lightbox.clientHeight || window.innerHeight;
+    if (!width || !height || !viewportWidth || !viewportHeight) return LIGHTBOX_MIN_SCALE;
+    return Math.min(LIGHTBOX_MIN_SCALE, viewportWidth / width, viewportHeight / height);
+  }
+
+  // `anchor` is a point in client coordinates to hold still — the pointer, for a wheel
+  // zoom — so the part being looked at grows in place instead of sliding away toward
+  // the edge, as zooming about the image's centre made it do. Not rounded: a touchpad's
+  // small steps rounded back to the same 1% and the zoom stuck.
+  function setLightboxScale(value, anchor) {
+    const previous = lightboxScale;
+    lightboxScale = Math.min(maxLightboxScale(), Math.max(minLightboxScale(), value));
+    const box = anchor && previous ? lightbox.getBoundingClientRect() : null;
+    if (box && box.width && box.height) {
+      // The image is centred in the lightbox, so its unpanned centre is the box's.
+      const dx = anchor.x - (box.left + box.width / 2);
+      const dy = anchor.y - (box.top + box.height / 2);
+      const ratio = lightboxScale / previous;
+      lightboxPanX = dx - (dx - lightboxPanX) * ratio;
+      lightboxPanY = dy - (dy - lightboxPanY) * ratio;
+    }
     applyLightboxTransform();
     const overflow = lightboxOverflow();
     if (!overflow.any) {
@@ -904,19 +931,19 @@ export function renderEditor(
 
   lightboxClose.addEventListener('click', closeLightbox);
   lightbox.addEventListener('click', (e) => { if (e.target === lightbox) closeLightbox(); });
+  // The wheel always zooms, toward the pointer, by as much as it turned: a mouse notch
+  // (100px) is one 15% step and a touchpad's small deltas make small steps, so both
+  // glide. Scrolling instead whenever the image overflowed meant that, once zoomed in,
+  // only ctrl+wheel zoomed any further. Moving around is a drag (pointerdown below); a
+  // tall capture can also be zoomed out whole and back in on the part wanted.
+  const LIGHTBOX_WHEEL_STEP = 1.15;
   lightbox.addEventListener('wheel', (e) => {
     if (lightbox.hidden) return;
-    e.preventDefault();
-    // A 17541px-tall capture cannot be reached by zooming, and zoom was the only thing
-    // the wheel did. Scroll it instead when there is somewhere to scroll, and keep zoom
-    // on ctrl/meta+wheel, which is what browsers and image viewers already train.
-    if (!e.ctrlKey && !e.metaKey && lightboxOverflow().y) {
-      lightboxPanY -= e.deltaY;
-      clampLightboxPan();
-      applyLightboxTransform();
-      return;
-    }
-    setLightboxScale(lightboxScale * (e.deltaY < 0 ? 1.15 : (1 / 1.15)));
+    e.preventDefault(); // ctrl+wheel and a touchpad pinch included: never the page's own zoom
+    // Capped at one notch, so a wheel set to scroll many lines at a time still steps.
+    const delta = Math.max(-100, Math.min(100, e.deltaY));
+    if (!delta) return;
+    setLightboxScale(lightboxScale * LIGHTBOX_WHEEL_STEP ** (-delta / 100), { x: e.clientX, y: e.clientY });
   }, { passive: false });
   lightboxImage.addEventListener('dragstart', (e) => e.preventDefault());
   lightboxImage.addEventListener('pointerdown', (e) => {

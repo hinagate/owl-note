@@ -1058,9 +1058,15 @@ export async function initUI(rootId) {
     .catch((e) => { console.warn('Drive cleanup retry failed:', e); });
 }
 
+// A notebook lists the notes of every notebook nested inside it too, the way All notes
+// lists everything — Trash aside, which only ever holds notes.
 export async function loadNotes(folderId) {
-  const raw = folderId === ui.rootId ? await bm.allNotes(ui.rootId) : await bm.listNotes(folderId);
-  const visible = folderId === ui.trashId ? raw : raw.filter((r) => r.folderId !== ui.trashId);
+  const inTrash = folderId === ui.trashId;
+  const tree = inTrash
+    ? { notes: await bm.listNotes(folderId), folderIds: [folderId] }
+    : await bm.notesInTree(folderId);
+  const visible = inTrash ? tree.notes : tree.notes.filter((r) => r.folderId !== ui.trashId);
+  const folders = new Set(inTrash ? tree.folderIds : tree.folderIds.filter((id) => id !== ui.trashId));
   const decoded = [];
   const seen = new Set();
   for (const r of visible) {
@@ -1091,7 +1097,7 @@ export async function loadNotes(folderId) {
       /* anything else really is malformed — skip it */
     }
   }
-  for (const ln of await mirror.localOnlyBackups(folderId)) {
+  for (const ln of await mirror.localOnlyBackups(folders)) {
     if (!seen.has(ln.id)) { decoded.push(ln); seen.add(ln.id); }
   }
   return decoded;

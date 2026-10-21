@@ -135,6 +135,24 @@ describe('editor', () => {
     expect(enlargedImage.style.transform).toBe('scale(1)');
   });
 
+  it('zooms an enlarged photo with the plain wheel even once it overflows, in steps as fine as the wheel', () => {
+    const el = document.getElementById('editor');
+    renderEditor(el, { body: '![A bird](https://example.test/bird.png)' });
+    el.querySelector('.preview img').click();
+    const lightbox = el.querySelector('.image-lightbox');
+    const zoom = () => lightbox.querySelector('.image-lightbox-zoom').textContent;
+    const wheel = (deltaY) => lightbox.dispatchEvent(new WheelEvent('wheel', { deltaY, cancelable: true }));
+    wheel(-100);
+    wheel(-100); // zoomed in and overflowing: this used to pan unless ctrl was held
+    expect(zoom()).toBe('132%');
+    wheel(10); // a touchpad-sized delta, which 1% rounding used to swallow
+    expect(zoom()).toBe('130%');
+    wheel(-1000); // a wheel set to scroll many lines still moves one notch
+    expect(zoom()).toBe('150%');
+    for (let i = 0; i < 20; i += 1) wheel(100);
+    expect(zoom()).toBe('50%');
+  });
+
   it('keeps Find in note last so it wraps only when the first row runs out of room', () => {
     const el = document.getElementById('editor');
     renderEditor(el, { body: 'Owl one\nno match\nowl two' });
