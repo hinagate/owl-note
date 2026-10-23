@@ -153,6 +153,45 @@ describe('editor', () => {
     expect(zoom()).toBe('50%');
   });
 
+  it('steps through the note\'s photos with the side arrows and arrow keys, and zooms with − / +', () => {
+    const el = document.getElementById('editor');
+    renderEditor(el, { body: '![one](https://example.test/1.png)\n\ntext\n\n![two](https://example.test/2.png)\n\n![three](https://example.test/3.png)' });
+    const lightbox = el.querySelector('.image-lightbox');
+    const image = lightbox.querySelector('.image-lightbox-image');
+    const prev = lightbox.querySelector('.image-lightbox-nav.prev');
+    const next = lightbox.querySelector('.image-lightbox-nav.next');
+    const count = lightbox.querySelector('.image-lightbox-count');
+    el.querySelectorAll('.preview img')[1].click();
+    expect(image.src).toContain('2.png');
+    expect(count.textContent).toBe('2 / 3');
+    expect([prev.hidden, next.hidden]).toEqual([false, false]);
+    lightbox.querySelector('.image-lightbox-zoom-in').click();
+    expect(lightbox.querySelector('.image-lightbox-zoom').textContent).toBe('115%');
+    next.click();
+    expect(image.src).toContain('3.png');
+    expect(lightbox.querySelector('.image-lightbox-zoom').textContent).toBe('100%'); // each photo opens fitted
+    expect([count.textContent, next.hidden]).toEqual(['3 / 3', true]);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' }));
+    expect(image.src).toContain('1.png');
+    expect([count.textContent, prev.hidden]).toEqual(['1 / 3', true]);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' })); // no wrap past the first
+    expect(image.src).toContain('1.png');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: '-' }));
+    expect(lightbox.querySelector('.image-lightbox-zoom').textContent).toBe('87%');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(lightbox.hidden).toBe(true);
+  });
+
+  it('shows no arrows or count for a note with a single photo', () => {
+    const el = document.getElementById('editor');
+    renderEditor(el, { body: '![only](https://example.test/only.png)' });
+    el.querySelector('.preview img').click();
+    const lightbox = el.querySelector('.image-lightbox');
+    expect([...lightbox.querySelectorAll('.image-lightbox-nav')].every((b) => b.hidden)).toBe(true);
+    expect(lightbox.querySelector('.image-lightbox-count').hidden).toBe(true);
+  });
+
   it('keeps Find in note last so it wraps only when the first row runs out of room', () => {
     const el = document.getElementById('editor');
     renderEditor(el, { body: 'Owl one\nno match\nowl two' });

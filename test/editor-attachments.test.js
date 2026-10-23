@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderEditor } from '../src/app/editor.js';
 import { installFakeChrome } from './helpers/fake-chrome.js';
+import { copiedAttachments, _resetCopiedAttachments } from '../src/lib/copied-attachments.js';
 
 beforeEach(() => { installFakeChrome(); document.body.innerHTML = '<div id="root"></div>'; });
 
@@ -239,6 +240,32 @@ describe('editor file attachments', () => {
     expect(document.querySelector('.owl-image-placeholder')).toBeNull();
     expect(document.querySelector('.preview-body img')?.getAttribute('src')).toBe(dataUri);
     expect(editor.getAttachments()[0]).toEqual(attachment); // downloaded bytes stay cached; the saved note keeps its compact Drive pointer
+    editor.destroy();
+  });
+
+  // A cut reference's own note saves without its attachment, so the cut has to keep it.
+  it('keeps the attachments of a cut or copied reference aside, Drive images with their bytes', async () => {
+    _resetCopiedAttachments();
+    const local = { id: 'local1', name: 'a.png', dataUri: 'data:image/png;base64,AAAA' };
+    const remote = { id: 'remote1', name: 'b.png', mime: 'image/png', driveFileId: 'DRIVE_B' };
+    const file = { id: 'file1', name: 'c.pdf', mime: 'application/pdf', driveFileId: 'DRIVE_C' };
+    const loadImageBytes = vi.fn(async (att) => `data:${att.mime};base64,${att.id}`);
+    const body = 'keep\n![a](owl-img:local1)\n![b](owl-img:remote1)\n[c.pdf](owl-file:file1)\nother';
+    const editor = renderEditor(document.getElementById('root'), { body, attachments: [local, remote, file], loadImageBytes });
+    await new Promise((resolve) => setTimeout(resolve, 0)); // the preview downloads the Drive image
+    const textarea = document.querySelector('.note-body');
+
+    textarea.setSelectionRange(body.indexOf('keep'), body.indexOf('keep') + 4);
+    textarea.dispatchEvent(new Event('copy', { bubbles: true }));
+    expect(await copiedAttachments()).toEqual([]); // no reference selected: nothing kept
+
+    textarea.setSelectionRange(body.indexOf('!['), body.indexOf('\nother'));
+    textarea.dispatchEvent(new Event('cut', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0)); // the PDF, never downloaded, is fetched now
+    const kept = await copiedAttachments();
+    expect(kept.find((a) => a.id === 'local1')).toEqual(local);
+    expect(kept.find((a) => a.id === 'remote1')).toEqual({ ...remote, dataUri: 'data:image/png;base64,remote1' });
+    expect(kept.find((a) => a.id === 'file1')).toEqual({ ...file, dataUri: 'data:application/pdf;base64,file1' });
     editor.destroy();
   });
 });

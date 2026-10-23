@@ -1,7 +1,8 @@
 // src/app/editor.js
 import { renderMarkdown } from '../lib/markdown.js';
 import { imageFileToDataUri } from '../lib/image-downscale.js';
-import { extractImages, inlineImages, pruneAttachments, attachFile, listFileRefs, linkifyFileRefs } from '../lib/note-images.js';
+import { extractImages, inlineImages, pruneAttachments, attachFile, listFileRefs, linkifyFileRefs, referencedAttachmentIds } from '../lib/note-images.js';
+import { rememberCopiedAttachments, addCopiedBytes } from '../lib/copied-attachments.js';
 import { getBytes } from '../lib/attachment-store.js';
 import { relativeTime } from '../lib/relative-time.js';
 import { blockRanges, locateSelection, blockIndexOf } from '../lib/source-map.js';
@@ -666,18 +667,33 @@ export function renderEditor(
   lightbox.setAttribute('role', 'dialog');
   lightbox.setAttribute('aria-modal', 'true');
   lightbox.setAttribute('aria-label', 'Enlarged note image');
+  const lightboxButton = (className, text, label) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = className;
+    button.textContent = text;
+    button.setAttribute('aria-label', label);
+    return button;
+  };
+  // − 100% + at the top, previous/next at the sides: the controls of a photo viewer.
+  const lightboxBar = document.createElement('div');
+  lightboxBar.className = 'image-lightbox-bar';
+  const lightboxZoomOut = lightboxButton('image-lightbox-zoom-out', '−', 'Zoom out');
   const lightboxZoom = document.createElement('output');
   lightboxZoom.className = 'image-lightbox-zoom';
   lightboxZoom.setAttribute('aria-live', 'polite');
-  const lightboxClose = document.createElement('button');
-  lightboxClose.type = 'button';
-  lightboxClose.className = 'image-lightbox-close';
-  lightboxClose.textContent = '×';
-  lightboxClose.setAttribute('aria-label', 'Close enlarged image');
+  const lightboxZoomIn = lightboxButton('image-lightbox-zoom-in', '+', 'Zoom in');
+  lightboxBar.append(lightboxZoomOut, lightboxZoom, lightboxZoomIn);
+  const lightboxClose = lightboxButton('image-lightbox-close', '×', 'Close enlarged image');
+  const lightboxPrev = lightboxButton('image-lightbox-nav prev', '‹', 'Previous image');
+  const lightboxNext = lightboxButton('image-lightbox-nav next', '›', 'Next image');
+  const lightboxCount = document.createElement('div');
+  lightboxCount.className = 'image-lightbox-count';
   const lightboxImage = document.createElement('img');
   lightboxImage.className = 'image-lightbox-image';
-  lightbox.append(lightboxZoom, lightboxClose, lightboxImage);
+  lightbox.append(lightboxBar, lightboxClose, lightboxPrev, lightboxNext, lightboxCount, lightboxImage);
   let lightboxOpener = null;
+  let lightboxIndex = -1;
   let lightboxScale = 1;
   let lightboxPanX = 0;
   let lightboxPanY = 0;
@@ -814,6 +830,14 @@ export function renderEditor(
     lightboxZoom.textContent = lightboxZoom.value;
   }
 
+  // One wheel notch, or one press of − / +.
+  const LIGHTBOX_ZOOM_STEP = 1.15;
+  // The buttons and keys zoom about the middle of the window, which they leave in place.
+  function zoomLightboxBy(steps) {
+    const box = lightbox.getBoundingClientRect();
+    setLightboxScale(lightboxScale * LIGHTBOX_ZOOM_STEP ** steps, { x: box.left + box.width / 2, y: box.top + box.height / 2 });
+  }
+
   function closeLightbox() {
     if (lightbox.hidden) return;
     endLightboxDrag();
@@ -824,22 +848,44 @@ export function renderEditor(
     setLightboxScale(1);
     lightboxOpener?.focus?.();
     lightboxOpener = null;
+    lightboxIndex = -1;
   }
 
-  function openLightbox(img) {
-    showInLightbox(img.currentSrc || img.src, img.alt || 'Enlarged note image', img);
+  function openLightbox(img, options) {
+    showInLightbox(img.currentSrc || img.src, img.alt || 'Enlarged note image', img, options);
   }
 
   // A diagram opens in the same viewer as a photo, as an image of itself sized to the
   // window: the viewer's fit, zoom, pan and keyboard handling then all apply unchanged.
-  function openDiagramLightbox(box) {
+  function openDiagramLightbox(box, options) {
     const svg = box.querySelector('svg');
     const src = svg && diagramImageUrl(svg, window.innerWidth * 0.94, window.innerHeight * 0.9);
-    if (src) showInLightbox(src, 'Enlarged diagram', box, { diagram: true });
+    if (src) showInLightbox(src, 'Enlarged diagram', box, { ...options, diagram: true });
   }
 
-  function showInLightbox(src, alt, opener, { diagram = false } = {}) {
+  // Every photo and diagram in the preview, in reading order: what previous/next step
+  // through. Looked up afresh each step, since the preview re-renders as the note does.
+  const enlargeables = () => [...content.querySelectorAll(ENLARGEABLE)];
+  function updateLightboxNav() {
+    const count = enlargeables().length;
+    const many = count > 1 && lightboxIndex !== -1;
+    lightboxPrev.hidden = !many || lightboxIndex === 0;
+    lightboxNext.hidden = !many || lightboxIndex >= count - 1;
+    lightboxCount.hidden = !many;
+    lightboxCount.textContent = many ? `${lightboxIndex + 1} / ${count}` : '';
+  }
+  function stepLightbox(direction) {
+    const items = enlargeables();
+    // The image opened, if the preview still has it; where it was, if it re-rendered.
+    const at = items.indexOf(lightboxOpener);
+    const target = items[(at !== -1 ? at : lightboxIndex) + direction];
+    if (lightboxIndex !== -1 && target) openEnlargeable(target, { refocus: false });
+  }
+
+  function showInLightbox(src, alt, opener, { diagram = false, refocus = true } = {}) {
     lightboxOpener = opener;
+    lightboxIndex = enlargeables().indexOf(opener);
+    updateLightboxNav();
     lightboxImage.src = src;
     lightboxImage.alt = alt;
     // Diagrams are drawn on a transparent background, which the dark backdrop would swallow.
@@ -860,7 +906,8 @@ export function renderEditor(
         setLightboxScale(lightboxScale);
       }, { once: true });
     }
-    lightboxClose.focus();
+    // Stepping keeps focus on the arrow pressed, so it can be pressed again.
+    if (refocus) lightboxClose.focus();
   }
 
   function decoratePreviewImages(root) {
@@ -873,9 +920,9 @@ export function renderEditor(
   }
 
   const ENLARGEABLE = 'img, .mermaid-diagram[role="button"]';
-  function openEnlargeable(target) {
-    if (target.matches('img')) openLightbox(target);
-    else openDiagramLightbox(target);
+  function openEnlargeable(target, options) {
+    if (target.matches('img')) openLightbox(target, options);
+    else openDiagramLightbox(target, options);
   }
 
   content.addEventListener('click', (e) => {
@@ -936,15 +983,18 @@ export function renderEditor(
   // glide. Scrolling instead whenever the image overflowed meant that, once zoomed in,
   // only ctrl+wheel zoomed any further. Moving around is a drag (pointerdown below); a
   // tall capture can also be zoomed out whole and back in on the part wanted.
-  const LIGHTBOX_WHEEL_STEP = 1.15;
   lightbox.addEventListener('wheel', (e) => {
     if (lightbox.hidden) return;
     e.preventDefault(); // ctrl+wheel and a touchpad pinch included: never the page's own zoom
     // Capped at one notch, so a wheel set to scroll many lines at a time still steps.
     const delta = Math.max(-100, Math.min(100, e.deltaY));
     if (!delta) return;
-    setLightboxScale(lightboxScale * LIGHTBOX_WHEEL_STEP ** (-delta / 100), { x: e.clientX, y: e.clientY });
+    setLightboxScale(lightboxScale * LIGHTBOX_ZOOM_STEP ** (-delta / 100), { x: e.clientX, y: e.clientY });
   }, { passive: false });
+  lightboxZoomOut.addEventListener('click', () => zoomLightboxBy(-1));
+  lightboxZoomIn.addEventListener('click', () => zoomLightboxBy(1));
+  lightboxPrev.addEventListener('click', () => stepLightbox(-1));
+  lightboxNext.addEventListener('click', () => stepLightbox(1));
   lightboxImage.addEventListener('dragstart', (e) => e.preventDefault());
   lightboxImage.addEventListener('pointerdown', (e) => {
     if (!lightboxOverflow().any || e.button !== 0) return;
@@ -976,7 +1026,20 @@ export function renderEditor(
     applyLightboxTransform();
   };
   window.addEventListener('resize', onLightboxResize);
-  const onLightboxKeydown = (e) => { if (e.key === 'Escape' && !lightbox.hidden) closeLightbox(); };
+  const LIGHTBOX_KEYS = new Map([
+    ['Escape', () => closeLightbox()],
+    ['ArrowLeft', () => stepLightbox(-1)],
+    ['ArrowRight', () => stepLightbox(1)],
+    ['+', () => zoomLightboxBy(1)],
+    ['=', () => zoomLightboxBy(1)], // + without Shift
+    ['-', () => zoomLightboxBy(-1)],
+  ]);
+  const onLightboxKeydown = (e) => {
+    const action = !lightbox.hidden && !e.ctrlKey && !e.metaKey && !e.altKey && LIGHTBOX_KEYS.get(e.key);
+    if (!action) return;
+    e.preventDefault();
+    action();
+  };
   document.addEventListener('keydown', onLightboxKeydown);
 
   // Clickable notebook path for the open note (📓 All notes › Work › Research). Empty
@@ -1640,6 +1703,27 @@ export function renderEditor(
   const clipboardHtml = (transfer) => {
     try { return transfer?.getData?.('text/html') || ''; } catch { return ''; }
   };
+
+  // Copying or cutting an image/file reference keeps its attachment aside for a paste
+  // into another note: after a cut, the note it came from saves without it. Kept with
+  // its bytes where this editor has them (a Drive image it downloaded), so the note it
+  // lands in can upload it again even after this note's save removed it from Drive.
+  function keepCopiedAttachments() {
+    const ids = referencedAttachmentIds(ta.value.slice(ta.selectionStart, ta.selectionEnd));
+    const kept = [...ids].map(attById).filter(Boolean)
+      .map((a) => (a.dataUri || !loadedImageData.has(a.id) ? a : { ...a, dataUri: loadedImageData.get(a.id) }));
+    if (!kept.length) return;
+    rememberCopiedAttachments(kept);
+    // A Drive file this editor never downloaded (a file attachment, an image still
+    // loading): fetch it now, while its Drive copy is sure to exist.
+    for (const att of kept.filter((a) => !a.dataUri && a.driveFileId)) {
+      Promise.resolve().then(() => loadImageBytes(att))
+        .then((uri) => addCopiedBytes(att.id, uri))
+        .catch(() => { /* the paste falls back to the Drive pointer */ });
+    }
+  }
+  ta.addEventListener('copy', keepCopiedAttachments);
+  ta.addEventListener('cut', keepCopiedAttachments);
 
   // Paste real clipboard files through the same paths as the Image/File buttons.
   // Plain text is untouched so the browser retains its normal paste behavior.

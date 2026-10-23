@@ -419,16 +419,35 @@ body.resizing { user-select: none; cursor: col-resize; }
 /* Diagrams have a transparent background; give them the page they were drawn on. */
 .image-lightbox-image.diagram { background: #fff; padding: 20px; }
 /* z-index: the zoomed image is transformed and later in the DOM, so without one it
-   paints over the zoom level and the close button once it fills the window. */
-.image-lightbox-zoom {
-  position: fixed; z-index: 1; top: 18px; left: 50%; transform: translateX(-50%); min-width: 58px; padding: 4px 10px;
-  border-radius: 999px; background: rgba(0, 0, 0, 0.45); color: #fff; font-size: 12px; text-align: center;
+   paints over the viewer's controls once it fills the window. */
+.image-lightbox-bar {
+  position: fixed; z-index: 1; top: 16px; left: 50%; transform: translateX(-50%); display: flex; align-items: center;
+  gap: 2px; padding: 3px; border-radius: 999px; background: rgba(0, 0, 0, 0.45); cursor: default;
 }
+.image-lightbox-bar button {
+  width: 30px; height: 30px; border: 0; border-radius: 999px; background: transparent; color: #fff;
+  font-size: 20px; line-height: 1; cursor: pointer;
+}
+.image-lightbox-zoom { min-width: 48px; color: #fff; font-size: 12px; text-align: center; }
 .image-lightbox-close {
   position: fixed; z-index: 1; top: 16px; right: 20px; width: 38px; height: 38px; border: 1px solid rgba(255, 255, 255, 0.35);
   border-radius: 999px; background: rgba(0, 0, 0, 0.35); color: #fff; font-size: 27px; line-height: 32px; cursor: pointer;
 }
-.image-lightbox-close:hover, .image-lightbox-close:focus-visible { background: rgba(0, 0, 0, 0.65); outline: 2px solid #fff; }
+.image-lightbox-nav {
+  position: fixed; z-index: 1; top: 50%; transform: translateY(-50%); width: 46px; height: 46px;
+  border: 1px solid rgba(255, 255, 255, 0.35); border-radius: 999px; background: rgba(0, 0, 0, 0.35); color: #fff;
+  font-size: 34px; line-height: 38px; padding: 0 0 4px; cursor: pointer;
+}
+.image-lightbox-nav.prev { left: 20px; }
+.image-lightbox-nav.next { right: 20px; }
+.image-lightbox-nav[hidden], .image-lightbox-count[hidden] { display: none; }
+.image-lightbox-count {
+  position: fixed; z-index: 1; bottom: 16px; left: 50%; transform: translateX(-50%); padding: 4px 10px;
+  border-radius: 999px; background: rgba(0, 0, 0, 0.45); color: #fff; font-size: 12px; cursor: default;
+}
+.image-lightbox-close:hover, .image-lightbox-close:focus-visible,
+.image-lightbox-nav:hover, .image-lightbox-nav:focus-visible { background: rgba(0, 0, 0, 0.65); outline: 2px solid #fff; }
+.image-lightbox-bar button:hover, .image-lightbox-bar button:focus-visible { background: rgba(255, 255, 255, 0.18); outline: none; }
 /* Let a wide display equation scroll horizontally instead of stretching the pane. */
 .preview .katex-display { overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
 

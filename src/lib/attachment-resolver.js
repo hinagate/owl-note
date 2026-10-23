@@ -5,6 +5,7 @@ import * as bm from './bookmarks.js';
 import * as mirror from './mirror.js';
 import { decode } from './codec.js';
 import { inheritReferencedAttachments, referencedAttachmentIds } from './note-images.js';
+import { copiedAttachments } from './copied-attachments.js';
 
 function hasMissingReference(note) {
   const referenced = referencedAttachmentIds(note && note.body);
@@ -28,6 +29,13 @@ export async function resolveReferencedAttachments(note, { rootId, sourceNotes }
   try {
     resolved = inherit(resolved, sourceNotes || await mirror.allBackups());
   } catch { /* local recovery is best-effort */ }
+  if (!hasMissingReference(resolved)) return resolved;
+
+  // A reference that was CUT is in no note any more: the note it came from has saved
+  // without it. What the copy or cut kept aside still has it.
+  try {
+    resolved = inherit(resolved, [{ attachments: await copiedAttachments() }]);
+  } catch { /* best-effort */ }
   if (!hasMissingReference(resolved)) return resolved;
 
   try {
