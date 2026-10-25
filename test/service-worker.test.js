@@ -257,6 +257,7 @@ describe('service worker handlers', () => {
     const sig = (await chrome.storage.local.get('owl:quickCapture'))['owl:quickCapture'];
     expect(sig.id).toBe(note.id);
     expect(sig.openNote).toBe(true); // full-page captures focus this exact note in OWL-Note
+    expect(sig.editImage).toBe(note.attachments[0].id); // ...and land in the photo editor
   });
 
   it('saves a smart full-page conversion with structured Markdown and copied images', async () => {
@@ -289,6 +290,7 @@ describe('service worker handlers', () => {
     expect(note.attachments).toEqual([attachment]);
     const signal = (await chrome.storage.local.get('owl:quickCapture'))['owl:quickCapture'];
     expect(signal).toMatchObject({ id: note.id, openNote: true });
+    expect(signal).not.toHaveProperty('editImage'); // a converted page is text to read, not a photo
   });
 
   // Mock getContexts the way REAL chrome behaves: when a documentUrls filter is passed it

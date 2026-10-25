@@ -531,6 +531,37 @@ export function isEmpty(state) { return state.items.length === 0; }
 export function canUndo(state) { return state.past.length > 0; }
 export function canRedo(state) { return state.future.length > 0; }
 
+/* -------------------------------------------------------------- ink extent */
+
+// The rows of a drawing that any mark reaches, as { top, bottom } within
+// [0, height], or null when nothing does. Padded for what paints outside an
+// item's box — half a stroke's width, an arrowhead's barbs, a text box's fill
+// and a wrapped last line — and rotation-aware, so the band never clips ink.
+// Saving a marked-up photo only needs a layer this tall: a note on a page-long
+// capture would otherwise cost a second canvas the size of the whole page.
+// Eraser strokes are skipped, since they can only take ink away.
+export function inkBand(items, height) {
+  let top = Infinity;
+  let bottom = -Infinity;
+  for (const item of items || []) {
+    if (!item || item.mode === ERASE) continue;
+    const box = boxOf(item);
+    const c = centerOf(item);
+    const pad = item.kind === TEXT
+      ? (item.size || 24) * LINE_HEIGHT + TEXT_BG_PAD * 2
+      : item.kind === IMAGE ? 2 : (item.width || 0) * 3 + 12;
+    for (const [x, y] of [[box.x, box.y], [box.x + box.width, box.y],
+      [box.x, box.y + box.height], [box.x + box.width, box.y + box.height]]) {
+      const p = rotatePoint(x, y, c.x, c.y, item.angle || 0);
+      top = Math.min(top, p.y - pad);
+      bottom = Math.max(bottom, p.y + pad);
+    }
+  }
+  top = Math.max(0, top);
+  bottom = Math.min(height, bottom);
+  return bottom > top ? { top, bottom } : null;
+}
+
 /* ------------------------------------------------------------------ render */
 
 function roundRectPath(ctx, x, y, w, h, radius) {

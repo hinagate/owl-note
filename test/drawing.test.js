@@ -5,7 +5,7 @@ import {
   addImage, imageAt, beginTransform, applyTransform, endTransform, removeItem,
   squareBox, snapAngle, arrowHead, compositeFor, boxOf, isShapeTool, isFreehandTool,
   undo, redo, clear, isEmpty, canUndo, canRedo, replay,
-  itemAt, addText, setText, wrapText, isFillable, POLYGONS,
+  itemAt, addText, setText, wrapText, isFillable, POLYGONS, inkBand, setAngle,
   PEN, HIGHLIGHT, ERASE, LINE, ARROW, RECT, ROUND_RECT, ELLIPSE, IMAGE,
 } from '../src/lib/drawing.js';
 
@@ -582,3 +582,51 @@ describe('fill behind text rendering', () => {
   });
 });
 
+describe('inkBand (the rows a marked-up photo needs a layer for)', () => {
+  it('is null when nothing is drawn', () => {
+    expect(inkBand([], 1000)).toBeNull();
+  });
+
+  it('spans a stroke, padded for the width it paints with', () => {
+    const state = createSketch();
+    stroke(state, [[10, 400], [200, 420]], { width: 10 });
+    // pad = width * 3 + 12 = 42: generous enough for any cap, join or arrowhead
+    expect(inkBand(state.items, 1000)).toEqual({ top: 358, bottom: 462 });
+  });
+
+  it('covers every item, and is clamped to the drawing', () => {
+    const state = createSketch();
+    stroke(state, [[10, 5], [20, 5]], { width: 4 });
+    addImage(state, { src: 'x', x: 0, y: 900, width: 50, height: 300 });
+    expect(inkBand(state.items, 1000)).toEqual({ top: 0, bottom: 1000 });
+  });
+
+  it('follows a rotated item to its turned corners', () => {
+    const state = createSketch();
+    addImage(state, { src: 'x', x: 0, y: 500, width: 200, height: 20 });
+    setAngle(state, 0, Math.PI / 2); // now 200 tall about its centre (100, 510)
+    const band = inkBand(state.items, 1000);
+    expect(band.top).toBeCloseTo(510 - 100 - 2);
+    expect(band.bottom).toBeCloseTo(510 + 100 + 2);
+  });
+
+  it('gives a text box a line of room for its fill and wrapping', () => {
+    const state = createSketch();
+    addText(state, { x: 10, y: 300, width: 100, height: 30, size: 24, text: 'hi' });
+    const band = inkBand(state.items, 1000);
+    expect(band.top).toBeLessThan(300 - 24);
+    expect(band.bottom).toBeGreaterThan(330 + 24);
+  });
+
+  it('ignores eraser strokes, which can only take ink away', () => {
+    const state = createSketch();
+    stroke(state, [[10, 100], [20, 100]], { width: 4, mode: ERASE });
+    expect(inkBand(state.items, 1000)).toBeNull();
+  });
+
+  it('is null when every mark is off the drawing', () => {
+    const state = createSketch();
+    stroke(state, [[10, 2000], [20, 2010]], { width: 4 });
+    expect(inkBand(state.items, 1000)).toBeNull();
+  });
+});

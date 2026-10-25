@@ -131,10 +131,10 @@ function markdownAlt(value) {
   return cleanCaptureTitle(value).replace(/[\\\[\]]/g, '\\$&');
 }
 
-async function signalQuickCapture(note, { openNote = false } = {}) {
+async function signalQuickCapture(note, { openNote = false, editImage = null } = {}) {
   try {
     await chrome.storage?.local?.set?.({
-      [QUICK_CAPTURE_KEY]: { id: note.id, at: Date.now(), openNote },
+      [QUICK_CAPTURE_KEY]: { id: note.id, at: Date.now(), openNote, ...(editImage ? { editImage } : {}) },
     });
   } catch { /* best-effort */ }
 }
@@ -274,8 +274,9 @@ async function saveFullPageCapture(info, tab, capture, noteCreated) {
     const root = await ensureRoot();
     const saved = await saveNote(note, root, undefined);
     // Unlike a clipped selection, a full-page screenshot is the user's explicit
-    // destination: ask the app to open this exact note, not merely reveal it in the list.
-    await signalQuickCapture(note, { openNote: true });
+    // destination: ask the app to open this exact note, not merely reveal it in the
+    // list — and to open the screenshot in the photo editor, ready to mark up.
+    await signalQuickCapture(note, { openNote: true, editImage: id });
     await focusOrOpenApp();
     await flashSaved();
     return { note, saved, captured };

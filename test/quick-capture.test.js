@@ -2,7 +2,7 @@
 // without disrupting the editor, while full-page screenshots save pending edits and open
 // the exact captured note. Covers both a live chrome.storage.onChanged handoff and the
 // stored one-shot value consumed when a new app tab boots.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { installFakeChrome } from './helpers/fake-chrome.js';
 import { contentHash } from '../src/lib/note.js';
 
@@ -199,5 +199,68 @@ describe('quick capture — reveal at top of All notes', () => {
     await chrome.storage.local.set({ 'owl:saveCount': 3 });
     await settle();
     expect(cardTitles().length).toBe(1); // still in the subfolder
+  });
+});
+
+describe('a full-page capture lands in the photo editor', () => {
+  const realGetContext = HTMLCanvasElement.prototype.getContext;
+  beforeEach(() => { HTMLCanvasElement.prototype.getContext = () => null; }); // jsdom draws nothing
+  afterEach(() => {
+    HTMLCanvasElement.prototype.getContext = realGetContext;
+    document.querySelector('.draw-backdrop')?.remove();
+    history.replaceState(null, '', '/');
+  });
+
+  // The worker's note: a screenshot attachment and a reference to it.
+  async function seedCapture(root, id) {
+    const attachments = [{ id: 'shot1', name: 'Page.jpg', mime: 'image/jpeg', dataUri: 'data:image/jpeg;base64,AQID' }];
+    const body = '![Page](owl-img:shot1)';
+    const note = { id, title: 'Captured page', body, attachments, version: 1, created: Date.now(), hash: contentHash(body) };
+    await bm.createNote(root, note.title, await encode(note));
+  }
+  const signal = (id, at = Date.now()) => chrome.storage.local.set({
+    'owl:quickCapture': { id, at, openNote: true, editImage: 'shot1' },
+  });
+
+  it('opens a fresh capture straight in Edit photo, on its screenshot', async () => {
+    const root = await bm.ensureRoot();
+    await seedNote(root, { id: 'r1', title: 'Root note', body: 'at root', created: 2 });
+    await app.initUI(root);
+    await settle();
+    await seedCapture(root, 'cap1');
+    await signal('cap1');
+
+    await vi.waitFor(() => expect(document.querySelector('.draw-dialog.draw-photo-mode')).toBeTruthy());
+    expect(document.querySelector('#editor .note-title').value).toBe('Captured page');
+    expect(document.querySelector('.draw-photo, .draw-status')).toBeTruthy();
+  });
+
+  it('opens a stale capture (left for a later boot) without springing the editor', async () => {
+    const root = await bm.ensureRoot();
+    await seedCapture(root, 'cap2');
+    await signal('cap2', Date.now() - 10 * 60 * 1000);
+    await app.initUI(root);
+
+    await vi.waitFor(() => expect(document.querySelector('#editor .note-title').value).toBe('Captured page'));
+    await settle(100); // the editor would open right after the note
+    expect(document.querySelector('.draw-backdrop')).toBeNull();
+  });
+
+  it('a note open in its own tab stays on its note', async () => {
+    const root = await bm.ensureRoot();
+    await seedNote(root, { id: 'r1', title: 'Root note', body: 'at root', created: 2 });
+    history.replaceState(null, '', '/app.html?note=r1');
+    await app.initUI(root);
+    await settle();
+    expect(document.querySelector('#editor .note-title').value).toBe('Root note');
+
+    await seedCapture(root, 'cap3');
+    await signal('cap3');
+    await settle(150);
+
+    expect(document.querySelector('#editor .note-title').value).toBe('Root note');
+    expect(document.querySelector('.draw-backdrop')).toBeNull();
+    // The signal is left for the main tab to consume.
+    expect((await chrome.storage.local.get('owl:quickCapture'))['owl:quickCapture']).toBeTruthy();
   });
 });

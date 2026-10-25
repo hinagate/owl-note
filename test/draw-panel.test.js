@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { showDrawPanel } from '../src/app/draw-panel.js';
+import { showDrawPanel, photoOutputType, photoFileName } from '../src/app/draw-panel.js';
 
 beforeEach(() => {
   document.body.innerHTML = '';
@@ -479,5 +479,151 @@ describe('draw panel pasted photos', () => {
     await vi.waitFor(() => expect(state.items).toHaveLength(1));
     draw(canvas, [[2, 2], [4, 4]]); // Select tool is active after a paste
     expect(state.items).toHaveLength(1); // no stroke was created
+  });
+});
+
+describe('draw panel over a photo (Edit photo)', () => {
+  // jsdom lays nothing out, so the canvas takes the panel's 960 x 560 fallback size.
+  const photoOf = (width, height) => async () => ({ naturalWidth: width, naturalHeight: height });
+  const tall = { src: 'data:image/jpeg;base64,AA', name: 'Tall page.jpg', mime: 'image/jpeg' };
+  const wheel = (el, deltaY, opts = {}) => {
+    const ev = new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true, ...opts });
+    el.dispatchEvent(ev);
+    return ev;
+  };
+
+  it('opens as "Edit photo", with Save and a zoom bar', async () => {
+    const { ready } = showDrawPanel({ photo: tall, loadImage: photoOf(1280, 12000) });
+    await ready;
+    expect(document.querySelector('#draw-title').textContent).toBe('Edit photo');
+    expect(document.querySelector('.draw-save').textContent).toBe('Save');
+    expect(document.querySelector('.draw-dialog').classList.contains('draw-photo-mode')).toBe(true);
+    expect(document.querySelector('.draw-zoom')).toBeTruthy();
+    expect(document.querySelector('.draw-photo').getAttribute('src')).toBe(tall.src);
+  });
+
+  it('a blank drawing has neither the photo layer nor the zoom bar', () => {
+    showDrawPanel({});
+    expect(document.querySelector('.draw-photo')).toBeNull();
+    expect(document.querySelector('.draw-zoom')).toBeNull();
+    expect(document.querySelector('#draw-title').textContent).toBe('Draw');
+  });
+
+  it('takes no ink until the photo has loaded', () => {
+    const { canvas, state } = showDrawPanel({ photo: tall, loadImage: () => new Promise(() => {}) });
+    draw(canvas, [[10, 10], [40, 40]]);
+    expect(state.items).toHaveLength(0);
+    expect(document.querySelector('.draw-status').textContent).toMatch(/opening the photo/i);
+  });
+
+  it('fits a long capture to the width, contains a photo, and never enlarges one', async () => {
+    const size = () => {
+      const img = document.querySelector('.draw-photo');
+      return [Math.round(parseFloat(img.style.width)), Math.round(parseFloat(img.style.height))];
+    };
+    await showDrawPanel({ photo: tall, loadImage: photoOf(1280, 12000) }).ready;
+    expect(size()).toEqual([960, 9000]);
+    await showDrawPanel({ photo: tall, loadImage: photoOf(1600, 1000) }).ready;
+    expect(size()).toEqual([896, 560]);
+    await showDrawPanel({ photo: tall, loadImage: photoOf(200, 100) }).ready;
+    expect(size()).toEqual([200, 100]);
+  });
+
+  it('shows a scrollbar for a long capture', async () => {
+    await showDrawPanel({ photo: tall, loadImage: photoOf(1280, 12000) }).ready;
+    await vi.waitFor(() => expect(document.querySelector('.draw-scrollbar.vertical').hidden).toBe(false));
+    expect(document.querySelector('.draw-scrollbar.horizontal').hidden).toBe(true);
+  });
+
+  it('scrolls with the wheel, and draws where the pointer is on the scrolled photo', async () => {
+    const { canvas, state, ready, view } = showDrawPanel({ photo: tall, loadImage: photoOf(1280, 12000) });
+    await ready;
+    const ev = wheel(document.querySelector('.draw-surface'), 300);
+    expect(ev.defaultPrevented).toBe(true); // the page behind must not scroll instead
+    expect(view.y).toBe(-300);
+    draw(canvas, [[10, 10], [40, 10]]);
+    expect(state.items[0].points[0]).toEqual({ x: 10, y: 310 });
+  });
+
+  it('zooms with Ctrl+wheel and the zoom buttons, and Ctrl+0 goes back', async () => {
+    const { ready, view } = showDrawPanel({ photo: tall, loadImage: photoOf(1280, 12000) });
+    await ready;
+    wheel(document.querySelector('.draw-surface'), -100, { ctrlKey: true });
+    expect(view.zoom).toBeCloseTo(1.15);
+    click(document.querySelector('.draw-zoom-in'));
+    expect(view.zoom).toBeCloseTo(1.15 * 1.15);
+    await vi.waitFor(() => expect(document.querySelector('.draw-zoom-level').textContent).toBe('132%'));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: '0', ctrlKey: true, bubbles: true, cancelable: true }));
+    expect(view.zoom).toBe(1);
+  });
+
+  it('leaves the page keys to the size slider', async () => {
+    const { ready, view } = showDrawPanel({ photo: tall, loadImage: photoOf(1280, 12000) });
+    await ready;
+    const slider = document.querySelector('.draw-size-range');
+    slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true }));
+    expect(view.y).toBe(0);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true }));
+    expect(view.y).toBe(560 - 9000);
+  });
+
+  it('saves the photo at its own size and format, under its own name', async () => {
+    const el = { naturalWidth: 1280, naturalHeight: 12000 };
+    const exportBlob = vi.fn(async () => new Blob(['jpg'], { type: 'image/jpeg' }));
+    const onSave = vi.fn();
+    const { canvas, ready } = showDrawPanel({ photo: tall, loadImage: async () => el, exportBlob, onSave });
+    await ready;
+    draw(canvas, [[10, 10], [40, 40]]);
+    click(document.querySelector('.draw-save'));
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalled());
+    const [items, width, height, scale, options] = exportBlob.mock.calls[0];
+    expect(items).toHaveLength(1);
+    expect([width, height]).toEqual([960, 9000]);
+    expect(scale).toBeCloseTo(1280 / 960);
+    expect(options).toEqual({ background: el, type: 'image/jpeg' });
+    const file = onSave.mock.calls[0][0];
+    expect(file.name).toBe('Tall page.jpg');
+    expect(file.type).toBe('image/jpeg');
+  });
+
+  it('says so when the photo cannot be opened, and offers nothing to save', async () => {
+    const { ready, saveButton } = showDrawPanel({ photo: tall, loadImage: async () => { throw new Error('bad'); } });
+    await ready;
+    expect(document.querySelector('.draw-status').textContent).toBe('Could not open this photo.');
+    expect(saveButton.disabled).toBe(true);
+  });
+
+  it('asks before discarding marks on the photo', async () => {
+    const { canvas, ready } = showDrawPanel({ photo: tall, loadImage: photoOf(400, 300) });
+    await ready;
+    draw(canvas, [[300, 200], [320, 220]]);
+    click(document.querySelector('.draw-cancel'));
+    expect(document.querySelector('.draw-confirm span').textContent).toBe('Discard your changes to this photo?');
+    expect(document.querySelector('.draw-keep').textContent).toBe('Keep editing');
+  });
+
+  it('a blank drawing ignores the wheel', () => {
+    const { view } = showDrawPanel({});
+    const ev = wheel(document.querySelector('.draw-surface'), 300);
+    expect(ev.defaultPrevented).toBe(false);
+    expect(view).toEqual({ zoom: 1, x: 0, y: 0 });
+  });
+});
+
+describe('photo save format', () => {
+  it('keeps JPEG and WebP, and saves anything else as PNG', () => {
+    expect(photoOutputType({ mime: 'image/jpeg' })).toBe('image/jpeg');
+    expect(photoOutputType({ mime: 'image/jpg' })).toBe('image/jpeg');
+    expect(photoOutputType({ src: 'data:image/webp;base64,AA' })).toBe('image/webp');
+    expect(photoOutputType({ src: 'data:image/png;base64,AA' })).toBe('image/png');
+    expect(photoOutputType({ src: 'data:image/gif;base64,AA' })).toBe('image/png');
+    expect(photoOutputType({})).toBe('image/png');
+  });
+
+  it('names the file for the photo, with the extension of what it now is', () => {
+    expect(photoFileName('Tall page.jpg', 'image/jpeg')).toBe('Tall page.jpg');
+    expect(photoFileName('pasted-image.png', 'image/webp')).toBe('pasted-image.webp');
+    expect(photoFileName('animation.gif', 'image/png')).toBe('animation.png');
+    expect(photoFileName('', 'image/png')).toBe('photo.png');
   });
 });

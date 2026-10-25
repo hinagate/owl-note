@@ -316,6 +316,27 @@ describe('text tool', () => {
     expect(panel.textEditor.hidden).toBe(false);
     expect(panel.textEditor.value).toBe('edit me');
   });
+
+  // Rubbing a caption out is quick dabs on one spot — which the browser reports as
+  // a double-click. It used to flip to the Text tool and reopen the caption, and
+  // every dab after that placed a text box instead of erasing.
+  it('keeps erasing when the eraser is dabbed twice on a caption', () => {
+    const panel = showDrawPanel({});
+    pickTool('text');
+    pointer(panel.canvas, 'pointerdown', 10, 10);
+    typeInto(panel.textEditor, 'rub me out');
+    panel.textEditor.dispatchEvent(new Event('blur'));
+
+    pickTool('erase');
+    for (let i = 0; i < 2; i += 1) {
+      pointer(panel.canvas, 'pointerdown', 20, 20);
+      pointer(panel.canvas, 'pointerup', 20, 20);
+    }
+    panel.canvas.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, clientX: 20, clientY: 20 }));
+    expect(panel.textEditor.hidden).toBe(true);
+    expect(document.querySelector('.draw-tool.active').dataset.tool).toBe('erase');
+    expect(panel.state.items.map((item) => item.mode || item.kind)).toEqual(['text', 'erase', 'erase']);
+  });
 });
 
 describe('color palette', () => {
@@ -363,6 +384,21 @@ describe('text formatting', () => {
     expect(bar.hidden).toBe(false);
     pickTool('pen');
     expect(bar.hidden).toBe(true);
+  });
+
+  // A row of its own grew the centred dialog, and the drawing jumped every time
+  // the Text tool was picked or left. Sharing the hint's row keeps the height.
+  it('takes turns with the hint in one row rather than adding a row', () => {
+    showDrawPanel({});
+    const bar = document.querySelector('.draw-text-bar');
+    const hint = document.querySelector('.draw-hint');
+    expect(bar.parentElement).toBe(hint.parentElement);
+    expect(bar.parentElement.className).toBe('draw-options');
+    expect(hint.hidden).toBe(false);
+    pickTool('text');
+    expect(hint.hidden).toBe(true);
+    pickTool('erase');
+    expect(hint.hidden).toBe(false);
   });
 
   it('records bold, italic and underline on the box being typed', () => {

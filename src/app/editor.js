@@ -1,6 +1,6 @@
 // src/app/editor.js
 import { renderMarkdown } from '../lib/markdown.js';
-import { imageFileToDataUri } from '../lib/image-downscale.js';
+import { imageFileToDataUri, blobToDataURL, shouldFitWidth } from '../lib/image-downscale.js';
 import { extractImages, inlineImages, pruneAttachments, attachFile, listFileRefs, linkifyFileRefs, referencedAttachmentIds } from '../lib/note-images.js';
 import { rememberCopiedAttachments, addCopiedBytes } from '../lib/copied-attachments.js';
 import { getBytes } from '../lib/attachment-store.js';
@@ -16,24 +16,9 @@ import { decorateMermaid, diagramImageUrl } from '../lib/mermaid-render.js';
 import { officeClipboardMarkdown } from '../lib/office-clipboard.js';
 import { createZoomBar } from './preview-zoom.js';
 
-// Below this fraction of the available width, a contained image is too narrow to read
-// and is better fitted to the width and scrolled. Deliberately low: this is meant to
-// catch documents (a full-page capture contains to ~10% of the width), NOT ordinary
-// tall photos. A 3:4 portrait contains to ~50% and a phone screenshot to ~31%, both
-// perfectly readable whole, and forcing those to scroll would be a downgrade. On a
-// typical window this engages past roughly 2.7:1.
-const FIT_WIDTH_BELOW = 0.25;
-
-/**
- * Whether an image should be fitted to the width rather than contained.
- * `null` when the inputs are not measurable yet (image undecoded, or jsdom).
- * Pure, so the rule is testable without a layout engine.
- */
-export function shouldFitWidth(naturalWidth, naturalHeight, availableWidth, availableHeight) {
-  if (!naturalWidth || !naturalHeight || !availableWidth || !availableHeight) return null;
-  const containedWidth = Math.min(availableWidth, availableHeight * (naturalWidth / naturalHeight));
-  return containedWidth < availableWidth * FIT_WIDTH_BELOW;
-}
+// Re-exported: the viewer's fit rule lives with the other image sizing, where the photo
+// editor shares it.
+export { shouldFitWidth };
 
 // Whether the reader's last press was on the note (the editor, or the note list) — kept
 // across editors, because "+ New note" and a note card rebuild the editor and leave focus
@@ -696,7 +681,11 @@ export function renderEditor(
   lightboxZoom.className = 'image-lightbox-zoom';
   lightboxZoom.setAttribute('aria-live', 'polite');
   const lightboxZoomIn = lightboxButton('image-lightbox-zoom-in', '+', 'Zoom in');
-  lightboxBar.append(lightboxZoomOut, lightboxZoom, lightboxZoomIn);
+  // Draw on the photo. Only for a note's own photos in an editable note: a diagram is
+  // drawn from its code, and a remote image has no attachment to replace.
+  const lightboxEdit = lightboxButton('image-lightbox-edit', '✏️ Edit', 'Edit this photo — draw, highlight or add text on it');
+  lightboxEdit.hidden = true;
+  lightboxBar.append(lightboxZoomOut, lightboxZoom, lightboxZoomIn, lightboxEdit);
   const lightboxClose = lightboxButton('image-lightbox-close', '×', 'Close enlarged image');
   const lightboxPrev = lightboxButton('image-lightbox-nav prev', '‹', 'Previous image');
   const lightboxNext = lightboxButton('image-lightbox-nav next', '›', 'Next image');
@@ -903,6 +892,7 @@ export function renderEditor(
     lightboxImage.alt = alt;
     // Diagrams are drawn on a transparent background, which the dark backdrop would swallow.
     lightboxImage.classList.toggle('diagram', diagram);
+    lightboxEdit.hidden = readOnly || diagram || !opener?.dataset?.owlImg;
     lightbox.setAttribute('aria-label', diagram ? 'Enlarged diagram' : 'Enlarged note image');
     lightboxImage.draggable = false;
     lightbox.hidden = false;
@@ -924,11 +914,25 @@ export function renderEditor(
   }
 
   function decoratePreviewImages(root) {
+    // Which attachment each photo shows, and which of that attachment's references it
+    // is: what the viewer's Edit needs to put the edited photo back in its place. The
+    // preview inlines each owl-img ref as its bytes, in order, so the src identifies it.
+    const idBySrc = new Map();
+    for (const att of atts) {
+      const src = loadedImageData.get(att.id) || att.dataUri;
+      if (src) idBySrc.set(src, att.id);
+    }
+    const seen = new Map();
     for (const img of root.querySelectorAll('img')) {
       img.tabIndex = 0;
       img.title = img.title || 'Click to enlarge';
       img.setAttribute('role', 'button');
       img.setAttribute('aria-label', `Enlarge ${img.alt || 'note image'}`);
+      const id = idBySrc.get(img.getAttribute('src'));
+      if (!id) continue;
+      img.dataset.owlImg = id;
+      img.dataset.owlImgNth = String(seen.get(id) || 0);
+      seen.set(id, (seen.get(id) || 0) + 1);
     }
   }
 
@@ -1004,6 +1008,14 @@ export function renderEditor(
     if (!delta) return;
     setLightboxScale(lightboxScale * LIGHTBOX_ZOOM_STEP ** (-delta / 100), { x: e.clientX, y: e.clientY });
   }, { passive: false });
+  lightboxEdit.addEventListener('click', () => {
+    const img = lightboxOpener;
+    if (!img?.dataset?.owlImg) return;
+    const { owlImg: id, owlImgNth: nth } = img.dataset;
+    const src = img.getAttribute('src');
+    closeLightbox();
+    editImage(id, { nth: Number(nth) || 0, src });
+  });
   lightboxZoomOut.addEventListener('click', () => zoomLightboxBy(-1));
   lightboxZoomIn.addEventListener('click', () => zoomLightboxBy(1));
   lightboxPrev.addEventListener('click', () => stepLightbox(-1));
@@ -1641,6 +1653,53 @@ export function renderEditor(
     }
   }
 
+  // Open one of this note's photos in the drawing panel and put the result back in its
+  // place. `nth` says which reference to that attachment was opened, so a photo used
+  // twice is replaced only where it was edited.
+  async function editImage(id, { nth = 0, src = null } = {}) {
+    if (readOnly || destroyed) return false;
+    const att = attById(id);
+    if (!att) return false;
+    const photoSrc = src || loadedImageData.get(id) || att.dataUri || await loadImageBytes(att);
+    if (!photoSrc || destroyed) return false;
+    showDrawPanel({
+      photo: { src: photoSrc, name: att.name, mime: att.mime },
+      onSave: (file) => replaceImage(id, nth, file, photoSrc),
+    });
+    return true;
+  }
+
+  // Only the id inside the reference changes, so the alt text stays, and it changes
+  // through insertText, so one Ctrl+Z brings the original back: its attachment is still
+  // held here, and is only left out of what is SAVED while nothing refers to it.
+  async function replaceImage(id, nth, file, originalSrc) {
+    insertsInFlight += 1;
+    try {
+      // Not downscaled like an insert: the edit keeps the photo's own size, which for a
+      // full-page capture is far past the insert cap.
+      const uri = await blobToDataURL(file);
+      const { body: ref, attachments: merged } = extractImages(`![${file.name}](${uri})`, atts);
+      // An original kept only in Drive keeps its bytes here too. Once a save has dropped
+      // it, Drive cleanup deletes its file; with the bytes held, an undo that brings it
+      // back uploads it again on the next save instead of pointing at a deleted file.
+      const held = String(originalSrc || '').startsWith('data:') ? originalSrc : null;
+      atts = merged.map((a) => (a.id === id && !a.dataUri && held ? { ...a, dataUri: held } : a));
+      const refs = [...ta.value.matchAll(PREVIEW_IMG_REF_RE)].filter((m) => m[2] === id);
+      const at = refs[nth] || refs[0];
+      if (!at) {
+        // The reference went while the photo was open: keep the edit rather than drop it.
+        const start = ta.selectionStart ?? ta.value.length;
+        const end = ta.selectionEnd ?? start;
+        insertText(attachmentSnippet(ref, start, end), start, end);
+        return;
+      }
+      const end = at.index + at[0].length - 1; // the closing parenthesis
+      insertText(ref.slice(ref.lastIndexOf(':') + 1, -1), end - id.length, end);
+    } finally {
+      insertsInFlight -= 1;
+    }
+  }
+
   // Insert a picked photo as a (auto-downscaled) base64 image at the cursor.
   // A file picker is open: what it returns goes into this note (see isBusy).
   let pickerOpen = false;
@@ -1857,6 +1916,8 @@ export function renderEditor(
     notifyRemoteChange: ({ onReload = null } = {}) => { onRemoteReload = onReload; remoteBar.hidden = false; },
     flush: () => doSave({ auto: true }),
     save: () => doSave({ auto: false }), // as the Save button: stores the text even if unchanged
+    // Open a photo of this note in the editor (a fresh full-page capture lands here).
+    editImage: (id) => editImage(id),
     // A file is being read for insertion, or a drawing is open for this note.
     isBusy: () => insertsInFlight > 0 || suggestingTitle || pickerOpen || !!document.querySelector('.draw-backdrop'),
     // discard: the reader threw this text away (the note was deleted, or replaced by

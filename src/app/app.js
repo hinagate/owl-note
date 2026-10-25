@@ -698,6 +698,10 @@ function savePreviewZoom(zoom) {
 }
 
 const QUICK_CAPTURE_KEY = 'owl:quickCapture';
+// A capture opens straight in the photo editor only while it is fresh. A signal left
+// over for a later boot (the tab was closed mid-capture) still opens the note, but
+// springing an editor on someone who has moved on would be a surprise.
+const CAPTURE_EDIT_FRESH_MS = 2 * 60 * 1000;
 let lastQuickCaptureToken = null;
 let quickCaptureQueue = Promise.resolve();
 
@@ -1301,8 +1305,10 @@ export async function initUI(rootId) {
   await openByHash();
   if (!ui.current && noteTabId()) await openTabNote(noteTabId());
   // Register before reading the one-shot value so a capture arriving during boot
-  // cannot slip between the initial storage read and listener installation.
-  await wireQuickCapture();
+  // cannot slip between the initial storage read and listener installation. A note's
+  // own tab stays on its note: the worker brings captures to the main tab, and both
+  // reacting would pull this one away too.
+  if (!noteTabId()) await wireQuickCapture();
   // No specific note in the URL — default to the latest. Not in a note's own tab,
   // where some other note would stand in for the one that has gone.
   if (!ui.current && !noteTabId()) await openLatestNote();
@@ -1749,6 +1755,14 @@ async function revealQuickCapture(capture) {
   if (target.localOnly) await openLocalNote(target.id);
   else await openBookmark(target.bookmarkId);
   document.querySelector('#note-list .item.card.active')?.scrollIntoView?.({ block: 'nearest' });
+  // A full-page capture lands in the photo editor. It is already saved, so Cancel
+  // keeps the plain capture and Save swaps the marked-up one into its place.
+  const fresh = Date.now() - (Number(capture.at) || 0) < CAPTURE_EDIT_FRESH_MS;
+  if (capture.editImage && fresh && ui.current?.id === capture.id) {
+    // Not awaited: a screenshot kept in Drive can take a while to fetch, and the
+    // capture itself has been delivered either way.
+    Promise.resolve(ui.editor?.editImage?.(capture.editImage)).catch(() => {});
+  }
 }
 
 function quickCaptureToken(capture) {

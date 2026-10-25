@@ -11,11 +11,12 @@ import {
   undo, redo, clear, isEmpty, canUndo, canRedo, replay, visibleItems, paintableItems, boxOf,
   isShapeTool, isFreehandTool, isFillable,
   centerOf, rotatePoint, toLocalPoint, setAngle, normalizeAngle, textFontCss, TEXT_FONTS,
-  bringToFront, sendToBack,
+  bringToFront, sendToBack, inkBand,
   PEN, HIGHLIGHT, ERASE, SELECT, LINE, ARROW, RECT, ROUND_RECT, ELLIPSE,
   TRIANGLE, RIGHT_TRIANGLE, DIAMOND, PENTAGON, HEXAGON, STAR, TEXT,
   LINE_HEIGHT,
 } from '../lib/drawing.js';
+import { shouldFitWidth } from '../lib/image-downscale.js';
 
 const TOOLS = [
   { id: SELECT, className: 'draw-tool-select', glyph: '↖', label: 'Select — move or resize anything you have drawn' },
@@ -129,32 +130,68 @@ function readAsDataUrl(file) {
   });
 }
 
-// Flatten items onto white. Two canvases, deliberately: eraser strokes use
-// 'destination-out', so replaying them straight onto a white fill would cut
-// holes THROUGH the white. The items are composited on a transparent layer
-// which is then stamped onto the opaque one.
-export async function drawingToPngBlob(items, width, height, scale = 1) {
-  const layer = document.createElement('canvas');
-  layer.width = Math.max(1, Math.round(width * scale));
-  layer.height = Math.max(1, Math.round(height * scale));
-  const layerCtx = layer.getContext('2d');
-  if (!layerCtx) throw new Error('no 2d context');
-  layerCtx.scale(scale, scale);
-  replay(layerCtx, items);
+// A marked-up photo is saved in the format it came in, so a JPEG capture stays a
+// JPEG instead of growing into a PNG many times its size. Anything else is saved
+// as a lossless PNG.
+export function photoOutputType(photo) {
+  const declared = String(photo?.mime || '').toLowerCase();
+  const sniffed = /^data:(image\/[\w.+-]+)[;,]/i.exec(String(photo?.src || ''))?.[1]?.toLowerCase() || '';
+  const type = (declared.startsWith('image/') ? declared : sniffed).replace('image/jpg', 'image/jpeg');
+  return type === 'image/jpeg' || type === 'image/webp' ? type : 'image/png';
+}
 
+export function photoFileName(name, type) {
+  const ext = type === 'image/jpeg' ? 'jpg' : type === 'image/webp' ? 'webp' : 'png';
+  const stem = String(name || '').replace(/\.[A-Za-z0-9]{1,5}$/, '').trim() || 'photo';
+  return `${stem}.${ext}`;
+}
+
+// The ceiling full-page capture holds its stitched page to. A lossy save over it
+// steps the quality down the same way.
+const MAX_PHOTO_BYTES = 24 * 1024 * 1024;
+
+function canvasToBlob(canvas, type, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('toBlob produced nothing'))), type, quality);
+  });
+}
+
+// Flatten items onto white, or onto the photo being marked up. Two canvases,
+// deliberately: eraser strokes use 'destination-out', so replaying them straight
+// onto the fill would cut holes THROUGH it — through the photo, too. The items
+// are composited on a transparent layer which is then stamped onto the opaque one.
+// Under a photo the layer is only as tall as the ink (see inkBand).
+export async function drawingToBlob(items, width, height, scale = 1, { background = null, type = 'image/png', quality = 0.92 } = {}) {
   const flat = document.createElement('canvas');
-  flat.width = layer.width;
-  flat.height = layer.height;
+  flat.width = Math.max(1, Math.round(width * scale));
+  flat.height = Math.max(1, Math.round(height * scale));
   const ctx = flat.getContext('2d');
   if (!ctx) throw new Error('no 2d context');
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, flat.width, flat.height);
-  ctx.drawImage(layer, 0, 0);
+  if (background) ctx.drawImage(background, 0, 0, flat.width, flat.height);
+
+  const band = background ? inkBand(items, height) : { top: 0, bottom: height };
+  if (band) {
+    const top = Math.floor(band.top * scale);
+    const layer = document.createElement('canvas');
+    layer.width = flat.width;
+    layer.height = Math.max(1, Math.min(flat.height, Math.ceil(band.bottom * scale)) - top);
+    const layerCtx = layer.getContext('2d');
+    if (!layerCtx) throw new Error('no 2d context');
+    if (top) layerCtx.translate(0, -top);
+    layerCtx.scale(scale, scale);
+    replay(layerCtx, items);
+    ctx.drawImage(layer, 0, top);
+  }
 
   if (typeof flat.toBlob !== 'function') throw new Error('toBlob unsupported');
-  return await new Promise((resolve, reject) => {
-    flat.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('toBlob produced nothing'))), 'image/png');
-  });
+  let blob = await canvasToBlob(flat, type, quality);
+  for (const lower of [0.7, 0.55]) {
+    if (type === 'image/png' || blob.size <= MAX_PHOTO_BYTES) break;
+    blob = await canvasToBlob(flat, type, lower);
+  }
+  return blob;
 }
 
 function button(className, text, title) {
@@ -175,9 +212,17 @@ const ROTATE_OFFSET = 22;
 // drag in this panel.
 const ROTATE_SNAP = Math.PI / 12; // 15°
 
-function rotateGripOf(box) {
-  return { x: box.x + box.width / 2, y: box.y - ROTATE_OFFSET };
+function rotateGripOf(box, offset = ROTATE_OFFSET) {
+  return { x: box.x + box.width / 2, y: box.y - offset };
 }
+
+// Zoom over a photo, as a factor of its starting size: the photo viewer's bounds
+// and its per-notch step, so the two feel the same under the wheel.
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 8;
+const ZOOM_STEP = 1.15;
+// A scrollbar thumb never shrinks below a size that can still be grabbed.
+const MIN_THUMB = 24;
 
 // The four corners of a box, in the order the resize logic indexes them.
 function cornersOf(box) {
@@ -205,11 +250,17 @@ export function resizeBox(box, corner, x, y, keepAspect = false) {
   return { x: right ? anchorX : anchorX - w, y: bottom ? anchorY : anchorY - h, width: w, height: h };
 }
 
+// `photo` ({ src, name, mime }) opens that photo to mark up instead of a blank
+// page. It sits UNDER the ink as a locked layer — not an item — so Select, Clear
+// and the eraser only ever touch the marks. Its drawing is the photo's own size
+// (fitted to the window, never enlarged), the view zooms and scrolls over it, and
+// Save hands back the photo at its own pixel size with the marks burned in.
 export function showDrawPanel({
   onSave = () => {},
-  exportBlob = drawingToPngBlob,
+  exportBlob = drawingToBlob,
   now = () => new Date(),
   loadImage = loadImageElement,
+  photo = null,
 } = {}) {
   document.querySelector('.draw-backdrop')?.remove();
 
@@ -231,11 +282,18 @@ export function showDrawPanel({
   let cursor = null;        // last pointer position, for the brush-size ring
   let frame = 0;
   let editing = null;       // { index, textarea } while a text box is open
+  let closed = false;
+  // The photo once decoded, at its natural size. Until then a photo panel takes
+  // no ink: a stroke made against the blank stand-in would land in the wrong place.
+  let background = null;
+  // Where the drawing sits on screen: screen = drawing × zoom + (x, y). A blank
+  // page never moves, so it keeps the identity and paints exactly as it always has.
+  const view = { zoom: 1, x: 0, y: 0 };
 
   const backdrop = document.createElement('div');
   backdrop.className = 'share-link-backdrop draw-backdrop';
   const dialog = document.createElement('section');
-  dialog.className = 'share-link-dialog draw-dialog';
+  dialog.className = `share-link-dialog draw-dialog${photo ? ' draw-photo-mode' : ''}`;
   dialog.setAttribute('role', 'dialog');
   dialog.setAttribute('aria-modal', 'true');
   dialog.setAttribute('aria-labelledby', 'draw-title');
@@ -243,8 +301,8 @@ export function showDrawPanel({
   const header = document.createElement('header');
   const heading = document.createElement('h2');
   heading.id = 'draw-title';
-  heading.textContent = 'Draw';
-  const closeButton = button('share-link-close draw-close', '×', 'Close drawing panel');
+  heading.textContent = photo ? 'Edit photo' : 'Draw';
+  const closeButton = button('share-link-close draw-close', '×', photo ? 'Close photo editor' : 'Close drawing panel');
   header.append(heading, closeButton);
 
   const tools = document.createElement('div');
@@ -349,7 +407,7 @@ export function showDrawPanel({
   }
 
   // Paint shows a text toolbar only while the Text tool is live. Same here: it
-  // is a second row that appears rather than five controls that sit dead.
+  // takes the hint's row while it is needed rather than five controls sitting dead.
   const textBar = document.createElement('div');
   textBar.className = 'draw-text-bar';
   textBar.hidden = true;
@@ -492,11 +550,27 @@ export function showDrawPanel({
   textEditor.className = 'draw-text-editor';
   textEditor.hidden = true;
   textEditor.setAttribute('aria-label', 'Text box');
-  surface.append(canvas, textEditor);
+  // The text box rides on a layer that wears the view's transform, so it can keep
+  // being placed in drawing coordinates — and its text zooms with the photo.
+  const overlay = document.createElement('div');
+  overlay.className = 'draw-overlay';
+  overlay.appendChild(textEditor);
+  // The photo is shown as an <img> under a transparent canvas rather than painted
+  // into it: the eraser's 'destination-out' would otherwise erase the photo too.
+  const photoEl = document.createElement('img');
+  photoEl.className = 'draw-photo';
+  photoEl.alt = '';
+  photoEl.draggable = false;
+  // Long captures need a way to see where they are and to jump; the canvas has no
+  // native scroller, so these stand in for one.
+  const scrollbars = photo ? ['vertical', 'horizontal'].map(createScrollbar) : [];
+  surface.append(...(photo ? [photoEl] : []), canvas, overlay, ...scrollbars.map((bar) => bar.track));
 
   const hint = document.createElement('p');
   hint.className = 'draw-hint';
-  hint.textContent = 'Hold Shift to constrain · Select (↖) moves and resizes anything · Delete removes it';
+  hint.textContent = photo
+    ? 'Scroll to move around · Ctrl+scroll to zoom · Hold Shift to constrain · Select (↖) moves your marks'
+    : 'Hold Shift to constrain · Select (↖) moves and resizes anything · Delete removes it';
 
   const status = document.createElement('div');
   status.className = 'draw-status';
@@ -504,44 +578,188 @@ export function showDrawPanel({
 
   const footer = document.createElement('footer');
   const cancelButton = button('share-link-copy draw-cancel', 'Cancel');
-  const saveButton = button('share-link-done draw-save', 'Save drawing');
+  const saveLabel = photo ? 'Save' : 'Save drawing';
+  const saveButton = button('share-link-done draw-save', saveLabel);
   saveButton.disabled = true;
-  footer.append(cancelButton, saveButton);
+  // − 100% + like the photo viewer, plus a way back to the starting size.
+  const zoomBar = document.createElement('div');
+  zoomBar.className = 'draw-zoom';
+  const zoomOutButton = button('draw-zoom-out', '−', 'Zoom out (Ctrl+−)');
+  const zoomLevel = document.createElement('output');
+  zoomLevel.className = 'draw-zoom-level';
+  const zoomInButton = button('draw-zoom-in', '+', 'Zoom in (Ctrl+=)');
+  const fitButton = button('draw-zoom-fit', 'Fit', 'Back to the starting size (Ctrl+0)');
+  zoomBar.append(zoomOutButton, zoomLevel, zoomInButton, fitButton);
+  footer.append(...(photo ? [zoomBar] : []), cancelButton, saveButton);
 
   const confirmRow = document.createElement('footer');
   confirmRow.className = 'draw-confirm';
   confirmRow.hidden = true;
   const confirmText = document.createElement('span');
-  confirmText.textContent = 'Discard this drawing?';
-  const keepButton = button('share-link-copy draw-keep', 'Keep drawing');
+  confirmText.textContent = photo ? 'Discard your changes to this photo?' : 'Discard this drawing?';
+  const keepButton = button('share-link-copy draw-keep', photo ? 'Keep editing' : 'Keep drawing');
   const discardButton = button('share-link-done danger draw-discard', 'Discard');
   confirmRow.append(confirmText, keepButton, discardButton);
 
-  dialog.append(header, tools, textBar, surface, hint, status, footer, confirmRow);
+  // The text toolbar and the hint take turns in one row of fixed height. When the
+  // toolbar was a row of its own, picking or leaving the Text tool grew or shrank
+  // the centred dialog, and the drawing jumped by half that row each time.
+  const optionsRow = document.createElement('div');
+  optionsRow.className = 'draw-options';
+  optionsRow.append(textBar, hint);
+
+  dialog.append(header, tools, optionsRow, surface, status, footer, confirmRow);
   backdrop.appendChild(dialog);
   const previouslyFocused = document.activeElement;
   document.body.appendChild(backdrop); // append before measuring: layout must exist
 
-  // The surface is measured once and then fixed. Resizing a canvas clears it, so
-  // reacting to window resize would silently destroy work mid-drawing.
+  // A blank page is measured once and then fixed: the canvas IS the drawing, so
+  // following the window would change the size of what gets saved.
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
-  const cssWidth = Math.max(1, Math.round(rect.width || FALLBACK_SIZE.width));
-  const cssHeight = Math.max(1, Math.round(rect.height || FALLBACK_SIZE.height));
+  let cssWidth = Math.max(1, Math.round(rect.width || FALLBACK_SIZE.width));
+  let cssHeight = Math.max(1, Math.round(rect.height || FALLBACK_SIZE.height));
   canvas.width = Math.round(cssWidth * dpr);
   canvas.height = Math.round(cssHeight * dpr);
   const ctx = canvas.getContext('2d'); // null under jsdom — replay() handles that
   if (ctx) ctx.scale(dpr, dpr);
+  // The drawing's own size, in the units it is drawn in. A blank page is the
+  // canvas; a photo is replaced by its fitted size once it has decoded.
+  let docWidth = cssWidth;
+  let docHeight = cssHeight;
+
+  // Over a photo the canvas is only a window onto the drawing, and it is sized to
+  // the browser window, so it follows a resize. Left alone, its bitmap would be
+  // stretched to the new size and every mark would land away from the pointer.
+  // Nothing is lost: each frame is repainted from the items.
+  const resizeObserver = photo && typeof ResizeObserver === 'function'
+    ? new ResizeObserver(() => {
+      const box = canvas.getBoundingClientRect();
+      const width = Math.round(box.width);
+      const height = Math.round(box.height);
+      if (!width || !height || (width === cssWidth && height === cssHeight)) return;
+      cssWidth = width;
+      cssHeight = height;
+      canvas.width = Math.round(cssWidth * dpr);
+      canvas.height = Math.round(cssHeight * dpr);
+      if (ctx) ctx.scale(dpr, dpr); // resizing reset the context
+      clampView();
+      invalidate();
+    })
+    : null;
+  resizeObserver?.observe(canvas);
+
+  // Selection chrome is drawn in drawing units but must keep its size on screen
+  // at any zoom, or the handles turn huge or ungrabbable.
+  const onScreen = (n) => n / view.zoom;
+
+  /* ---------------------------------------------------------------- view */
+
+  // Keep the photo on screen: centred while it fits, edge to edge once it overflows.
+  function clampView() {
+    const width = docWidth * view.zoom;
+    const height = docHeight * view.zoom;
+    view.x = width <= cssWidth ? (cssWidth - width) / 2 : Math.min(0, Math.max(cssWidth - width, view.x));
+    view.y = height <= cssHeight ? (cssHeight - height) / 2 : Math.min(0, Math.max(cssHeight - height, view.y));
+  }
+
+  // Zooming out stops at half the starting size — or, for a capture far taller than
+  // the window, at the size that shows all of it, as in the photo viewer.
+  const minZoom = () => Math.min(MIN_ZOOM, cssWidth / docWidth, cssHeight / docHeight);
+
+  // `anchor` (canvas coordinates) stays still, so the part under the pointer grows in place.
+  function setZoom(value, anchor = { x: cssWidth / 2, y: cssHeight / 2 }) {
+    if (!background) return;
+    const next = Math.min(MAX_ZOOM, Math.max(minZoom(), value));
+    const ratio = next / view.zoom;
+    view.x = anchor.x - (anchor.x - view.x) * ratio;
+    view.y = anchor.y - (anchor.y - view.y) * ratio;
+    view.zoom = next;
+    clampView();
+    invalidate();
+  }
+
+  function panBy(dx, dy) {
+    if (!background) return;
+    view.x -= dx;
+    view.y -= dy;
+    clampView();
+    invalidate();
+  }
+
+  // The part of the drawing on screen, clipped to the drawing itself.
+  function visibleRect() {
+    const x0 = Math.max(0, -view.x / view.zoom);
+    const y0 = Math.max(0, -view.y / view.zoom);
+    const x1 = Math.min(docWidth, (cssWidth - view.x) / view.zoom);
+    const y1 = Math.min(docHeight, (cssHeight - view.y) / view.zoom);
+    return { x: x0, y: y0, width: Math.max(1, x1 - x0), height: Math.max(1, y1 - y0) };
+  }
+
+  function createScrollbar(axis) {
+    const vertical = axis === 'vertical';
+    const track = document.createElement('div');
+    track.className = `draw-scrollbar ${axis}`;
+    track.hidden = true;
+    const thumb = document.createElement('div');
+    thumb.className = 'draw-scroll-thumb';
+    track.appendChild(thumb);
+    let grab = null;
+    let ratio = 1; // drawing pixels on screen per pixel of thumb travel
+    const span = () => (vertical ? docHeight : docWidth) * view.zoom;
+    const port = () => (vertical ? cssHeight : cssWidth);
+    thumb.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      thumb.setPointerCapture?.(event.pointerId);
+      grab = { at: vertical ? event.clientY : event.clientX, from: vertical ? view.y : view.x };
+    });
+    thumb.addEventListener('pointermove', (event) => {
+      if (!grab) return;
+      const moved = (vertical ? event.clientY : event.clientX) - grab.at;
+      if (vertical) view.y = grab.from - moved * ratio; else view.x = grab.from - moved * ratio;
+      clampView();
+      invalidate();
+    });
+    const release = () => { grab = null; };
+    thumb.addEventListener('pointerup', release);
+    thumb.addEventListener('pointercancel', release);
+    function sync() {
+      track.hidden = !background || span() <= port() + 1;
+      if (track.hidden) return;
+      const length = vertical ? track.clientHeight : track.clientWidth;
+      const size = Math.max(MIN_THUMB, length * (port() / span()));
+      const travel = Math.max(1, length - size);
+      ratio = (span() - port()) / travel;
+      const at = (-(vertical ? view.y : view.x) / (span() - port())) * travel;
+      thumb.style[vertical ? 'height' : 'width'] = `${size}px`;
+      thumb.style.transform = vertical ? `translateY(${at}px)` : `translateX(${at}px)`;
+    }
+    return { track, sync };
+  }
+
+  // The DOM half of the view: the photo and the text box move with the canvas.
+  function syncView() {
+    if (!photo) return;
+    const transform = `translate(${view.x}px, ${view.y}px) scale(${view.zoom})`;
+    photoEl.style.transform = transform;
+    overlay.style.transform = transform;
+    for (const bar of scrollbars) bar.sync();
+    zoomLevel.value = `${Math.round(view.zoom * 100)}%`;
+    zoomLevel.textContent = zoomLevel.value;
+    for (const el of [zoomOutButton, zoomInButton, fitButton]) el.disabled = !background;
+  }
 
   function paintSelection() {
     if (selected == null) return;
     const item = state.items[selected];
     if (!item) return;
     const box = boxOf(item);
+    const handle = onScreen(HANDLE);
     ctx.save();
     ctx.globalCompositeOperation = 'source-over';
     ctx.strokeStyle = '#1a73e8';
-    ctx.lineWidth = 1;
+    ctx.lineWidth = onScreen(1);
     // The chrome rotates with the item, so the handles stay on its real corners.
     const c = centerOf(item);
     if (item.angle) {
@@ -549,22 +767,22 @@ export function showDrawPanel({
       ctx.rotate(item.angle);
       ctx.translate(-c.x, -c.y);
     }
-    ctx.setLineDash?.([4, 3]);
+    ctx.setLineDash?.([onScreen(4), onScreen(3)]);
     ctx.strokeRect(box.x, box.y, box.width, box.height);
     // The stem out to the rotate grip, so it reads as attached rather than loose.
     ctx.beginPath();
     ctx.moveTo(box.x + box.width / 2, box.y);
-    ctx.lineTo(box.x + box.width / 2, box.y - ROTATE_OFFSET);
+    ctx.lineTo(box.x + box.width / 2, box.y - onScreen(ROTATE_OFFSET));
     ctx.stroke();
     ctx.setLineDash?.([]);
     ctx.fillStyle = '#ffffff';
     for (const corner of cornersOf(box)) {
-      ctx.fillRect(corner.x - HANDLE / 2, corner.y - HANDLE / 2, HANDLE, HANDLE);
-      ctx.strokeRect(corner.x - HANDLE / 2, corner.y - HANDLE / 2, HANDLE, HANDLE);
+      ctx.fillRect(corner.x - handle / 2, corner.y - handle / 2, handle, handle);
+      ctx.strokeRect(corner.x - handle / 2, corner.y - handle / 2, handle, handle);
     }
-    const grip = rotateGripOf(box);
+    const grip = rotateGripOf(box, onScreen(ROTATE_OFFSET));
     ctx.beginPath();
-    ctx.arc(grip.x, grip.y, HANDLE / 2 + 1, 0, Math.PI * 2);
+    ctx.arc(grip.x, grip.y, handle / 2 + onScreen(1), 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
     ctx.restore();
@@ -575,15 +793,15 @@ export function showDrawPanel({
   // is already committed — which is the whole point of this preview.
   function paintCursor() {
     if (!cursor || !isFreehandTool(tool)) return;
-    const radius = Math.max(1.5, effectiveWidth(tool, width) / 2);
+    const radius = Math.max(onScreen(1.5), effectiveWidth(tool, width) / 2);
     ctx.save();
     ctx.globalCompositeOperation = 'source-over';
-    ctx.lineWidth = 1;
+    ctx.lineWidth = onScreen(1);
     // Two rings, dark over light, so the preview stays visible on white paper
     // and on top of a dark photo alike.
     ctx.strokeStyle = 'rgba(255,255,255,0.9)';
     ctx.beginPath();
-    ctx.arc(cursor.x, cursor.y, radius + 1, 0, Math.PI * 2);
+    ctx.arc(cursor.x, cursor.y, radius + onScreen(1), 0, Math.PI * 2);
     ctx.stroke();
     ctx.strokeStyle = tool === ERASE ? 'rgba(32,33,36,0.75)' : color;
     ctx.beginPath();
@@ -594,14 +812,27 @@ export function showDrawPanel({
 
   function paint() {
     frame = 0;
+    syncView();
     if (!ctx) return;
     ctx.clearRect(0, 0, cssWidth, cssHeight);
+    ctx.save();
+    if (photo) {
+      ctx.translate(view.x, view.y);
+      ctx.scale(view.zoom, view.zoom);
+      // Ink past the photo's edge is not saved, so it is not shown either.
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, docWidth, docHeight);
+      ctx.clip();
+    }
     // The box being edited is hidden here: its overlay is already showing it,
     // and painting both stacks the same text twice.
     replay(ctx, paintableItems(state, editing ? editing.index : null));
+    if (photo) ctx.restore();
     // Chrome only — both are drawn after replay, so neither ever exports.
     paintSelection();
     paintCursor();
+    ctx.restore();
   }
 
   function syncControls() {
@@ -628,10 +859,16 @@ export function showDrawPanel({
     if (!frame) frame = raf(paint);
   }
   syncControls();
+  syncView();
 
-  function pointAt(event) {
+  // The point on the canvas, then through the view into drawing coordinates.
+  function canvasPoint(event) {
     const box = canvas.getBoundingClientRect();
     return { x: (event.clientX || 0) - (box.left || 0), y: (event.clientY || 0) - (box.top || 0) };
+  }
+  function pointAt(event) {
+    const { x, y } = canvasPoint(event);
+    return { x: (x - view.x) / view.zoom, y: (y - view.y) / view.zoom };
   }
 
   // Handles are grabbed in the item's own frame — the same inverse rotation the
@@ -640,16 +877,18 @@ export function showDrawPanel({
     const item = state.items[selected];
     if (!item) return false;
     const local = toLocalPoint(item, x, y);
-    const grip = rotateGripOf(boxOf(item));
-    return Math.abs(local.x - grip.x) <= HANDLE_GRAB && Math.abs(local.y - grip.y) <= HANDLE_GRAB;
+    const grip = rotateGripOf(boxOf(item), onScreen(ROTATE_OFFSET));
+    const grab = onScreen(HANDLE_GRAB);
+    return Math.abs(local.x - grip.x) <= grab && Math.abs(local.y - grip.y) <= grab;
   }
 
   function handleAt(x, y) {
     if (selected == null || !state.items[selected]) return null;
     const local = toLocalPoint(state.items[selected], x, y);
     ({ x, y } = local);
+    const grab = onScreen(HANDLE_GRAB);
     for (const corner of cornersOf(boxOf(state.items[selected]))) {
-      if (Math.abs(x - corner.x) <= HANDLE_GRAB && Math.abs(y - corner.y) <= HANDLE_GRAB) return corner.id;
+      if (Math.abs(x - corner.x) <= grab && Math.abs(y - corner.y) <= grab) return corner.id;
     }
     return null;
   }
@@ -663,6 +902,7 @@ export function showDrawPanel({
 
   canvas.addEventListener('pointerdown', (event) => {
     if (event.button != null && event.button !== 0) return; // left button / touch / pen only
+    if (photo && !background) return;
     event.preventDefault();
     canvas.setPointerCapture?.(event.pointerId);
     shiftHeld = !!event.shiftKey;
@@ -768,8 +1008,12 @@ export function showDrawPanel({
   canvas.addEventListener('pointercancel', finishDrag);
   canvas.addEventListener('pointerleave', () => { cursor = null; invalidate(); });
 
-  // Double-click a text box to edit it again, the way every canvas editor works.
+  // Double-click a text box to edit it again, the way every canvas editor works —
+  // with the tools whose click makes no mark. Rubbing the eraser (or the pen) back
+  // and forth over a caption is two quick clicks as well, and it must keep erasing
+  // rather than flip to the Text tool and reopen the caption it was rubbing out.
   canvas.addEventListener('dblclick', (event) => {
+    if (tool !== SELECT && tool !== TEXT) return;
     const { x, y } = pointAt(event);
     const index = itemAt(state, x, y);
     const item = state.items[index];
@@ -834,6 +1078,7 @@ export function showDrawPanel({
   function syncTextBar() {
     const active = tool === TEXT || !!editing;
     textBar.hidden = !active;
+    hint.hidden = active;
     fontSelect.value = textStyle.font;
     textSizeSelect.value = String(textSize);
     textColorRow.sync();
@@ -875,7 +1120,7 @@ export function showDrawPanel({
 
   function openTextBox(x, y) {
     commitTextBox();
-    const width = Math.max(60, Math.min(TEXT_BOX_WIDTH, cssWidth - x - 8));
+    const width = Math.max(60, Math.min(TEXT_BOX_WIDTH, docWidth - x - 8));
     const index = addText(state, {
       x, y, width, height: textSize * LINE_HEIGHT, ...textStyle, color: textColor, size: textSize,
     });
@@ -946,14 +1191,17 @@ export function showDrawPanel({
       const el = await loadImage(src);
       const naturalWidth = el.naturalWidth || el.width || 320;
       const naturalHeight = el.naturalHeight || el.height || 240;
-      const fit = Math.min(1, (cssWidth * PASTE_FIT) / naturalWidth, (cssHeight * PASTE_FIT) / naturalHeight);
+      // Fitted to, and centred in, the part of the drawing on screen — on a long
+      // capture that is where the reader is looking, not the top of the page.
+      const area = visibleRect();
+      const fit = Math.min(1, (area.width * PASTE_FIT) / naturalWidth, (area.height * PASTE_FIT) / naturalHeight);
       const w = Math.max(8, Math.round(naturalWidth * fit));
       const h = Math.max(8, Math.round(naturalHeight * fit));
       const index = addImage(state, {
         src,
         el,
-        x: Math.round((cssWidth - w) / 2),
-        y: Math.round((cssHeight - h) / 2),
+        x: Math.round(area.x + (area.width - w) / 2),
+        y: Math.round(area.y + (area.height - h) / 2),
         width: w,
         height: h,
       });
@@ -1044,11 +1292,13 @@ export function showDrawPanel({
   clearButton.addEventListener('click', () => { selected = null; clear(state); invalidate(); });
 
   function close() {
+    closed = true;
     editing = null; // teardown, not a commit: the panel is going away
     document.removeEventListener('keydown', onKeydown);
     document.removeEventListener('paste', onPaste);
     document.removeEventListener('pointerdown', releaseHold, true);
     if (frame) cancelRaf(frame);
+    resizeObserver?.disconnect();
     backdrop.remove();
     previouslyFocused?.focus?.();
   }
@@ -1087,12 +1337,53 @@ export function showDrawPanel({
       selectItem(null);
       return;
     }
+    if (background && viewKey(event)) return;
     if (!(event.ctrlKey || event.metaKey)) return;
     const key = String(event.key).toLowerCase();
     if (key === 'z' && !event.shiftKey) { event.preventDefault(); selected = null; undo(state); invalidate(); }
     else if ((key === 'z' && event.shiftKey) || key === 'y') { event.preventDefault(); selected = null; redo(state); invalidate(); }
   }
   document.addEventListener('keydown', onKeydown);
+
+  // Ctrl + = / − / 0 zoom the photo rather than the page around it, and the page
+  // keys scroll a long capture. Returns whether the key was one of these.
+  function viewKey(event) {
+    const mod = event.ctrlKey || event.metaKey;
+    const key = event.key;
+    // The size slider and the selects have Home/End/Page keys of their own.
+    if (!mod && event.target?.closest?.('input, select, textarea')) return false;
+    if (mod && (key === '=' || key === '+')) setZoom(view.zoom * ZOOM_STEP);
+    else if (mod && key === '-') setZoom(view.zoom / ZOOM_STEP);
+    else if (mod && key === '0') setZoom(1);
+    else if (mod) return false;
+    else if (key === 'PageDown' || key === 'PageUp') panBy(0, (key === 'PageDown' ? 0.9 : -0.9) * cssHeight);
+    else if (key === 'Home' || key === 'End') panBy(0, (key === 'End' ? 1 : -1) * docHeight * view.zoom);
+    else return false;
+    event.preventDefault();
+    return true;
+  }
+
+  // The wheel scrolls, as it does on a page, and Ctrl+wheel (a touchpad pinch
+  // arrives as one) zooms about the pointer. A drawing tool owns the drag, so
+  // the wheel is the one gesture left to move around a long capture.
+  surface.addEventListener('wheel', (event) => {
+    if (!background) return;
+    event.preventDefault();
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? cssHeight : 1;
+    const dx = event.deltaX * unit;
+    const dy = event.deltaY * unit;
+    if (event.ctrlKey || event.metaKey) {
+      const delta = Math.max(-100, Math.min(100, dy)); // one notch at most, like the viewer
+      setZoom(view.zoom * ZOOM_STEP ** (-delta / 100), canvasPoint(event));
+    } else if (event.shiftKey && !dx) {
+      panBy(dy, 0);
+    } else {
+      panBy(dx, dy);
+    }
+  }, { passive: false });
+  zoomOutButton.addEventListener('click', () => setZoom(view.zoom / ZOOM_STEP));
+  zoomInButton.addEventListener('click', () => setZoom(view.zoom * ZOOM_STEP));
+  fitButton.addEventListener('click', () => setZoom(1));
 
   closeButton.addEventListener('click', requestClose);
   cancelButton.addEventListener('click', requestClose);
@@ -1108,20 +1399,60 @@ export function showDrawPanel({
     status.textContent = '';
     let blob;
     try {
-      blob = await exportBlob(state.items, cssWidth, cssHeight, dpr);
+      // A photo comes back at its own pixel size, in its own format; a drawing at
+      // the screen's density.
+      blob = background
+        ? await exportBlob(state.items, docWidth, docHeight, background.width / docWidth,
+          { background: background.el, type: photoOutputType(photo) })
+        : await exportBlob(state.items, docWidth, docHeight, dpr);
     } catch {
-      status.textContent = 'Could not export the drawing. Your strokes are still here.';
+      status.textContent = photo
+        ? 'Could not save the photo. Your marks are still here.'
+        : 'Could not export the drawing. Your strokes are still here.';
       saveButton.disabled = false;
-      saveButton.textContent = 'Save drawing';
+      saveButton.textContent = saveLabel;
       return;
     }
-    const file = new File([blob], drawingFileName(now()), { type: 'image/png' });
+    const file = background
+      ? new File([blob], photoFileName(photo.name, blob.type), { type: blob.type || photoOutputType(photo) })
+      : new File([blob], drawingFileName(now()), { type: 'image/png' });
     // Close first, then hand off: onSave may be async, and its failures belong to
     // the editor's status line, not this panel's.
     close();
     onSave(file);
   });
 
+  // A photo opens in the size it will be drawn on: fitted to the window, or to its
+  // width when containing it would leave a sliver (a full-page capture) — the photo
+  // viewer's rule. Never enlarged: marks drawn on an enlarged photo would be scaled
+  // DOWN to its real pixels on save, and thin lines would thin out to nothing.
+  async function openPhoto() {
+    status.textContent = 'Opening the photo…';
+    try {
+      const el = await loadImage(photo.src);
+      if (closed) return;
+      const width = el.naturalWidth || el.width;
+      const height = el.naturalHeight || el.height;
+      if (!width || !height) throw new Error('photo has no size');
+      const fit = shouldFitWidth(width, height, cssWidth, cssHeight)
+        ? Math.min(1, cssWidth / width)
+        : Math.min(1, cssWidth / width, cssHeight / height);
+      docWidth = width * fit;
+      docHeight = height * fit;
+      background = { el, width, height };
+      photoEl.src = photo.src;
+      photoEl.style.width = `${docWidth}px`;
+      photoEl.style.height = `${docHeight}px`;
+      status.textContent = '';
+      view.y = 0; // a long capture opens at its top
+      clampView();
+      invalidate();
+    } catch {
+      if (!closed) status.textContent = 'Could not open this photo.';
+    }
+  }
+  const ready = photo ? openPhoto() : Promise.resolve();
+
   canvas.focus();
-  return { close, canvas, saveButton, dialog, placeImageFile, state, textEditor, sizeInput };
+  return { close, canvas, saveButton, dialog, placeImageFile, state, textEditor, sizeInput, ready, view };
 }

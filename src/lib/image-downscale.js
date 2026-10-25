@@ -19,7 +19,7 @@ function approxBytes(dataUri) {
   return i < 0 ? 0 : Math.floor((dataUri.length - i - 1) * 0.75);
 }
 
-function blobToDataURL(blob) {
+export function blobToDataURL(blob) {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
     r.onload = () => resolve(r.result);
@@ -33,6 +33,25 @@ function blobToDataURL(blob) {
 export function fitWithin(width, height, maxWidth = 1280, maxHeight = 2048) {
   const scale = Math.min(1, maxWidth / width, maxHeight / height);
   return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)), scale };
+}
+
+// Below this fraction of the available width, a contained image is too narrow to read
+// and is better fitted to the width and scrolled. Deliberately low: this is meant to
+// catch documents (a full-page capture contains to ~10% of the width), NOT ordinary
+// tall photos. A 3:4 portrait contains to ~50% and a phone screenshot to ~31%, both
+// perfectly readable whole, and forcing those to scroll would be a downgrade. On a
+// typical window this engages past roughly 2.7:1.
+const FIT_WIDTH_BELOW = 0.25;
+
+/**
+ * Whether an image should be fitted to the width rather than contained.
+ * `null` when the inputs are not measurable yet (image undecoded, or jsdom).
+ * Pure, so the rule is testable without a layout engine.
+ */
+export function shouldFitWidth(naturalWidth, naturalHeight, availableWidth, availableHeight) {
+  if (!naturalWidth || !naturalHeight || !availableWidth || !availableHeight) return null;
+  const containedWidth = Math.min(availableWidth, availableHeight * (naturalWidth / naturalHeight));
+  return containedWidth < availableWidth * FIT_WIDTH_BELOW;
 }
 
 // Re-encode one image data: URI to a downscaled WebP data: URI. Browser-only;
