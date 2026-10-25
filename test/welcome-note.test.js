@@ -70,15 +70,20 @@ describe('welcome note — fresh first run', () => {
       'change its case or font color',
       'drag across the grid',
       '**Alt+Enter**',
+      '**Enter** twice ends the list',
+      'from **Excel** or **Word**',
+      '```mermaid',
       '**Save selection to OWL-Note**',
       '**Rebuild LLM chat to OWL-Note**',
       '**Capture entire page to OWL-Note**',
       '**Live Transcription save to OWL-Note**',
       'Save the drawing directly into the note as a PNG attachment',
-      'Export an editable `.owl-note` package',
+      '**⧉ Open in new tab**',
       'Phonetic Assistance',
-      'approximately 130 MB',
-      'Oversized content kept safely on the current device',
+      'about 130 MB',
+      'editable `.owl-note` package',
+      'oversized notes stay safely on this device',
+      '**Export ▾ → 🔑 Key backup**',
     ]) expect(welcome.body).toContain(expected);
 
     // The editor actually LANDED on it (editor/ui state, not merely note existence).
