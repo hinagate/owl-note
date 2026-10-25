@@ -51,7 +51,12 @@ export const LOCKED_NOTE_BODY = [
 export const LOCKED_NO_KEY_BODY = [
   '# 🔒 This note is locked',
   '',
-  'Its contents are encrypted and the key for it is not on this device.',
+  'Its contents are encrypted and the key for it is not in this browser.',
+  '',
+  '## If you used Google Drive sync',
+  '',
+  'Your key was backed up there. Choose **Restore from Google Drive** above the note list',
+  'and sign in to the same Google account.',
   '',
   '## If you have OWL-Note on another device',
   '',

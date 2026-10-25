@@ -384,6 +384,44 @@ describe('Enter inside a table', () => {
   });
 });
 
+describe('Enter in a list', () => {
+  function pressEnter(ta, caret = ta.value.length) {
+    ta.selectionStart = ta.selectionEnd = caret;
+    return !ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', cancelable: true, bubbles: true }));
+  }
+
+  it('starts the next bullet and the next number', () => {
+    render({ body: '- milk' });
+    let ta = document.querySelector('.note-body');
+    expect(pressEnter(ta)).toBe(true);
+    expect(ta.value).toBe('- milk\n- ');
+    expect(ta.selectionStart).toBe(ta.value.length);
+
+    render({ body: '1. one\n2. two' });
+    ta = document.querySelector('.note-body');
+    pressEnter(ta);
+    expect(ta.value).toBe('1. one\n2. two\n3. ');
+  });
+
+  it('renumbers the items below a new one inserted mid-list', async () => {
+    render({ body: '1. one\n2. two\n3. three' });
+    const ta = document.querySelector('.note-body');
+    pressEnter(ta, '1. one'.length);
+    await new Promise((resolve) => setTimeout(resolve, 0)); // the renumber runs one task later
+    expect(ta.value).toBe('1. one\n2. \n3. two\n4. three');
+  });
+
+  it('ends the list when Enter lands on an empty item, and leaves Shift+Enter alone', () => {
+    render({ body: '- milk\n- ' });
+    const ta = document.querySelector('.note-body');
+    pressEnter(ta);
+    expect(ta.value).toBe('- milk\n');
+    ta.value = '- milk';
+    ta.selectionStart = ta.selectionEnd = ta.value.length;
+    expect(!ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, cancelable: true, bubbles: true }))).toBe(false);
+  });
+});
+
 describe('Alt+Enter inside a table cell', () => {
   const TABLE = '| Symbol | Mouth |\n| --- | --- |\n| ɔi | boy |';
 

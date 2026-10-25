@@ -91,6 +91,84 @@ describe('app integration', () => {
     expect(document.querySelector('#editor textarea.note-body').value).toContain('newer body');
   });
 
+  it('opens the open note in a tab of its own, right after this one, by its id', async () => {
+    const app = await import('../src/app/app.js');
+    const bm = await import('../src/lib/bookmarks.js');
+    const { encode } = await import('../src/lib/codec.js');
+    const root = await bm.ensureRoot();
+    await bm.createNote(root, 'Newer', await encode({ id: 'n1', title: 'Newer', body: 'newer body', created: 2000 }));
+    const opened = [];
+    chrome.tabs.getCurrent = async () => ({ id: 7, index: 2, windowId: 3 });
+    chrome.tabs.create = async (options) => { opened.push(options); return {}; };
+    await app.initUI(root);
+    await waitFor(() => document.querySelector('#editor .note-title')?.value === 'Newer');
+    const bar = document.querySelector('#editor .editor-bar');
+    expect(bar.querySelector('.phonetics-toggle').nextElementSibling).toBe(bar.querySelector('.open-tab'));
+    bar.querySelector('.open-tab').click();
+    await waitFor(() => opened.length === 1);
+    expect(opened[0]).toEqual({ url: `chrome-extension://${chrome.runtime.id}/app.html?note=n1`, index: 3, windowId: 3, openerTabId: 7 });
+  });
+
+  it('saves a new note before opening its tab, and says so when there is nothing to open', async () => {
+    const app = await import('../src/app/app.js');
+    const bm = await import('../src/lib/bookmarks.js');
+    const root = await bm.ensureRoot();
+    const opened = [];
+    chrome.tabs.create = async (options) => { opened.push(options); return {}; };
+    await app.initUI(root);
+    document.querySelector('button.new').click();
+    await waitFor(() => document.querySelector('#editor .note-title')?.value === 'New note' || document.querySelector('#editor .open-tab'));
+    document.querySelector('#editor .note-title').value = '';
+    document.querySelector('#editor .note-title').dispatchEvent(new Event('input'));
+    document.querySelector('#editor .open-tab').click();
+    await waitFor(() => !document.getElementById('toast').hidden);
+    expect(document.getElementById('toast').textContent).toContain('Nothing to open yet');
+    expect(opened).toHaveLength(0);
+
+    const ta = document.querySelector('#editor textarea.note-body');
+    ta.value = 'typed and not yet saved';
+    ta.dispatchEvent(new Event('input'));
+    document.querySelector('#editor .open-tab').click();
+    await waitFor(() => opened.length === 1);
+    const saved = (await app.loadNotes(root)).find((n) => n.body === 'typed and not yet saved');
+    expect(saved).toBeTruthy();
+    expect(opened[0].url).toContain(`app.html?note=${saved.id}`);
+  });
+
+  it('in a note\'s own tab, opens that note — not the latest — with no button to open it again', async () => {
+    const app = await import('../src/app/app.js');
+    const bm = await import('../src/lib/bookmarks.js');
+    const { encode } = await import('../src/lib/codec.js');
+    const mirror = await import('../src/lib/mirror.js');
+    const root = await bm.ensureRoot();
+    const nb = await bm.createNotebook(root, 'Work');
+    await bm.createNote(nb, 'Older', await encode({ id: 'o1', title: 'Older', body: 'older body', created: 1000 }));
+    await bm.createNote(root, 'Newer', await encode({ id: 'n1', title: 'Newer', body: 'newer body', created: 2000 }));
+    await mirror.saveBackup({ id: 'local1', title: 'Local', body: 'local body', created: 500 }, { localOnly: true, folderId: root });
+    try {
+      history.replaceState(null, '', '?note=o1');
+      await app.initUI(root);
+      await waitFor(() => document.querySelector('#editor .note-title')?.value === 'Older');
+      expect(document.querySelector('#editor .open-tab')).toBeNull();
+      expect(document.title).toBe('Older — OWL-Note');
+
+      app.resetUI();
+      history.replaceState(null, '', '?note=local1'); // a note kept on this device only
+      await app.initUI(root);
+      await waitFor(() => document.querySelector('#editor .note-title')?.value === 'Local');
+
+      app.resetUI();
+      history.replaceState(null, '', '?note=gone');
+      await app.initUI(root);
+      await waitFor(() => !document.getElementById('toast').hidden);
+      expect(document.getElementById('toast').textContent).toContain('no longer available');
+      expect(document.querySelector('#editor .note-title')?.value || '').toBe(''); // not some other note
+    } finally {
+      history.replaceState(null, '', location.pathname);
+      document.title = '';
+    }
+  });
+
   it('reconcileLocalToDrive re-saves every local-only note and clears its local-only flag', async () => {
     const app = await import('../src/app/app.js');
     const bm = await import('../src/lib/bookmarks.js');
@@ -230,7 +308,7 @@ describe('app integration', () => {
     location.hash = '';
 
     expect(document.querySelector('#editor .note-title').value).toBe('Requested locked');
-    expect(document.querySelector('#editor .readonly-notice')?.textContent).toContain('key for this note is not on this device');
+    expect(document.querySelector('#editor .readonly-notice')?.textContent).toContain('key for this note is not in this browser');
   });
 
   it('reveals a new sub-notebook even when an ancestor was collapsed', async () => {
@@ -626,11 +704,9 @@ describe('app integration', () => {
     expect(trashRow).not.toBeNull();
     expect(trashRow.querySelector('.trash-count').textContent).toBe('1');
     trashRow.click();
-    await new Promise((r) => setTimeout(r, 10));
-    expect(document.querySelector('#note-list .item.trashed')).not.toBeNull();
+    await waitFor(() => document.querySelector('#note-list .item.trashed')); // poll, don't race a fixed delay
     document.querySelector('#note-list .restore').click();
-    await new Promise((r) => setTimeout(r, 10));
-    expect((await bm.listNotes(trashId)).length).toBe(0);
+    await waitFor(async () => (await bm.listNotes(trashId)).length === 0);
     expect((await bm.listNotes(root)).map((n) => n.bookmarkId)).toContain(bid);
   });
 
@@ -676,7 +752,7 @@ describe('app integration', () => {
     first.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true })); // anchor + select #0
     const list = document.getElementById('note-list');
     list.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', shiftKey: true, bubbles: true }));
-    await new Promise((r) => setTimeout(r, 10));
+    await waitFor(() => document.querySelectorAll('#note-list .item.selected').length === 2); // poll, don't race a fixed delay
     expect(document.querySelectorAll('#note-list .item.selected').length).toBe(2);
   });
 });

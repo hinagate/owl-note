@@ -18,6 +18,11 @@ export async function enable() {
   try { await ensureFolder(); } catch { /* created later on first upload */ }
 }
 
+// Connect again, for a permission the first connection did not include (key backup).
+export async function reauthorize() {
+  await connect();
+}
+
 export async function disable() {
   await chrome.storage.local.set({ [ENABLED]: false });
   await disconnect();

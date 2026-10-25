@@ -9,7 +9,11 @@ export const OAUTH_CLIENT_ID = ID;
 // confidential (blast radius = API-quota abuse, not user-file access). See OAuth 2.0
 // for Installed Applications — this is expected and documented by Google.
 export const OAUTH_CLIENT_SECRET = SECRET;
-export const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+// drive.file: the files OWL-Note creates in its "OWL-Note Sync" folder. drive.appdata: its
+// hidden app-data folder, where the note keys are backed up (see drive-keys.js). Both are
+// classed non-sensitive by Google.
+export const KEY_BACKUP_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
+export const DRIVE_SCOPE = `https://www.googleapis.com/auth/drive.file ${KEY_BACKUP_SCOPE}`;
 export const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 export const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 export const DRIVE_FILES_URL = 'https://www.googleapis.com/drive/v3/files';

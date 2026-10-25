@@ -72,6 +72,11 @@ export async function connect() {
   await writeTokens({ refreshToken: j.refresh_token, accessToken: j.access_token, expiresAt: Date.now() + (j.expires_in || 3600) * 1000 });
 }
 
+// Whether this build can connect to Drive at all (the credential-free build cannot).
+export function isConfigured() {
+  return !!(OAUTH_CLIENT_ID && OAUTH_CLIENT_SECRET);
+}
+
 export async function disconnect() {
   await chrome.storage.local.remove(TOKENS);
 }

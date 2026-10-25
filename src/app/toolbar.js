@@ -3,7 +3,7 @@
 // Track the active outside-click closer so re-renders don't leak stale listeners.
 let _activeCloser = null;
 
-export function renderToolbar(container, { query = '', onSearch, onExportNote, onExportMarkdown, onExportKey, onImport, onImportKey, driveEnabled = false, onToggleDrive = null, onAsk = null }) {
+export function renderToolbar(container, { query = '', onSearch, onExportNote, onExportMarkdown, onExportKey, onImport, onImportKey, onKeyBackup = null, driveEnabled = false, onToggleDrive = null, onAsk = null }) {
   // Clean up any stale document listener from a previous render.
   if (_activeCloser) {
     document.removeEventListener('click', _activeCloser);
@@ -57,7 +57,14 @@ export function renderToolbar(container, { query = '', onSearch, onExportNote, o
   keyItem.textContent = 'Recovery key (.json)';
   keyItem.title = 'The keys that unlock your notes. Keep this private.';
   keyItem.addEventListener('click', () => { menu.hidden = true; onExportKey(); });
+  // Where the key is backed up, if anywhere, and the way to back it up — always here,
+  // after the list's backup banner has been put off with "Not now". app.js fills in the
+  // label as the state changes (setKeyBackup).
+  const backupItem = document.createElement('button');
+  backupItem.className = 'menu-item key-backup';
+  backupItem.addEventListener('click', () => { menu.hidden = true; onKeyBackup?.(); });
   menu.append(noteItem, mdItem, keyItem);
+  if (onKeyBackup) menu.append(backupItem);
   exportBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     const willOpen = menu.hidden;
@@ -137,7 +144,14 @@ export function renderToolbar(container, { query = '', onSearch, onExportNote, o
   // The toolbar is not rebuilt when the open note changes, so the per-note item is
   // toggled through this rather than re-rendered — same shape as the editor's
   // setShareActionVisible.
-  const api = { setNoteExportEnabled: (on) => { noteItem.disabled = !on; } };
+  const api = {
+    setNoteExportEnabled: (on) => { noteItem.disabled = !on; },
+    setKeyBackup: ({ label, title = '', enabled = true }) => {
+      backupItem.textContent = label;
+      backupItem.title = title;
+      backupItem.disabled = !enabled;
+    },
+  };
 
   // "Ask your notes" drawer opener. Build it here, but append it LAST below so it
   // owns the toolbar's right margin even when the optional Drive control is present.

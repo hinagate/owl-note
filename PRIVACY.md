@@ -22,9 +22,15 @@ Every note is encrypted with **AES-256-GCM** before it is written to a bookmark.
   vendor — set a Chrome sync passphrase if that matters to you.
 - **Bookmark titles are stored as plain text** so your notes stay recognizable in
   the bookmark manager and address bar. Avoid putting sensitive detail in a title.
+- **If you turn on Google Drive sync, the key is backed up to your own Drive** —
+  to its hidden app-data folder, which only OWL-Note can read: it isn't shown in
+  Drive, other apps connected to your Drive can't open it, and Drive for desktop
+  doesn't copy it to your computer. Connecting Drive in a new or reinstalled
+  browser restores the key, and your notes open again. As with sync, this places
+  the key with your Google account, never with us.
 - **Keep your backups.** Your notes remain in your bookmarks if OWL-Note is ever
-  removed, but they can only be read with the key. `Export` includes the key for
-  exactly this reason — keep an export somewhere safe.
+  removed, but they can only be read with the key. Without Drive sync, save the
+  recovery key (`Export → Recovery key`) somewhere safe for exactly this reason.
 
 - **We do not run any server.** Your notes never leave your browser through us.
 - **Syncing** happens only via *your own* Chrome Sync / Microsoft account, under
@@ -46,6 +52,8 @@ handles only:
   Google Drive. Never sent to us.
 - **A Google sign-in token** — only if you turn on Drive sync, only to access the
   files OWL-Note created in your own Drive (see below). Never sent to us.
+- **A copy of your note encryption key** — only if you turn on Drive sync, in your
+  own Drive's hidden app-data folder (see above). Never sent to us.
 
 We collect **no** analytics, telemetry, usage data, browsing history, or personal
 identifiers of any kind, and we transfer your data to no one.
@@ -103,6 +111,13 @@ stores image/file attachments and any note too large to fit in a bookmark in an
 `OWL-Note Sync` folder in **your own** Google Drive. This uses Google's
 `drive.file` scope, so OWL-Note can only see files it created — never the rest
 of your Drive. It's keyed to your Google account, and we never see it.
+
+Drive sync also backs up your note encryption key, using Google's
+`drive.appdata` scope: a hidden folder in your Drive that only OWL-Note can read,
+holding nothing but the key. You can delete it from Drive's settings (Manage
+apps → OWL-Note → Delete hidden app data); your notes are unaffected, but a new
+browser can then only open them with the key from another device or a recovery
+key file.
 
 OWL-Note's use of information received from Google APIs adheres to the
 [Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy),

@@ -3,7 +3,7 @@ import {
   toggleInline, toggleHighlight, setHighlight, removeHighlight, changeCase,
   setTextColor, removeTextColor, setAlignment,
   cycleHeading, toggleLinePrefix, toggleOrderedList, insertLink, insertTable,
-  insertSizedTable, nextTableRow,
+  insertSizedTable, nextTableRow, nextListItem,
 } from '../src/lib/format.js';
 import { renderMarkdown } from '../src/lib/markdown.js';
 
@@ -667,6 +667,52 @@ describe('nextTableRow (Enter inside a table)', () => {
 
   it('ignores Enter when there is a selection', () => {
     expect(nextTableRow(TABLE, 0, 10)).toBeNull();
+  });
+});
+
+describe('nextListItem (Enter in a list)', () => {
+  const enter = (body, caret = body.length) => {
+    const edit = nextListItem(body, caret, caret);
+    return edit && { text: applyEdit(body, edit), caret: edit.selStart };
+  };
+
+  it('continues a bullet list with the same bullet, caret after it', () => {
+    expect(enter('- milk')).toEqual({ text: '- milk\n- ', caret: 9 });
+    expect(enter('* milk').text).toBe('* milk\n* ');
+    expect(enter('+ milk').text).toBe('+ milk\n+ ');
+  });
+
+  it('continues a numbered list with the next number', () => {
+    expect(enter('1. one\n2. two').text).toBe('1. one\n2. two\n3. ');
+    expect(enter('9) nine').text).toBe('9) nine\n10) ');
+  });
+
+  it('keeps the indent of a nested item and the quote a list sits in', () => {
+    expect(enter('- a\n  - b').text).toBe('- a\n  - b\n  - ');
+    expect(enter('> 1. quoted').text).toBe('> 1. quoted\n> 2. ');
+  });
+
+  it('starts an unticked task after a task, ticked or not', () => {
+    expect(enter('- [x] done').text).toBe('- [x] done\n- [ ] ');
+  });
+
+  it('moves the text after the caret into the new item', () => {
+    expect(enter('- milk eggs', 6)).toEqual({ text: '- milk\n-  eggs', caret: 9 });
+  });
+
+  it('ends the list on an empty item, so Enter twice walks out of it', () => {
+    expect(enter('- milk\n- ')).toEqual({ text: '- milk\n', caret: 7 });
+    expect(enter('1. one\n2. ').text).toBe('1. one\n');
+    expect(enter('> - a\n> - ').text).toBe('> - a\n> ');
+  });
+
+  it('leaves Enter alone outside a list, before the marker, over a selection, in code and on a rule', () => {
+    expect(enter('just prose')).toBeNull();
+    expect(enter('- milk', 0)).toBeNull();
+    expect(nextListItem('- milk', 2, 6)).toBeNull();
+    expect(enter('```\n- not a list')).toBeNull();
+    expect(enter('- - -')).toBeNull();
+    expect(enter('**bold** start')).toBeNull();
   });
 });
 

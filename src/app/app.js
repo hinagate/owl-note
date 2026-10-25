@@ -25,7 +25,9 @@ import { rangeHandles } from '../lib/list-selection.js';
 import { isSelfOrDescendant } from '../lib/notebook-tree.js';
 import { offloadShape, getBytes } from '../lib/attachment-store.js';
 import * as noteDrive from '../lib/note-drive.js';
-import { isEnabled, enable, disable } from '../lib/drive-sync.js';
+import { isEnabled, enable, disable, reauthorize } from '../lib/drive-sync.js';
+import { isConfigured as driveConfigured } from '../lib/drive/auth.js';
+import { syncKeysWithDrive } from '../lib/drive-keys.js';
 import { createAskIndex } from '../lib/ask-index.js';
 import { createFusion } from '../lib/fusion.js';
 import { createVectorIndex } from '../lib/vector-index.js';
@@ -162,19 +164,29 @@ export async function toggleDriveSync(checked) {
         'Sync large notes & attachments via Google Drive?\n\n'
         + 'Notes too large to sync as bookmarks, plus image and file attachments, will be '
         + "stored in an 'OWL-Note Sync' folder in your Google Drive so they sync "
-        + 'across your devices. You will be asked to grant access, and can turn this off at any time.',
+        + 'across your devices.\n\n'
+        + 'Your encryption key is also backed up, in a hidden folder only OWL-Note can read, so '
+        + 'connecting Google Drive in a new or reinstalled browser opens your notes again.\n\n'
+        + 'You will be asked to grant access, and can turn this off at any time.',
       );
       if (!ok) { toast('Drive sync not enabled.'); return false; } // user declined consent — leave sync off
       await enable();
+      ui.driveEnabled = true; // what the key sync below and the list banner go by
+      // Keys first: notes locked on a reinstalled browser open, and the re-save below
+      // can then read them.
+      let restored = 0;
+      try { restored = await syncDriveKeys(); } catch (e) { console.warn('Drive key sync failed:', e); }
       const promoted = await reconcileLocalToDrive(); // push notes stranded local-only while sync was off
       // The mirror image of that catch-up: a permanent delete performed while sync was off
       // checkpointed its Drive file ids but could not reach Drive to remove them. Flush that
       // backlog now instead of leaving it until the next app launch. Floating and guarded —
       // the ids stay checkpointed, so a failure here must not report the toggle as failed.
       void retryPendingDriveCleanup().catch((e) => { console.warn('Drive cleanup retry failed:', e); });
-      toast(promoted > 0
-        ? `Google Drive sync on — synced ${promoted} local note${promoted === 1 ? '' : 's'} to Drive`
-        : 'Google Drive sync on');
+      const done = [
+        restored > 0 && `restored ${restored} encryption key${restored === 1 ? '' : 's'} — locked notes are open again`,
+        promoted > 0 && `synced ${promoted} local note${promoted === 1 ? '' : 's'} to Drive`,
+      ].filter(Boolean);
+      toast(done.length ? `Google Drive sync on — ${done.join('; ')}` : 'Google Drive sync on');
       return true;
     }
     // Disabling — warn that attachments will stop syncing.
@@ -195,6 +207,207 @@ export async function toggleDriveSync(checked) {
     toast(cancelled ? '⚠ Google Drive sync cancelled — not enabled.' : `⚠ Couldn't enable Drive sync${m ? ': ' + m : ''}`, true);
     return await isEnabled();
   }
+}
+
+// --- Note keys in Google Drive (see drive-keys.js) ---------------------------------
+//
+// While Drive is on, the keys are backed up to it and restored from it: at launch, when
+// Drive is turned on, and whenever a key appears. One run at a time; asking during a run
+// gets one more run after it. Resolves to how many keys it restored.
+let driveKeySync = null;
+let driveKeySyncAgain = false;
+async function syncDriveKeys() {
+  if (driveKeySync) { driveKeySyncAgain = true; return driveKeySync; }
+  driveKeySync = (async () => {
+    let restored = 0;
+    do {
+      driveKeySyncAgain = false;
+      if (!(await isEnabled())) break;
+      const result = await syncKeysWithDrive();
+      restored += result.restored;
+      if (ui.keyBackupNeedsAccess !== result.needsAccess) {
+        ui.keyBackupNeedsAccess = result.needsAccess;
+        if (ui.rootId) await refreshNoteList(); // show or clear the "Allow" banner
+      }
+    } while (driveKeySyncAgain);
+    return restored;
+  })();
+  let restored;
+  try { restored = await driveKeySync; } finally { driveKeySync = null; }
+  if (restored && ui.rootId) await afterKeysAdded();
+  return restored;
+}
+
+// Keys just arrived: the notes they lock open now, the one on screen included.
+async function afterKeysAdded() {
+  await refreshKeyProtection();
+  await refreshPanes();
+  if (ui.current && ui.current.locked && ui.activeBookmarkId) await openBookmark(ui.activeBookmarkId);
+}
+
+// Whether this browser's keys are backed up anywhere they could come back from, for the
+// banner below and the Export menu. Kept in ui.keyProtection and re-read only when what
+// it depends on changes: at launch, when a key arrives or appears, when a recovery file
+// is saved, when a banner is put off. Reading it on every list refresh instead slowed
+// each one just enough to throw the list's timing off under load.
+async function refreshKeyProtection() {
+  ui.keyProtection = await readKeyProtection();
+}
+const KEY_FILE_IDS = 'owl:recoveryFileKeyIds'; // keys in the last recovery file saved here
+const KEY_NOTICE_SNOOZE = 'owl:keyNoticeSnoozedUntil'; // "Not now" on a backup banner
+const KEY_NOTICE_SNOOZE_MS = 14 * 24 * 60 * 60 * 1000;
+async function readKeyProtection() {
+  try {
+    const [{ keys }, stored] = await Promise.all([exportKeyring(), chrome.storage.local.get([KEY_FILE_IDS, KEY_NOTICE_SNOOZE])]);
+    const inFile = new Set(stored[KEY_FILE_IDS] || []);
+    const ids = Object.keys(keys || {});
+    return { hasKeys: ids.length > 0, inFile: ids.every((id) => inFile.has(id)), snoozed: Date.now() < (stored[KEY_NOTICE_SNOOZE] || 0) };
+  } catch {
+    return null; // unreadable: show no backup banner rather than a wrong one
+  }
+}
+
+async function snoozeKeyNotice() {
+  await chrome.storage.local.set({ [KEY_NOTICE_SNOOZE]: Date.now() + KEY_NOTICE_SNOOZE_MS });
+  await refreshKeyProtection();
+  await refreshNoteList();
+}
+
+// The note-list banner about keys, most urgent first:
+//   1. notes this browser cannot open, with the ways to open them;
+//   2. Drive sync connected before key backup existed — the one permission it lacks;
+//   3. keys backed up nowhere at all — which is every install from before this
+//      existed that has not turned Drive on or saved a recovery file, and every new
+//      install once it holds notes of its own. A key appearing that the saved file
+//      does not hold brings it back.
+// 2 and 3 can wait ("Not now", for two weeks); 1 cannot. The Export menu's key-backup
+// item brings 3 back at any time, snoozed or not (keyBackupNoticeForced).
+const BACKUP_NOTICE_TEXT = '🔑 Back up your encryption key. Your notes are encrypted, and without the key they can\'t be opened '
+  + 'after reinstalling OWL-Note or on a new computer.';
+function keyNotice(list, protection) {
+  const locked = list.filter((n) => n.locked).length;
+  if (locked) {
+    return {
+      text: `🔒 ${locked} note${locked === 1 ? '' : 's'} can't be opened — ${locked === 1 ? 'its' : 'their'} key isn't in this browser.`,
+      actions: [
+        ...(driveConfigured() ? [{ label: 'Restore from Google Drive', run: restoreKeysFromDrive }] : []),
+        { label: 'Import recovery key', run: pickRecoveryKey },
+      ],
+    };
+  }
+  if (ui.keyBackupNoticeForced && !ui.driveEnabled && protection) {
+    const toDrive = driveConfigured() ? [{ label: 'Back up to Google Drive', run: backUpKeysToDrive }] : [];
+    const close = { label: 'Close', run: () => { ui.keyBackupNoticeForced = false; return refreshNoteList(); } };
+    return protection.inFile
+      ? {
+        text: '🔑 Your key is in a recovery file you saved — keep that file safe. Backing it up to Google Drive as well means you won\'t need the file.',
+        actions: [...toDrive, { label: 'Save a new recovery key file', run: doExportRecoveryKey }, close],
+      }
+      : { text: BACKUP_NOTICE_TEXT, actions: [...toDrive, { label: 'Save recovery key file', run: doExportRecoveryKey }, close] };
+  }
+  if (!protection || protection.snoozed) return null;
+  if (ui.driveEnabled && ui.keyBackupNeedsAccess) {
+    return {
+      text: '🔑 Google Drive sync can now back up your encryption key, so your notes open again after a reinstall or on a new computer. '
+        + 'Allow it once: Google will ask to let OWL-Note keep its own app data in your Drive.',
+      actions: [
+        { label: 'Allow', run: allowKeyBackup },
+        { label: 'Not now', run: snoozeKeyNotice },
+      ],
+    };
+  }
+  const ownNotes = list.some((n) => !n.draft && n.id !== WELCOME_NOTE_ID);
+  if (!ui.driveEnabled && protection.hasKeys && !protection.inFile && ownNotes) {
+    return {
+      text: BACKUP_NOTICE_TEXT,
+      actions: [
+        ...(driveConfigured() ? [{ label: 'Back up to Google Drive', run: backUpKeysToDrive }] : []),
+        { label: 'Save recovery key file', run: doExportRecoveryKey },
+        { label: 'Not now', run: snoozeKeyNotice },
+      ],
+    };
+  }
+  return null;
+}
+
+// "Back up to Google Drive" turns Drive sync on, which backs the keys up as it starts.
+// Straight from the click: turning it on asks Chrome for permission.
+function backUpKeysToDrive() {
+  return toggleDriveSync(true).then(async (on) => {
+    ui.driveEnabled = on;
+    if (on) ui.keyBackupNoticeForced = false;
+    await refreshPanes();
+  });
+}
+
+// Where the key is backed up, for the Export menu's key-backup item.
+function keyBackupStatus(protection) {
+  if (!protection.hasKeys) {
+    return { state: 'no-key', label: '🔑 Key backup: no key yet', title: 'Your key is made when you save your first note', enabled: false };
+  }
+  if (ui.driveEnabled && !ui.keyBackupNeedsAccess) {
+    return { state: 'drive', label: '🔑 Key backup: Google Drive ✓', title: 'Connecting Google Drive in a new browser restores your key' };
+  }
+  if (ui.driveEnabled) {
+    return { state: 'allow', label: '🔑 Key backup: allow Google Drive…', title: 'Drive sync is on but not yet allowed to back up your key' };
+  }
+  if (protection.inFile) {
+    return { state: 'file', label: '🔑 Key backup: recovery file ✓', title: 'Your key is in a recovery file you saved — keep it safe' };
+  }
+  return { state: 'none', label: '🔑 Key backup: not backed up…', title: "Without a backup, your notes can't be opened after a reinstall" };
+}
+
+// The Export menu's key-backup item does what its state calls for: the way back to a
+// backup after the list's banner was put off with "Not now".
+async function keyBackupAction() {
+  const status = ui.keyProtection && keyBackupStatus(ui.keyProtection);
+  if (!status) return;
+  if (status.state === 'allow') { await allowKeyBackup(); return; }
+  if (status.state === 'drive') {
+    toast('Your encryption key is backed up to Google Drive — connecting Drive in a new browser restores it');
+    await syncDriveKeys().catch((e) => console.warn('Drive key sync failed:', e));
+    return;
+  }
+  // Not on Drive: bring the banner back with every option, snoozed or not. Trash shows
+  // no banner, so go to the notes.
+  ui.keyBackupNoticeForced = true;
+  if (ui.activeFolder === ui.trashId) { ui.activeFolder = ui.rootId; await refreshPanes(); } else await refreshNoteList();
+  document.querySelector('#note-list .list-notice')?.scrollIntoView?.({ block: 'nearest' });
+}
+
+// "Restore from Google Drive". Turning Drive on asks Chrome for permission, which must
+// happen straight from the click — so no await comes before toggleDriveSync.
+function restoreKeysFromDrive() {
+  const restore = ui.driveEnabled
+    ? (ui.keyBackupNeedsAccess ? allowKeyBackup() : syncDriveKeys())
+    : toggleDriveSync(true).then(async (on) => { ui.driveEnabled = on; await refreshPanes(); return on; });
+  return Promise.resolve(restore).then((started) => {
+    if (started === false) return; // Drive was not turned on; its own toast said why
+    if ((ui.notes || []).some((n) => n.locked)) {
+      toast("Google Drive has no key for these notes — they were locked before its backup. Try your recovery key file.", true);
+    }
+  });
+}
+
+// Drive connected before key backup existed: connect once more to grant its permission.
+async function allowKeyBackup() {
+  try { await reauthorize(); } catch (err) {
+    console.warn('Drive reconnect failed:', err);
+    toast('Key backup not turned on — Google Drive was not reconnected', true);
+    return false;
+  }
+  await syncDriveKeys().catch((e) => console.warn('Drive key sync failed:', e));
+  if (ui.keyBackupNeedsAccess) toast('Key backup still not allowed — when Google asks, allow OWL-Note its own app data', true);
+  else toast('Encryption key backed up to Google Drive');
+  return true;
+}
+
+function pickRecoveryKey() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json,application/json';
+  input.addEventListener('change', () => { if (input.files?.[0]) doImportRecoveryKey(input.files[0]); });
+  input.click();
 }
 
 // Bring back notes an interrupted save left in storage that no list reads (see
@@ -488,7 +701,7 @@ const QUICK_CAPTURE_KEY = 'owl:quickCapture';
 let lastQuickCaptureToken = null;
 let quickCaptureQueue = Promise.resolve();
 
-const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, session: null, editorNoteId: null, toolbar: null, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1, indexReady: null, driveEnabled: false, phonetics: false, phoneticsTables: { en: null, ja: null, zh: null }, phoneticsLoading: new Set(), phoneticsBusy: false, previewZoom: DEFAULT_ZOOM };
+const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, session: null, editorNoteId: null, toolbar: null, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1, indexReady: null, driveEnabled: false, phonetics: false, phoneticsTables: { en: null, ja: null, zh: null }, phoneticsLoading: new Set(), phoneticsBusy: false, previewZoom: DEFAULT_ZOOM, keyBackupNeedsAccess: false, keyBackupNoticeForced: false, keyProtection: null, driveKeysReady: null };
 
 export function resetUI() {
   ui.rootId = null;
@@ -508,6 +721,10 @@ export function resetUI() {
   ui.hashWired = false;
   ui.isNew = false;
   ui.selected = new Set(); ui.anchor = null; ui.focus = -1;
+  ui.keyBackupNeedsAccess = false;
+  ui.keyBackupNoticeForced = false;
+  ui.keyProtection = null;
+  ui.driveKeysReady = null;
   lastQuickCaptureToken = null;
   quickCaptureQueue = Promise.resolve();
   ui.indexReady = null;
@@ -848,6 +1065,60 @@ function startSemanticBuild() {
     });
 }
 
+// --- Open in new tab ------------------------------------------------------------
+//
+// For reading two notes without swapping between them in one page: the open note goes
+// to a tab of its own, next to this one, which stays the main app tab. That tab is
+// app.html?note=<id> — the note's id, which stays the same through every save, where
+// the #payload a bookmark opens by changes with each one (and a note kept only on this
+// device has none). It shows that note alone (body.note-tab in app.css) and never
+// registers as the app tab, so the toolbar button keeps coming back here.
+export function noteTabId() {
+  try { return new URLSearchParams(location.search).get('note') || null; } catch { return null; }
+}
+
+// The note's tab is told apart in the tab strip by the note it holds.
+function titleNoteTab() {
+  if (typeof document === 'undefined' || !noteTabId()) return;
+  const title = ui.current?.title?.trim();
+  document.title = title ? `${title} — OWL-Note` : 'OWL-Note';
+}
+
+// The new tab reads the note from storage, so what is typed here is saved first —
+// and a new note with nothing written in it yet has nothing to open.
+async function openInNewTab() {
+  await ui.editor?.flush?.();
+  const id = ui.current?.id;
+  if (id) await settleSaves(id, stillSaving(() => ui.current?.id === id));
+  if (!id || ui.current?.id !== id || (!ui.activeBookmarkId && !ui.activeLocalId)) {
+    toast('Nothing to open yet — write something first', true);
+    return;
+  }
+  try {
+    // Right after this tab, and opened from it, the way a link opened in a new tab is.
+    const here = await chrome.tabs.getCurrent?.();
+    await chrome.tabs.create({
+      url: chrome.runtime.getURL(`app.html?note=${encodeURIComponent(id)}`),
+      ...(here ? { index: here.index + 1, windowId: here.windowId, openerTabId: here.id } : {}),
+    });
+  } catch (err) {
+    console.warn('open in new tab failed', err);
+    toast("Couldn't open a new tab", true);
+  }
+}
+
+// In that tab: open the note it was made for, from whichever notebook holds it.
+async function openTabNote(id) {
+  const note = (await loadNotes(ui.rootId)).find((n) => n.id === id);
+  if (!note) { toast('This note is no longer available — it may have been deleted', true); return; }
+  if (note.folderId && note.folderId !== ui.activeFolder) {
+    ui.activeFolder = note.folderId;
+    await refreshPanes();
+  }
+  if (note.localOnly) await openLocalNote(note.id);
+  else await openBookmark(note.bookmarkId, note);
+}
+
 // Open a cited note from the Ask drawer. Uses the index's citation snapshot rather
 // than openHandle: openHandle resolves against the ACTIVE folder's ui.notes only,
 // so a citation into another notebook would miss. noteMeta().folderId (kept correct
@@ -1011,6 +1282,7 @@ export async function initUI(rootId) {
   // [Task E16] Load the once-ever review-ask latch so a prior dismissal stays
   // suppressed across boots. Best-effort — a read failure just leaves it eligible.
   try { reviewAsked = !!(await chrome.storage.local.get(REVIEW_ASKED_KEY))[REVIEW_ASKED_KEY]; } catch { /* best-effort */ }
+  await refreshKeyProtection(); // for the key-backup banner and menu item, from the first paint
   // Repair notes whose bookmark URL embeds an old/foreign extension id (e.g. created
   // by an unpacked dev build) so clicking them opens this extension instead of being
   // blocked by Chrome. No-op once every note already uses the current id.
@@ -1027,10 +1299,13 @@ export async function initUI(rootId) {
   await loadViewStates(); // before the first note opens, or its position cannot be restored
   renderCurrentEditor();
   await openByHash();
+  if (!ui.current && noteTabId()) await openTabNote(noteTabId());
   // Register before reading the one-shot value so a capture arriving during boot
   // cannot slip between the initial storage read and listener installation.
   await wireQuickCapture();
-  if (!ui.current) await openLatestNote(); // no specific note in the URL hash — default to the latest
+  // No specific note in the URL — default to the latest. Not in a note's own tab,
+  // where some other note would stand in for the one that has gone.
+  if (!ui.current && !noteTabId()) await openLatestNote();
   if (!ui.hashWired) {
     window.addEventListener('hashchange', openByHash);
     // Flush a pending auto-save when the tab is hidden/closed — focus can stay in the
@@ -1051,6 +1326,12 @@ export async function initUI(rootId) {
   // maybeCatchUpSemantic on the persisted flag, so a never-opted-in user does nothing
   // semantic at boot. ui.semanticReady lets tests await it deterministically.
   ui.semanticReady = maybeCatchUpSemantic().catch((e) => { console.warn('semantic boot catch-up failed:', e); });
+  // With Drive on: back up any key Drive lacks, restore any key this browser lacks.
+  // Floating like the two above; ui.driveKeysReady lets tests await it. Not started at
+  // all with Drive off (refreshPanes has just read whether it is on).
+  ui.driveKeysReady = ui.driveEnabled
+    ? syncDriveKeys().catch((e) => { console.warn('Drive key sync failed:', e); })
+    : Promise.resolve();
   // A permanent delete performed while offline may have deferred Drive cleanup. Retry in
   // the background after launch; reference scanning keeps this safe across synced devices.
   void isEnabled()
@@ -1182,6 +1463,7 @@ async function refreshNoteList() {
   if (!ui.rootId || !ui.activeFolder) return; // the app was reset meanwhile (tests)
   const folder = ui.activeFolder;
   let notes = await loadNotes(folder);
+  const protection = ui.keyProtection; // see refreshKeyProtection
   // A press may have started while the notes loaded: redraw only once it is over.
   await pressOver();
   if (ui.activeFolder !== folder || !ui.rootId) return; // a newer refresh lists the new notebook
@@ -1196,9 +1478,11 @@ async function refreshNoteList() {
   // drop selections whose notes are gone (e.g. after an external refresh)
   const Hset = new Set(H);
   ui.selected = new Set([...ui.selected].filter((h) => Hset.has(h)));
+  if (protection) ui.toolbar?.setKeyBackup?.(keyBackupStatus(protection));
   renderNoteList(document.getElementById('note-list'), {
     notes: list,
     query: ui.query,
+    notice: inTrash ? null : keyNotice(list, protection),
     driveEnabled,
     activeHandle: ui.activeBookmarkId ?? ui.activeLocalId ?? (isDraft ? DRAFT_ID : null),
     onOpen: (handle) => {
@@ -1588,6 +1872,7 @@ async function refreshPanes() {
     onExportKey: doExportRecoveryKey,
     onImport: (files) => doImportFiles(files),
     onImportKey: (file) => doImportRecoveryKey(file),
+    onKeyBackup: () => { keyBackupAction().catch((e) => console.warn('key backup failed', e)); },
     driveEnabled: ui.driveEnabled,
     onToggleDrive: async (checked) => {
       const result = await toggleDriveSync(checked);
@@ -1765,7 +2050,7 @@ function renderCurrentEditor(opts = {}) {
   ui.editor = editor = renderEditor(document.getElementById('editor'), {
     readOnly: inTrash || isLocked || previewOnly,
     readOnlyNotice: isLocked
-      ? 'Locked — the key for this note is not on this device.'
+      ? 'Locked — the key for this note is not in this browser. Restore it from Google Drive, or import your recovery key, above the note list.'
       : (inTrash ? 'In Trash — read only. Restore this note to edit it.'
         : (previewOnly ? 'Only the start of this note could be loaded from Google Drive. Reopen it when Drive is reachable to edit it.' : '')),
     title: ui.current ? ui.current.title : '',
@@ -1780,6 +2065,7 @@ function renderCurrentEditor(opts = {}) {
     onChange: ({ title, body, attachments }) => {
       if (!isOnScreen()) return; // a replaced editor must not write into the note now open
       if (ui.current) { ui.current.title = title; ui.current.body = body; ui.current.attachments = attachments; }
+      titleNoteTab();
       // A note is usually empty when it opens, so typing is where its script first shows.
       // No-op once the tables it needs are in memory.
       syncPhoneticsTables(body);
@@ -1835,6 +2121,8 @@ function renderCurrentEditor(opts = {}) {
     },
     // `segment` is null until a table is in memory, which is what makes the editor render
     // plain text during the download instead of half-annotating.
+    // A tab that already shows just this note has nowhere further to send it.
+    onOpenInTab: ui.current && !noteTabId() ? openInNewTab : null,
     phonetics: {
       enabled: ui.phonetics,
       busy: ui.phoneticsBusy,
@@ -1850,6 +2138,7 @@ function renderCurrentEditor(opts = {}) {
   // A brand-new draft has nowhere to return to, and a locked note shows a
   // placeholder whose offsets mean nothing.
   ui.editorNoteId = (ui.current && !ui.isNew && !ui.current.locked) ? ui.current.id : null;
+  titleNoteTab();
   // A locked note's body is a placeholder, so there is nothing worth packaging.
   ui.toolbar?.setNoteExportEnabled?.(!!ui.current && !ui.current.locked);
   if (ui.editorNoteId && viewStates) ui.editor.restoreViewState?.(viewStates[ui.editorNoteId]);
@@ -2168,6 +2457,11 @@ async function doExportRecoveryKey() {
   a.click();
   URL.revokeObjectURL(a.href);
   toast('Recovery key saved — keep this file private');
+  // Which keys that file holds, so the backup banner goes until a key appears that it lacks.
+  try { await chrome.storage.local.set({ [KEY_FILE_IDS]: Object.keys(ring.keys) }); } catch { /* best-effort */ }
+  ui.keyBackupNoticeForced = false;
+  await refreshKeyProtection();
+  if (ui.rootId) await refreshNoteList();
 }
 
 function downloadBlob(blob, filename) {
@@ -2556,8 +2850,7 @@ Notes locked by ${n === 1 ? 'it' : 'them'} will become readable here. Your own k
   catch { toast("Couldn't add the key", true); return; }
   if (!added) { toast('Already had that key — nothing changed'); return; }
   toast(`${added} key${added === 1 ? '' : 's'} added — locked notes should open now`);
-  await refreshPanes(); // previously locked notes decode on the next read
-  if (ui.current && ui.current.locked && ui.activeBookmarkId) await openBookmark(ui.activeBookmarkId);
+  await afterKeysAdded();
 }
 
 async function doImportFiles(files) {
@@ -2601,7 +2894,10 @@ export async function boot() {
   // Chrome's "Create shortcut" launches app.html itself, bypassing action.onClicked.
   // Register every app tab so action clicks still find it on browsers that predate
   // runtime.getContexts. Plain launches are deduplicated; #note bookmarks only register.
-  if (chrome.runtime?.sendMessage) {
+  // A note's own tab does neither: it is not the app the toolbar button brings back,
+  // and it must not be closed in favour of the app tab.
+  if (noteTabId()) document.body.classList.add('note-tab');
+  else if (chrome.runtime?.sendMessage) {
     try {
       const currentTab = await chrome.tabs?.getCurrent?.();
       const claim = await chrome.runtime.sendMessage({
@@ -2628,7 +2924,12 @@ export async function boot() {
   // sync vanishes from EVERY device the moment that copy is cleared. Best-effort:
   // it may not block boot.
   try { await reconcileKeyring(); } catch { /* offline / sync off — local copy still works */ }
-  watchKeyChanges(() => { refreshPanes().catch(() => {}); });
+  // A key arriving — from another device, a recovery file, Google Drive — opens the notes
+  // it locks, and a key new to this browser is backed up to Drive.
+  watchKeyChanges(() => {
+    afterKeysAdded().catch(() => {});
+    syncDriveKeys().catch((e) => console.warn('Drive key sync failed:', e));
+  });
   const root = await bm.ensureRoot();
   await initUI(root);
   // After the first paint, and after the Ask index's own full read of storage, so the two

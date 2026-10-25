@@ -9,8 +9,33 @@ async function authedFetch(url, { timeoutMs = DRIVE_REQUEST_TIMEOUT_MS, ...opts 
   const token = await getAccessToken();
   const headers = { ...(opts.headers || {}), Authorization: `Bearer ${token}` };
   const res = await fetchWithDeadline(url, { ...opts, headers }, timeoutMs);
-  if (!res.ok) throw new Error(`Drive API ${res.status} for ${url}`);
+  if (!res.ok) {
+    const err = new Error(`Drive API ${res.status} for ${url}`);
+    err.status = res.status;
+    // Why a 403 happened: a missing permission reads differently from a rate limit.
+    try { err.detail = (await res.text()).slice(0, 500); } catch { err.detail = ''; }
+    throw err;
+  }
   return res;
+}
+
+// Drive's hidden app-data folder (drive.appdata): only OWL-Note can read what is in it.
+// It is not shown in Drive, other Drive apps cannot open it, and Drive for desktop does
+// not sync it to disk.
+export async function listAppData(query) {
+  const q = encodeURIComponent(query);
+  const res = await (await authedFetch(`${DRIVE_FILES_URL}?spaces=appDataFolder&q=${q}&fields=files(id,appProperties)&pageSize=1000`)).json();
+  return res.files || [];
+}
+
+// A metadata-only file: what it holds is in appProperties, which only this app can read.
+export async function createAppData({ name, appProperties }) {
+  const res = await (await authedFetch(DRIVE_FILES_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, parents: ['appDataFolder'], appProperties }),
+  })).json();
+  return res.id;
 }
 
 export async function ensureFolder() {

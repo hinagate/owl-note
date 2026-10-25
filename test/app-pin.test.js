@@ -116,7 +116,7 @@ describe('pin + new-note-on-top', () => {
     const card = [...document.querySelectorAll('#note-list .item.card')].find((el) => el.textContent.includes('Locked'));
     expect(card).toBeTruthy();
     expect(card.querySelector('.pin')).toBeNull();
-    expect(document.querySelector('#editor .readonly-notice')?.textContent).toContain('key for this note is not on this device');
+    expect(document.querySelector('#editor .readonly-notice')?.textContent).toContain('key for this note is not in this browser');
 
     const before = await bm.payloadAt(saved.bookmarkId);
     await app.togglePin(saved.bookmarkId); // defense in depth for stale/keyboard callers

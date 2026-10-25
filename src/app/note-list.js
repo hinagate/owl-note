@@ -1,7 +1,7 @@
 // src/app/note-list.js
 import { relativeTime } from '../lib/relative-time.js';
 
-export function renderNoteList(container, { notes, activeHandle, onOpen = () => {}, onTogglePin = () => {}, onNew = () => {}, trashView = false, onRestore = () => {}, onDeleteForever = () => {}, onEmptyTrash = () => {}, selected = new Set(), focusIndex = -1, onCardClick = null, onMove = () => {}, onSelectAll = () => {}, onClearSelection = () => {}, onOpenFocused = () => {}, onBatchDelete = () => {}, driveEnabled = false, query = '', onAsk = null }) {
+export function renderNoteList(container, { notes, activeHandle, onOpen = () => {}, onTogglePin = () => {}, onNew = () => {}, trashView = false, onRestore = () => {}, onDeleteForever = () => {}, onEmptyTrash = () => {}, selected = new Set(), focusIndex = -1, onCardClick = null, onMove = () => {}, onSelectAll = () => {}, onClearSelection = () => {}, onOpenFocused = () => {}, onBatchDelete = () => {}, driveEnabled = false, query = '', onAsk = null, notice = null }) {
   // Fall back to onOpen for plain clicks when no modifier-aware handler is provided
   // (maintains backward compat with unit tests that pass onOpen directly).
   const _cardClick = onCardClick ?? ((idx, handle, mod) => { if (!mod.ctrl && !mod.shift) onOpen(handle); });
@@ -104,6 +104,30 @@ export function renderNoteList(container, { notes, activeHandle, onOpen = () => 
   newBtn.textContent = '+ New note';
   newBtn.addEventListener('click', () => onNew());
   container.appendChild(newBtn);
+
+  // A banner about the list as a whole — notes this browser cannot open, say — with the
+  // actions that fix it. Each action runs straight from its click: one may need to ask
+  // Chrome for a permission, which only a click can do.
+  if (notice) {
+    const bar = document.createElement('div');
+    bar.className = 'list-notice';
+    bar.setAttribute('role', 'status');
+    const text = document.createElement('p');
+    text.textContent = notice.text;
+    const actions = document.createElement('div');
+    actions.className = 'list-notice-actions';
+    for (const action of notice.actions || []) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = action.label;
+      button.addEventListener('click', () => {
+        Promise.resolve(action.run()).catch((err) => console.warn(`${action.label} failed`, err));
+      });
+      actions.appendChild(button);
+    }
+    bar.append(text, actions);
+    container.appendChild(bar);
+  }
 
   container.tabIndex = 0;
   container.onkeydown = (e) => {

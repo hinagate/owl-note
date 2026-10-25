@@ -87,6 +87,18 @@ body {
   background: transparent; cursor: col-resize; z-index: 5;
 }
 #panes.note-list-hidden .splitter-1:hover { background: var(--accent); }
+/* A note opened with "Open in new tab" (app.html?note=…): that note alone — no app
+   toolbar, notebooks or list, and none of the controls that only make sense beside them;
+   the main tab keeps all of those. !important: panes.js writes the grid columns inline,
+   for the three-pane layout. */
+body.note-tab #toolbar,
+body.note-tab #sidebar,
+body.note-tab #note-list,
+body.note-tab #panes > .splitter,
+body.note-tab .editor-bar .toggle-list { display: none; }
+body.note-tab #panes { grid-template-columns: minmax(0, 1fr) !important; height: 100vh; }
+/* The path still says where the note lives; there is no list here for a click to show. */
+body.note-tab .editor-breadcrumb .crumb { pointer-events: none; }
 body.resizing { user-select: none; cursor: col-resize; }
 
 /* Sidebar */
@@ -178,6 +190,17 @@ body.resizing { user-select: none; cursor: col-resize; }
 #note-list .item.selected { background: rgba(45, 190, 96, 0.10); box-shadow: inset 3px 0 0 var(--accent); } /* accent-tinted, not off-palette blue */
 #note-list .item.focused { outline: 2px solid var(--accent); outline-offset: -2px; }
 /* Sits BELOW the sticky "+ New note" button (top:0) so it doesn't cover it on scroll. */
+#note-list .list-notice {
+  margin: 0 4px 10px; padding: 10px 12px; border: 1px solid #f0c36d; border-radius: 8px;
+  background: #fff8e6; color: #5c4400; font-size: 13px; line-height: 1.4;
+}
+#note-list .list-notice p { margin: 0 0 8px; }
+#note-list .list-notice-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+#note-list .list-notice-actions button {
+  padding: 4px 10px; border: 1px solid #d9a521; border-radius: 6px; background: #fff; color: #5c4400;
+  font-size: 12px; cursor: pointer;
+}
+#note-list .list-notice-actions button:first-child { background: #f5b301; border-color: #f5b301; color: #2b2100; font-weight: 600; }
 #note-list .select-status { position: sticky; top: 44px; z-index: 3; background: var(--accent); color: #fff; font-size: 12px; padding: 5px 10px; border-radius: 6px; margin: 0 4px 6px; }
 
 /* Editor */

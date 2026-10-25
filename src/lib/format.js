@@ -872,6 +872,45 @@ export function renumberOrderedList(body, caret) {
   };
 }
 
+/* ------------------------------------------------------- list continuation */
+
+// A list item: indent and quote run, then a bullet (`-`, `*`, `+`, optionally a task
+// box) or a number with `.` or `)`, then the item's text.
+const LIST_ITEM = /^(\s*(?:>\s?)*)(?:([-*+])( \[[ xX]\])?|(\d+)([.)])) (.*)$/;
+// `- - -` and `* * *` are horizontal rules, not lists.
+const RULE_LINE = /^\s*([-*_])(?:\s*\1){2,}\s*$/;
+
+// Enter in a list item starts the next item, as in any word processor: the same
+// bullet (a task gets a fresh unticked box), or the next number — the items below
+// are renumbered by renumberOrderedList as for any other edit. Text after the caret
+// moves into the new item. Enter on an EMPTY item ends the list instead, clearing the
+// marker, so Enter twice walks out of it. Returns null anywhere else — including a
+// caret before the marker, a selection, and a fenced code sample — leaving Enter alone.
+export function nextListItem(body, start, end) {
+  const [s, e] = clamp(body, start, end);
+  if (s !== e) return null;
+  const lineStart = s === 0 ? 0 : body.lastIndexOf('\n', s - 1) + 1;
+  const newline = body.indexOf('\n', s);
+  const lineEnd = newline === -1 ? body.length : newline;
+  const line = body.slice(lineStart, lineEnd);
+  const m = LIST_ITEM.exec(line);
+  if (!m || RULE_LINE.test(line)) return null;
+  const [, lead, bullet, task, number, delimiter, text] = m;
+  const markerEnd = line.length - text.length;
+  if (s - lineStart < markerEnd) return null;
+  const above = body.slice(0, lineStart).split('\n');
+  if (insideFence(above, above.length)) return null;
+
+  if (text.trim() === '') {
+    // Empty item -> end the list, keeping any quote the list sat in.
+    const quote = lead.replace(/^\s+/, '');
+    return { replaceStart: lineStart, replaceEnd: lineEnd, insert: quote, selStart: lineStart + quote.length, selEnd: lineStart + quote.length };
+  }
+  const marker = bullet ? `${bullet}${task ? ' [ ]' : ''} ` : `${Number(number) + 1}${delimiter} `;
+  const insert = `\n${lead}${marker}`;
+  return { replaceStart: s, replaceEnd: s, insert, selStart: s + insert.length, selEnd: s + insert.length };
+}
+
 /* ------------------------------------------------------------------ tables */
 
 // A GFM cell cannot contain a raw '|' (it would open a new column) and cannot

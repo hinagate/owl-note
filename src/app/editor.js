@@ -8,7 +8,7 @@ import { relativeTime } from '../lib/relative-time.js';
 import { blockRanges, locateSelection, blockIndexOf } from '../lib/source-map.js';
 import * as panes from './panes.js';
 import { renderFormatBar, formatActions } from './format-bar.js';
-import { nextTableRow, renumberOrderedList } from '../lib/format.js';
+import { nextTableRow, nextListItem, renumberOrderedList } from '../lib/format.js';
 import { tableCellTarget, tableCellLineBreak, isTableCellSelection, alignTableAt } from '../lib/table.js';
 import { showDrawPanel } from './draw-panel.js';
 import { annotateRuby } from '../lib/ruby-annotate.js';
@@ -45,7 +45,7 @@ const isMac = () => /mac/i.test(globalThis.navigator?.userAgentData?.platform ||
 
 export function renderEditor(
   container,
-  { title = '', body = '', attachments = [], created = null, updated = null, onChange = () => {}, onSave = () => {}, onDelete = null, focusTitle = false, measure = null, breadcrumb = [], onNavigate = () => {}, onSuggestTitle = null, shareActions = [], recoverAttachments = null, loadImageBytes = getBytes, phonetics = null, previewZoom = null, readOnly = false, readOnlyNotice = '' },
+  { title = '', body = '', attachments = [], created = null, updated = null, onChange = () => {}, onSave = () => {}, onDelete = null, focusTitle = false, measure = null, breadcrumb = [], onNavigate = () => {}, onSuggestTitle = null, shareActions = [], recoverAttachments = null, loadImageBytes = getBytes, phonetics = null, onOpenInTab = null, previewZoom = null, readOnly = false, readOnlyNotice = '' },
 ) {
   container.innerHTML = '';
   // Images live in `atts` (as data: URIs); the body only carries short owl-img refs.
@@ -269,8 +269,21 @@ export function renderEditor(
     });
   }
 
+  // Sends the note to a tab of its own, for reading it beside another — a way of looking
+  // at the note, so it sits next to the pronunciation toggle. Absent unless wired.
+  const tabBtn = document.createElement('button');
+  if (onOpenInTab) {
+    tabBtn.className = 'open-tab';
+    tabBtn.textContent = '⧉ Open in new tab';
+    tabBtn.title = 'Open this note in a tab of its own, keeping this one as the main tab';
+    tabBtn.addEventListener('click', () => {
+      Promise.resolve(onOpenInTab()).catch((err) => console.warn('open in new tab failed', err));
+    });
+  }
+
   bar.append(viewBtn, save, shareWrap, codeBtn, imgBtn, imgInput, drawBtn, fileBtn, fileInput, listBtn, readingHint);
   if (phonetics) bar.insertBefore(phoneticsBtn, readingHint);
+  if (onOpenInTab) bar.insertBefore(tabBtn, readingHint);
 
   if (onDelete) {
     const del = document.createElement('button');
@@ -1537,11 +1550,12 @@ export function renderEditor(
       }
       return;
     }
-    // Enter inside a table opens the next row. nextTableRow returns null
-    // everywhere else, so a plain Enter keeps its normal behaviour — including
-    // Shift+Enter, which stays a hard line break inside a cell's paragraph.
+    // Enter inside a table opens the next row, and in a list the next item. Both
+    // return null everywhere else, so a plain Enter keeps its normal behaviour —
+    // including Shift+Enter, which stays a plain line break in a cell or an item.
     if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      const edit = nextTableRow(ta.value, ta.selectionStart, ta.selectionEnd);
+      const edit = nextTableRow(ta.value, ta.selectionStart, ta.selectionEnd)
+        || nextListItem(ta.value, ta.selectionStart, ta.selectionEnd);
       if (edit) {
         e.preventDefault();
         insertText(edit.insert, edit.replaceStart, edit.replaceEnd);
