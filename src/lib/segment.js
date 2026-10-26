@@ -10,6 +10,7 @@
 // English and kana on the kanji without either table knowing the other exists.
 
 import { tokenize, lookup } from './phonetics.js';
+import { pronunciationCues } from './ipa-cues.js';
 
 const KANJI = /[一-鿿㐀-䶿]/;
 const KANA = /[぀-ヿ]/;
@@ -102,9 +103,11 @@ function longestMatch(table, text, from, limit) {
  * @param {{ ipa?: Map|null, kana?: Map|null, pinyin?: Map|null, script?: 'ja'|'zh' }} tables
  *   `script` is the note-level reading, used as the default for blocks that hold no kana
  *   of their own; each block is still classified individually.
- * @returns {(text: string) => { text: string, reading: string|null }[]} runs whose `text`
- *   concatenates back to the input exactly — the annotator relies on that to keep the
- *   rendered document byte-identical apart from the readings it adds.
+ * @returns {(text: string) => { text: string, reading: string|null, parts?: object[] }[]}
+ *   runs whose `text` concatenates back to the input exactly — the annotator relies on
+ *   that to keep the rendered document byte-identical apart from the readings it adds.
+ *   English runs may carry `parts`, the reading split into pronunciation cues
+ *   (see ./ipa-cues.js).
  */
 export function makeSegmenter({ ipa = null, kana = null, pinyin = null, script = 'zh' } = {}) {
   return function segment(input) {
@@ -153,7 +156,11 @@ export function makeSegmenter({ ipa = null, kana = null, pinyin = null, script =
         const reading = run.isWord && ipa ? lookup(ipa, run.text) : null;
         if (!reading) { keep(run.text); continue; }
         flush();
-        runs.push({ text: run.text, reading });
+        // English readings also say how to say the word — which vowel to hold, which
+        // final consonant to sound. Only when there is something to say: most runs stay
+        // a bare {text, reading}.
+        const parts = pronunciationCues(reading, run.text);
+        runs.push(parts ? { text: run.text, reading, parts } : { text: run.text, reading });
       }
       at = end;
     }

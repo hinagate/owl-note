@@ -1,25 +1,29 @@
 // ARPAbet -> IPA. CMUdict stores General American pronunciations as ARPAbet with a
-// stress digit on every vowel ("F AA1 N IH0 K S"); readers expect IPA ("ˈfɑnɪks").
+// stress digit on every vowel ("F AA1 N IH0 K S"); readers expect IPA ("ˈfɑː.nɪks").
 // Pure module — no imports, no DOM. Runs at BUILD time to bake the runtime dictionary,
 // so nothing here ships in the extension bundle.
 //
 // Transcription style is learner-dictionary IPA, not narrow phonetic:
-//   - strong IY/UW carry the explicit length marks used by Cambridge (iː/uː),
-//     while their unstressed forms stay short (happy /ˈhæp.i/)
+//   - every strong long vowel carries the length mark Cambridge's US transcriptions use
+//     (iː, uː, ɑː, ɔː, ɝː), while unstressed forms stay short (happy /ˈhæp.i/). Marking
+//     only iː/uː made father /ˈfɑ.ðɚ/ look as short as /ʌ/ — and length is exactly what a
+//     reader whose first language has no long vowels needs to see
+//     (src/lib/ipa-cues.js builds its "stretch this" underline from these marks)
 //   - unstressed syllable boundaries use a dot, so SCHEMING is /ˈskiː.mɪŋ/
 //   - r, not ɹ: every major learner dictionary uses r for English, and this is read
 //     by people learning the language, not by phoneticians
 //   - AH and ER split on stress, which is the one place ARPAbet is lossier than IPA:
-//     unstressed AH0/ER0 are the reduced ə/ɚ, stressed AH1/ER1 are ʌ/ɝ
+//     unstressed AH0/ER0 are the reduced ə/ɚ, stressed AH1/ER1 are ʌ/ɝː
 
 const VOWELS = {
-  AA: 'ɑ', AE: 'æ', AH: 'ʌ', AO: 'ɔ', AW: 'aʊ', AY: 'aɪ',
-  EH: 'ɛ', ER: 'ɝ', EY: 'eɪ', IH: 'ɪ', IY: 'iː',
+  AA: 'ɑː', AE: 'æ', AH: 'ʌ', AO: 'ɔː', AW: 'aʊ', AY: 'aɪ',
+  EH: 'ɛ', ER: 'ɝː', EY: 'eɪ', IH: 'ɪ', IY: 'iː',
   OW: 'oʊ', OY: 'ɔɪ', UH: 'ʊ', UW: 'uː',
 };
 
-// Same vowel, reduced: only reachable with stress digit 0.
-const REDUCED = { AH: 'ə', ER: 'ɚ', IY: 'i', UW: 'u' };
+// Same vowel, unstressed: only reachable with stress digit 0. AH/ER reduce to schwa; the
+// long vowels just lose their length mark.
+const REDUCED = { AA: 'ɑ', AO: 'ɔ', AH: 'ə', ER: 'ɚ', IY: 'i', UW: 'u' };
 
 const CONSONANTS = {
   B: 'b', CH: 'tʃ', D: 'd', DH: 'ð', F: 'f', G: 'ɡ', HH: 'h', JH: 'dʒ',
@@ -56,7 +60,7 @@ const canOpen = (cluster, phonemes) => (
 
 /**
  * @param {string} arpabet e.g. "F AA1 N IH0 K S"
- * @returns {string} IPA without slashes, e.g. "ˈfɑnɪks"
+ * @returns {string} IPA without slashes, e.g. "ˈfɑː.nɪks"
  */
 export function arpabetToIpa(arpabet) {
   const symbols = String(arpabet || '').trim().toUpperCase().split(/\s+/).filter(Boolean);

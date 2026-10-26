@@ -19,9 +19,12 @@ const SKIP = 'code, pre, kbd, samp, .katex, ruby, .mermaid-diagram';
 
 /**
  * @param {Element} root subtree to annotate, mutated in place
- * @param {(text: string) => { text: string, reading: string|null, lang?: string }[]} segment
+ * @param {(text: string) => { text: string, reading: string|null, lang?: string, parts?: { text: string, cue: string|null }[] }[]} segment
  *   splits text into runs, each carrying its reading or null and optionally the BCP-47
- *   language of that reading; the runs must rebuild the text exactly
+ *   language of that reading; the runs must rebuild the text exactly. A run may also
+ *   split its reading into `parts`; each part with a `cue` is wrapped in
+ *   <span class="cue-…"> so the stylesheet can mark it. Parts that do not rebuild the
+ *   reading are ignored rather than trusted.
  * @returns {number} how many runs were annotated
  */
 export function annotateRuby(root, segment) {
@@ -59,7 +62,19 @@ export function annotateRuby(root, segment) {
       if (run.lang) ruby.lang = run.lang;
       ruby.append(run.text);
       const rt = document.createElement('rt');
-      rt.textContent = run.reading;
+      if (Array.isArray(run.parts) && run.parts.map((p) => p.text).join('') === run.reading) {
+        // Cued pieces of the reading become spans the stylesheet can mark; the rest stays
+        // text. The check above guarantees the rt still says exactly the reading.
+        for (const part of run.parts) {
+          if (!part.cue) { rt.append(part.text); continue; }
+          const span = document.createElement('span');
+          span.className = `cue-${part.cue}`;
+          span.textContent = part.text;
+          rt.append(span);
+        }
+      } else {
+        rt.textContent = run.reading;
+      }
       ruby.append(rt);
       fragment.append(ruby);
       annotated += 1;

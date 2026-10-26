@@ -1348,6 +1348,25 @@ body.resizing { user-select: none; cursor: col-resize; }
 /* Headings already carry their own weight and spacing; a reading over them is
    readable at a smaller relative size. */
 .preview-content.phonetics :is(h1, h2, h3, h4, h5, h6) rt { font-size: 0.42em; }
+/* Pronunciation cues inside an English reading (src/lib/ipa-cues.js). Two signals only,
+   on different channels so they never compete at 0.6em: a line under a vowel means
+   "hold it" (double: hold it longer still), a colour on the last consonants means
+   "say these". The cued vowel also darkens from the muted rt grey so the line has
+   something to sit under. */
+.preview-content.phonetics rt .cue-long,
+.preview-content.phonetics rt .cue-longer {
+  color: var(--text);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 1px;
+  text-decoration-skip-ink: none;
+}
+/* Room under every English reading for that line: without it the underline lands on the
+   top of the word below and reads as if the WORD were underlined. Every English rt gets
+   it, cued or not, so the readings on one line stay level. */
+.preview-content.phonetics ruby:not(:lang(ja)):not(:lang(zh)) rt { padding-bottom: 0.35em; }
+.preview-content.phonetics rt .cue-longer { text-decoration-style: double; }
+.preview-content.phonetics rt .cue-final { color: #c2410c; font-weight: 600; }
 .editor-bar .phonetics-toggle.on { background: rgba(45, 190, 96, 0.16); border-color: var(--accent); color: var(--accent-dark); font-weight: 600; }
 .editor-bar .phonetics-toggle[disabled] { opacity: 0.6; cursor: progress; }
 

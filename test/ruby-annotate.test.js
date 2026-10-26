@@ -93,6 +93,30 @@ describe('annotateRuby', () => {
     expect(ruby[0].nextSibling.nodeValue).toBe('は');
   });
 
+  it('wraps cued parts of a reading in spans without changing what it says', () => {
+    annotateRuby(html('<p>speed</p>'), () => [{
+      text: 'speed',
+      reading: 'spiːd',
+      parts: [{ text: 'sp', cue: null }, { text: 'iː', cue: 'longer' }, { text: 'd', cue: 'final' }],
+    }]);
+    const rt = root.querySelector('rt');
+    expect(rt.textContent).toBe('spiːd');
+    expect(rt.querySelector('.cue-longer').textContent).toBe('iː');
+    expect(rt.querySelector('.cue-final').textContent).toBe('d');
+    expect(rt.firstChild.nodeType).toBe(Node.TEXT_NODE); // uncued text stays plain
+  });
+
+  it('ignores parts that would not rebuild the reading', () => {
+    annotateRuby(html('<p>speed</p>'), () => [{
+      text: 'speed',
+      reading: 'spiːd',
+      parts: [{ text: 'spid', cue: 'long' }],
+    }]);
+    const rt = root.querySelector('rt');
+    expect(rt.textContent).toBe('spiːd');
+    expect(rt.querySelector('span')).toBeNull();
+  });
+
   it('is a no-op on bad input rather than throwing', () => {
     expect(annotateRuby(null, segment)).toBe(0);
     expect(annotateRuby(html('<p>Phonics</p>'), null)).toBe(0);

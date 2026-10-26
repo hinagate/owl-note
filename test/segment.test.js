@@ -153,6 +153,14 @@ describe('Chinese segmentation', () => {
     expect(rebuilds(zh, '中国，银行。')).toBe(true);
   });
 
+  it('attaches pronunciation cues to an English run only when there is one to give', () => {
+    const en = makeSegmenter({ ipa: parseTable('speed\tspiːd\ncup\tkʌp\n') });
+    const [speed] = en('speed');
+    expect(speed.parts.map((p) => p.cue)).toEqual([null, 'longer', 'final']);
+    expect('parts' in en('cup')[0]).toBe(false);
+    expect(zh('中国').some((r) => 'parts' in r)).toBe(false);
+  });
+
   it('tags its runs as Chinese, and leaves English runs untagged', () => {
     expect(zh('中国').every((r) => r.lang === 'zh')).toBe(true);
     expect(zh('phonics').find((r) => r.reading).lang).toBeUndefined();
