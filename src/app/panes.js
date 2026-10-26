@@ -93,7 +93,16 @@ function applyLayout() {
   applyEditCollapse();
 }
 
-export function toggleNoteList() { layout.noteListHidden = !layout.noteListHidden; applyLayout(); saveLayout(); }
+// Announced on document, so the editor's "Show list / Hide list" label follows a toggle
+// made from the tab on the seam as well as its own button.
+const NOTE_LIST_TOGGLE_EVENT = 'owl:note-list-toggle';
+
+export function toggleNoteList() {
+  layout.noteListHidden = !layout.noteListHidden;
+  applyLayout();
+  saveLayout();
+  document.dispatchEvent(new CustomEvent(NOTE_LIST_TOGGLE_EVENT));
+}
 export function toggleEditPane() { layout.editCollapsed = !layout.editCollapsed; applyEditCollapse(); saveLayout(); }
 
 function startDrag(e, which, el) {
@@ -127,6 +136,27 @@ function makeSplitter(which, cls) {
   el.className = `splitter ${cls}`;
   el.addEventListener('pointerdown', (e) => startDrag(e, which, el));
   return el;
+}
+
+// With the list hidden, nothing on screen said there was a list to bring back — the
+// sidebar ran straight into the editor. This tab sits on that seam (CSS shows it only
+// while the list is hidden) and brings the list back in one click.
+function makeShowListTab() {
+  const tab = document.createElement('button');
+  tab.type = 'button';
+  tab.className = 'show-list-tab';
+  tab.title = 'Show list';
+  tab.setAttribute('aria-label', 'Show the note list');
+  tab.setAttribute('aria-controls', 'note-list');
+  tab.innerHTML = '<svg viewBox="0 0 8 12" width="8" height="12" aria-hidden="true"><path d="M2 1.5 6.5 6 2 10.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  tab.addEventListener('click', () => {
+    const hadFocus = document.activeElement === tab;
+    toggleNoteList();
+    // The tab vanishes once the list is back: hand focus to the list (its arrow keys
+    // move through the notes) rather than dropping it on <body>.
+    if (hadFocus) document.getElementById('note-list')?.focus({ preventScroll: true });
+  });
+  return tab;
 }
 
 // grid-template-columns for the editor/preview split. The ratio is stored as the edit
@@ -183,6 +213,7 @@ export async function initPanes() {
     const noteList = document.getElementById('note-list');
     sidebar.after(makeSplitter('sidebar', 'splitter-1'));
     noteList.after(makeSplitter('notelist', 'splitter-2'));
+    panes.appendChild(makeShowListTab());
   }
   applyLayout();
   wireResizeReclamp();

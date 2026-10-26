@@ -211,6 +211,8 @@ export function renderEditor(
   const setListLabel = () => { listBtn.textContent = panes.isNoteListHidden() ? '⬓ Show list' : '⬓ Hide list'; };
   setListLabel();
   listBtn.addEventListener('click', () => { panes.toggleNoteList(); setListLabel(); });
+  // The tab on the hidden list's seam toggles it too; keep this label in step.
+  document.addEventListener('owl:note-list-toggle', setListLabel);
 
   const viewBtn = document.createElement('button');
   viewBtn.className = 'toggle-edit';
@@ -1942,6 +1944,7 @@ export function renderEditor(
       document.removeEventListener('keydown', onLightboxKeydown);
       window.removeEventListener('resize', onLightboxResize);
       document.removeEventListener('click', closeShareMenu);
+      document.removeEventListener('owl:note-list-toggle', setListLabel);
       cleanupFormatBar?.();
     }, // cancel pending auto-save + stop observing on teardown
   };

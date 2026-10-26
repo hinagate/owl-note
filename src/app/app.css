@@ -87,6 +87,27 @@ body {
   background: transparent; cursor: col-resize; z-index: 5;
 }
 #panes.note-list-hidden .splitter-1:hover { background: var(--accent); }
+/* The hidden list's tab: a small handle on the seam, two-thirds down — low enough to
+   stay clear of the editor's toolbar, high enough to find — that says a list is tucked
+   away there and brings it back on click. Above the seam's resize zone (z-index 5). */
+.show-list-tab { display: none; }
+#panes.note-list-hidden .show-list-tab {
+  display: flex; align-items: center; justify-content: center;
+  position: absolute; left: var(--col-sidebar); top: 66.667%; z-index: 6;
+  width: 16px; height: 48px; margin: 0; padding: 0; transform: translateY(-50%);
+  border: 1px solid var(--border); border-left: 0; border-radius: 0 10px 10px 0;
+  background: var(--list-bg); color: var(--muted); box-shadow: 1px 1px 4px rgba(0, 0, 0, 0.08);
+  cursor: pointer; transition: width 0.12s, background 0.12s, color 0.12s, border-color 0.12s;
+  animation: show-list-tab-in 0.2s ease-out;
+}
+#panes.note-list-hidden .show-list-tab:hover,
+#panes.note-list-hidden .show-list-tab:focus-visible {
+  width: 18px; border-color: var(--accent); background: var(--accent); color: #fff; outline: none;
+}
+@keyframes show-list-tab-in { from { opacity: 0; transform: translate(-100%, -50%); } }
+@media (prefers-reduced-motion: reduce) {
+  #panes.note-list-hidden .show-list-tab { animation: none; transition: none; }
+}
 /* A note opened with "Open in new tab" (app.html?note=…): that note alone — no app
    toolbar, notebooks or list, and none of the controls that only make sense beside them;
    the main tab keeps all of those. !important: panes.js writes the grid columns inline,
@@ -95,6 +116,7 @@ body.note-tab #toolbar,
 body.note-tab #sidebar,
 body.note-tab #note-list,
 body.note-tab #panes > .splitter,
+body.note-tab #panes > .show-list-tab,
 body.note-tab .editor-bar .toggle-list { display: none; }
 body.note-tab #panes { grid-template-columns: minmax(0, 1fr) !important; height: 100vh; }
 /* The path still says where the note lives; there is no list here for a click to show. */

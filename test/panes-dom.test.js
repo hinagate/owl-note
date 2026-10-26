@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { installFakeChrome } from './helpers/fake-chrome.js';
 import { initPanes, toggleNoteList, isNoteListHidden, loadLayout, initEditSplitter } from '../src/app/panes.js';
 
@@ -24,6 +24,41 @@ describe('panes controller', () => {
     const panes = document.getElementById('panes');
     expect(panes.classList.contains('note-list-hidden')).toBe(true);
     expect(panes.style.gridTemplateColumns).toBe('220px 1fr');
+  });
+
+  // A hidden list used to leave no trace on screen: the sidebar ran straight into the
+  // editor. The tab on that seam says it is there and brings it back.
+  describe('the tab on a hidden list', () => {
+    it('is added once, beside the splitters, and points at the list', async () => {
+      await initPanes();
+      await initPanes();
+      const tabs = document.querySelectorAll('#panes > .show-list-tab');
+      expect(tabs).toHaveLength(1);
+      expect(tabs[0].getAttribute('aria-controls')).toBe('note-list');
+      expect(tabs[0].getAttribute('aria-label')).toBe('Show the note list');
+    });
+
+    it('shows the list again on click, and says so', async () => {
+      await initPanes();
+      if (!isNoteListHidden()) toggleNoteList();
+      const heard = vi.fn();
+      document.addEventListener('owl:note-list-toggle', heard);
+      document.querySelector('.show-list-tab').click();
+      document.removeEventListener('owl:note-list-toggle', heard);
+      expect(isNoteListHidden()).toBe(false);
+      expect(document.getElementById('panes').classList.contains('note-list-hidden')).toBe(false);
+      expect(heard).toHaveBeenCalledTimes(1);
+    });
+
+    it('hands keyboard focus to the list rather than losing it', async () => {
+      document.getElementById('note-list').tabIndex = 0;
+      await initPanes();
+      if (!isNoteListHidden()) toggleNoteList();
+      const tab = document.querySelector('.show-list-tab');
+      tab.focus();
+      tab.click();
+      expect(document.activeElement).toBe(document.getElementById('note-list'));
+    });
   });
 
   it('a pointer drag on the first splitter resizes the sidebar', async () => {

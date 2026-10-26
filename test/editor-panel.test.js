@@ -38,6 +38,16 @@ describe('editor panel toggles', () => {
     expect(btn.textContent).not.toBe(before); // panes.isNoteListHidden() flipped
     btn.click(); // restore global state for other tests
   });
+  it('follows a toggle made elsewhere (the tab on the hidden list)', () => {
+    render();
+    const btn = document.querySelector('.toggle-list');
+    mockPanesState.noteListHidden = true;
+    document.dispatchEvent(new CustomEvent('owl:note-list-toggle'));
+    expect(btn.textContent).toBe('⬓ Show list');
+    mockPanesState.noteListHidden = false;
+    document.dispatchEvent(new CustomEvent('owl:note-list-toggle'));
+    expect(btn.textContent).toBe('⬓ Hide list');
+  });
   it('puts a double-arrow preview toggle to the left of Save', () => {
     render();
     const bar = document.querySelector('.editor-bar');
