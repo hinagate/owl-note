@@ -106,6 +106,36 @@ describe('annotateRuby', () => {
     expect(rt.firstChild.nodeType).toBe(Node.TEXT_NODE); // uncued text stays plain
   });
 
+  it('marks the stressed stretch, alone or together with a cue', () => {
+    annotateRuby(html('<p>distracted</p>'), () => [{
+      text: 'distracted',
+      reading: 'dɪˈstræk.təd',
+      parts: [
+        { text: 'dɪ', cue: null, stressed: false },
+        { text: 'ˈstræk', cue: null, stressed: true },
+        { text: '.tə', cue: null, stressed: false },
+        { text: 'd', cue: 'final', stressed: false },
+      ],
+    }]);
+    let rt = root.querySelector('rt');
+    expect(rt.textContent).toBe('dɪˈstræk.təd');
+    expect(rt.querySelector('.stressed').textContent).toBe('ˈstræk');
+    expect(rt.querySelector('.cue-final').className).toBe('cue-final');
+
+    annotateRuby(html('<p>bad</p>'), () => [{
+      text: 'bad',
+      reading: 'bæd',
+      parts: [
+        { text: 'b', cue: null, stressed: true },
+        { text: 'æ', cue: 'long', stressed: true },
+        { text: 'd', cue: 'final', stressed: true },
+      ],
+    }]);
+    rt = root.querySelector('rt');
+    expect(rt.textContent).toBe('bæd');
+    expect([...rt.children].map((span) => span.className)).toEqual(['stressed', 'cue-long stressed', 'cue-final stressed']);
+  });
+
   it('ignores parts that would not rebuild the reading', () => {
     annotateRuby(html('<p>speed</p>'), () => [{
       text: 'speed',

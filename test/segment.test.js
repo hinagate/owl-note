@@ -153,17 +153,58 @@ describe('Chinese segmentation', () => {
     expect(rebuilds(zh, '中国，银行。')).toBe(true);
   });
 
-  it('attaches pronunciation cues to an English run only when there is one to give', () => {
-    const en = makeSegmenter({ ipa: parseTable('speed\tspiːd\ncup\tkʌp\n') });
+  it('attaches pronunciation cues and stress to English content words only', () => {
+    const en = makeSegmenter({ ipa: parseTable('speed\tspiːd\ncup\tkʌp\nthe\tðə\n') });
     const [speed] = en('speed');
     expect(speed.parts.map((p) => p.cue)).toEqual([null, 'longer', 'final']);
-    expect('parts' in en('cup')[0]).toBe(false);
+    // No cue in cup, but its stress is still shown.
+    expect(en('cup')[0].parts).toEqual([{ text: 'kʌp', cue: null, stressed: true }]);
+    expect('parts' in en('the')[0]).toBe(false);
     expect(zh('中国').some((r) => 'parts' in r)).toBe(false);
   });
 
   it('tags its runs as Chinese, and leaves English runs untagged', () => {
     expect(zh('中国').every((r) => r.lang === 'zh')).toBe(true);
     expect(zh('phonics').find((r) => r.reading).lang).toBeUndefined();
+  });
+});
+
+describe('English words the dictionary does not list', () => {
+  const en = makeSegmenter({
+    ipa: parseTable([
+      'high\thaɪ', 'availability\təˌveɪ.ləˈbɪl.ə.ti', 'architect\tˈɑːr.kəˌtɛkt',
+      'well-known\tˈwɛlˈnoʊn', 're\treɪ', 'enter\tˈɛn.tɚ', 'self\tsɛlf', 'driving\tˈdraɪ.vɪŋ',
+    ].join('\n')),
+  });
+
+  // The hyphen rides in the ruby before it: loose between two rubies, it let the line
+  // break before it and open the next line on "-availability".
+  it('reads a hyphenated compound part by part, each hyphen with the word before it', () => {
+    expect(annotated(en, 'architecting high-availability systems'))
+      .toEqual(['architecting=ˈɑːr.kəˌtɛk.tɪŋ', 'high-=haɪ', 'availability=əˌveɪ.ləˈbɪl.ə.ti']);
+    expect(rebuilds(en, 'architecting high-availability systems')).toBe(true);
+  });
+
+  it('keeps a compound the dictionary lists as one reading', () => {
+    expect(annotated(en, 'well-known')).toEqual(['well-known=ˈwɛlˈnoʊn']);
+  });
+
+  it('reads a hyphenated re- as /riː/, not the musical note', () => {
+    expect(annotated(en, 're-enter')).toEqual(['re-=riː', 'enter=ˈɛn.tɚ']);
+    expect(annotated(en, 'self-driving')).toEqual(['self-=sɛlf', 'driving=ˈdraɪ.vɪŋ']);
+  });
+
+  it('leaves a part it cannot read bare, hyphen and all, and still reads the rest', () => {
+    expect(annotated(en, 'high-zorkability')).toEqual(['high-=haɪ']);
+    expect(annotated(en, 'zork-availability')).toEqual(['availability=əˌveɪ.ləˈbɪl.ə.ti']);
+    expect(en('zork-availability')[0].text).toBe('zork-');
+    expect(rebuilds(en, 'high-zorkability')).toBe(true);
+  });
+
+  it('cues a part by its own word, not the hyphen it carries', () => {
+    const [self] = en('self-driving');
+    expect(self.parts.map((p) => p.text).join('')).toBe('sɛlf'); // the reading, without "-"
+    expect(self.parts.at(-1).cue).toBe('final');
   });
 });
 

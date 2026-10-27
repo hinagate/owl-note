@@ -13,6 +13,31 @@ describe('buildIpaTable', () => {
     const table = rows(buildIpaTable({ scheming: 'S K IY1 M IH0 NG' }).text);
     expect(table.get('scheming')).toBe('ˈskiː.mɪŋ');
   });
+
+  it('bakes function words as they are spoken in a sentence, not as citation forms', () => {
+    const table = rows(buildIpaTable({
+      to: 'T UW1', was: 'W AA1 Z', her: 'HH ER1', for: 'F AO1 R', he: 'HH IY1', have: 'HH AE1 V', speed: 'S P IY1 D',
+    }).text);
+    expect(table.get('to')).toBe('tə');
+    expect(table.get('was')).toBe('wəz');
+    expect(table.get('her')).toBe('hɚ');
+    expect(table.get('for')).toBe('fɚ');
+    expect(table.get('he')).toBe('hi');      // no schwa form: just loses the length mark
+    expect(table.get('have')).toBe('hæv');   // strong as a main verb: left alone
+    expect(table.get('speed')).toBe('spiːd'); // content words untouched
+  });
+
+  // The point of the weak forms: no function word tells the reader to hold it. The full
+  // dictionary is the source, so a new entry or a changed reading is caught here.
+  it('leaves no length mark on any function word, except the ones stressed on purpose', async () => {
+    const { dictionary } = await import('cmu-pronouncing-dictionary');
+    const { UNSTRESSED_WORDS } = await import('../src/lib/ipa-cues.js');
+    const source = Object.fromEntries([...UNSTRESSED_WORDS].filter((w) => dictionary[w]).map((w) => [w, dictionary[w]]));
+    const table = rows(buildIpaTable(source).text);
+    const held = [...table].filter(([, ipa]) => ipa.includes('ː')).map(([word]) => word);
+    // onto and being stress their first syllable even in running speech.
+    expect(held.sort()).toEqual(['being', 'onto']);
+  });
 });
 
 describe('buildKanaTable', () => {

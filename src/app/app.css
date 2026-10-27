@@ -1326,7 +1326,11 @@ body.resizing { user-select: none; cursor: col-resize; }
    one line collides with the descenders of the line above. The looser line-height
    applies ONLY while phonetics is on — normal reading keeps its tighter rhythm. */
 .preview-content.phonetics { line-height: 2.55; }
-.preview-content.phonetics ruby { ruby-position: over; ruby-align: center; }
+/* nowrap: Chrome will otherwise break a line INSIDE a ruby that lands at the line end,
+   leaving "c" and half its reading on one line and "ards" on the next. overflow-wrap
+   and word-break do not stop it; nowrap does, and the words annotated are short enough
+   to always move whole to the next line instead. */
+.preview-content.phonetics ruby { ruby-position: over; ruby-align: center; white-space: nowrap; }
 .preview-content.phonetics rt {
   font-size: 0.6em;
   font-weight: 400;
@@ -1348,14 +1352,18 @@ body.resizing { user-select: none; cursor: col-resize; }
 /* Headings already carry their own weight and spacing; a reading over them is
    readable at a smaller relative size. */
 .preview-content.phonetics :is(h1, h2, h3, h4, h5, h6) rt { font-size: 0.42em; }
-/* Pronunciation cues inside an English reading (src/lib/ipa-cues.js). Two signals only,
-   on different channels so they never compete at 0.6em: a line under a vowel means
-   "hold it" (double: hold it longer still), a colour on the last consonants means
-   "say these". The cued vowel also darkens from the muted rt grey so the line has
-   something to sit under. */
+/* Pronunciation cues inside an English reading (src/lib/ipa-cues.js), each on its own
+   channel so they never compete at 0.6em: SHADE is stress (the main stressed syllable
+   dark, the rest the muted rt grey, so function words stay light all through), a line
+   under a vowel means "hold it" (double: hold it longer still), and orange on the last
+   consonants means "say these, don't swallow them". */
+.preview-content.phonetics rt .stressed { color: var(--text); }
 .preview-content.phonetics rt .cue-long,
 .preview-content.phonetics rt .cue-longer {
-  color: var(--text);
+  /* inline-block: a reading narrower than its word is centred, and Chrome hands that
+     spare room to the reading's LAST run — so a cued vowel at the end (tea /tiː/) had
+     its line run on past the vowel into empty space. A box of its own can't take it. */
+  display: inline-block;
   text-decoration-line: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 1px;

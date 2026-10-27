@@ -9,8 +9,9 @@
 // One pass handles mixed text. A note that quotes English inside Japanese gets IPA on the
 // English and kana on the kanji without either table knowing the other exists.
 
-import { tokenize, lookup } from './phonetics.js';
+import { tokenize } from './phonetics.js';
 import { pronunciationCues } from './ipa-cues.js';
+import { readEnglish, PREFIX_READINGS } from './english-forms.js';
 
 const KANJI = /[一-鿿㐀-䶿]/;
 const KANA = /[぀-ヿ]/;
@@ -152,15 +153,32 @@ export function makeSegmenter({ ipa = null, kana = null, pinyin = null, script =
       // tokenizer, which leaves punctuation alone as gaps.
       let end = at;
       while (end < text.length && !(cjk && startsEntry.test(text[end]))) end += 1;
-      for (const run of tokenize(text.slice(at, end))) {
-        const reading = run.isWord && ipa ? lookup(ipa, run.text) : null;
-        if (!reading) { keep(run.text); continue; }
+      // `text` is what the ruby covers when it is more than the word itself (see below).
+      const emitEnglish = (word, reading, text = word) => {
+        if (!reading) { keep(text); return; }
         flush();
-        // English readings also say how to say the word — which vowel to hold, which
-        // final consonant to sound. Only when there is something to say: most runs stay
-        // a bare {text, reading}.
-        const parts = pronunciationCues(reading, run.text);
-        runs.push(parts ? { text: run.text, reading, parts } : { text: run.text, reading });
+        // English readings also say how to say the word — where the stress falls, which
+        // vowel to hold, which final consonant to sound. Function words have none of
+        // that to say and stay a bare {text, reading}.
+        const parts = pronunciationCues(reading, word);
+        runs.push(parts ? { text, reading, parts } : { text, reading });
+      };
+      for (const run of tokenize(text.slice(at, end))) {
+        if (!run.isWord || !ipa) { keep(run.text); continue; }
+        const reading = readEnglish(ipa, run.text);
+        if (reading || !run.text.includes('-')) { emitEnglish(run.text, reading); continue; }
+        // The tokenizer keeps a hyphenated word whole because the dictionary lists ~1000 of
+        // them (well-known, e-mail). One it doesn't list — high-availability — is read
+        // part by part. Each hyphen rides with the word before it (high- over haɪ): left
+        // loose between two rubies, it let Chrome break BEFORE it, opening a line on
+        // "-enter". Inside the ruby the only break is after it, where hyphens break.
+        // The tokenizer's word pattern guarantees single hyphens between letter runs.
+        const pieces = run.text.split('-');
+        pieces.forEach((piece, i) => {
+          const last = i === pieces.length - 1;
+          const prefix = last ? null : PREFIX_READINGS[piece.toLowerCase()];
+          emitEnglish(piece, prefix || readEnglish(ipa, piece), last ? piece : `${piece}-`);
+        });
       }
       at = end;
     }

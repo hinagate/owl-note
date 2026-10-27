@@ -1,16 +1,23 @@
 import { describe, it, expect } from 'vitest';
-import { splitIpa, pronunciationCues } from '../src/lib/ipa-cues.js';
+import { splitIpa, pronunciationCues, WEAK_FORMS, UNSTRESSED_WORDS } from '../src/lib/ipa-cues.js';
 import { arpabetToIpa } from '../src/lib/arpabet.js';
 
-/** Render cues compactly: [x] long, [[x]] longer, {x} final. */
+/** Render cues compactly: [x] long, [[x]] longer, {x} final; null when none. Stress aside. */
 const show = (ipa, word) => {
   const parts = pronunciationCues(ipa, word);
-  if (!parts) return null;
+  if (!parts || !parts.some((p) => p.cue)) return null;
   return parts.map(({ text, cue }) => (
     cue === 'long' ? `[${text}]`
       : cue === 'longer' ? `[[${text}]]`
         : cue === 'final' ? `{${text}}` : text
   )).join('');
+};
+
+/** Render stress alone: <x> is the dark, stressed stretch; null when nothing is. */
+const stress = (ipa, word) => {
+  const parts = pronunciationCues(ipa, word);
+  if (!parts) return null;
+  return parts.map(({ text, stressed }) => (stressed ? `<${text}>` : text)).join('').replace(/></g, '');
 };
 
 describe('splitIpa', () => {
@@ -79,6 +86,59 @@ describe('pronunciationCues — final consonants', () => {
     expect(show('kʌp', 'cup')).toBeNull();
     expect(show('hɪm', 'hymn')).toBeNull();
     expect(show('sɪŋ', 'sing')).toBeNull();
+  });
+});
+
+// Stress is shown by shade rather than a mark: the main stressed syllable dark, the rest
+// light. Cantonese weighs every syllable the same, so this is where long words go wrong.
+describe('pronunciationCues — stress', () => {
+  it('darkens the syllable the main stress opens, mark and all', () => {
+    expect(stress('dɪˈstræk.təd', 'distracted')).toBe('dɪ<ˈstræk>.təd');
+    expect(stress('ˈfɑː.ðɚ', 'father')).toBe('<ˈfɑː>.ðɚ');
+    expect(stress('hoʊˈtɛl', 'hotel')).toBe('hoʊ<ˈtɛl>');
+  });
+
+  it('tells photograph from photographer', () => {
+    expect(stress('ˈfoʊ.təˌɡræf', 'photograph')).toBe('<ˈfoʊ>.təˌɡræf');
+    expect(stress('fəˈtɑː.ɡrə.fɚ', 'photographer')).toBe('fə<ˈtɑː>.ɡrə.fɚ');
+  });
+
+  it('leaves secondary stress light, so the main one stands out', () => {
+    expect(stress('ɛˌpɪs.təˈmɑː.ləˌdʒiː', 'epistemology')).toBe('ɛˌpɪs.tə<ˈmɑː>.ləˌdʒiː');
+  });
+
+  it('darkens a whole one-syllable word, even one with no other cue', () => {
+    expect(stress('kʌp', 'cup')).toBe('<kʌp>');
+    expect(stress('spiːd', 'speed')).toBe('<spiːd>');
+  });
+
+  it('keeps a cue and the stress on the same stretch apart', () => {
+    expect(pronunciationCues('bæd', 'bad')).toEqual([
+      { text: 'b', cue: null, stressed: true },
+      { text: 'æ', cue: 'long', stressed: true },
+      { text: 'd', cue: 'final', stressed: true },
+    ]);
+  });
+
+  it('leaves function words light all through, which shows the sentence rhythm', () => {
+    expect(pronunciationCues('ðə', 'the')).toBeNull();
+    expect(pronunciationCues('tuː', 'to')).toBeNull();
+  });
+});
+
+describe('WEAK_FORMS', () => {
+  it('covers only words already treated as unstressed, so they never get a cue or stress', () => {
+    for (const [word, form] of Object.entries(WEAK_FORMS)) {
+      expect(UNSTRESSED_WORDS.has(word), word).toBe(true);
+      expect(pronunciationCues(form, word), word).toBeNull();
+    }
+  });
+
+  it('holds only readings this module can parse, and none with a length mark', () => {
+    for (const [word, form] of Object.entries(WEAK_FORMS)) {
+      expect(splitIpa(form), word).not.toBeNull();
+      expect(form, word).not.toContain('ː');
+    }
   });
 });
 

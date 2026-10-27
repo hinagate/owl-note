@@ -18,6 +18,7 @@ import { writeFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
 import { dictionary } from 'cmu-pronouncing-dictionary';
 import { arpabetToIpa } from '../src/lib/arpabet.js';
+import { WEAK_FORMS } from '../src/lib/ipa-cues.js';
 
 // CMUdict lists alternate pronunciations as `word(2)`, `word(3)`. One reading per word is
 // all a ruby annotation can show, so keep the primary entry and drop the variants.
@@ -31,7 +32,8 @@ export function buildIpaTable(source = dictionary) {
   let skipped = 0;
   for (const [word, arpabet] of Object.entries(source)) {
     if (ALTERNATE.test(word) || !HAS_LETTER.test(word)) { skipped += 1; continue; }
-    const ipa = arpabetToIpa(arpabet);
+    // Function words read as they are spoken in a sentence, not as citation forms.
+    const ipa = Object.hasOwn(WEAK_FORMS, word) ? WEAK_FORMS[word] : arpabetToIpa(arpabet);
     // A word whose every symbol was unrecognised would annotate as an empty box.
     if (!ipa) { skipped += 1; continue; }
     rows.push(`${word}\t${ipa}`);

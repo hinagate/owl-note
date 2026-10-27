@@ -9,6 +9,8 @@
 //   - FINAL CONSONANTS. A Cantonese syllable can only end in p, t, k, m, n or ŋ, one at
 //     a time. Any other final (l, s, z, d, v, r…) or any cluster (-kt, -nd, -ts) tends to
 //     be dropped, so feel becomes "fee-oo" and asked becomes "ask".
+//   - STRESS. Cantonese gives every syllable the same weight, so a long word's stress is
+//     easy to misplace. Rather than a third mark, the stressed syllable is shown darker.
 //
 // Pure: no DOM, no imports. The output is a list of parts whose text concatenates back to
 // the reading exactly, so the annotator can wrap the cued parts in spans without changing
@@ -33,7 +35,7 @@ const CANTONESE_FINALS = new Set(['p', 't', 'k', 'm', 'n', 'ŋ']);
 // Function words a sentence almost never stresses — most have a weak form (to → tə,
 // and → ən). Cueing them would put marks on every other word and teach the citation form
 // of words that are spoken reduced.
-const UNSTRESSED_WORDS = new Set([
+export const UNSTRESSED_WORDS = new Set([
   'a', 'an', 'the', 'and', 'but', 'or', 'nor', 'as', 'at', 'by', 'for', 'from', 'in',
   'into', 'of', 'on', 'onto', 'to', 'than', 'that', 'with', 'is', 'am', 'are', 'was',
   'were', 'be', 'been', 'being', 'has', 'have', 'had', 'do', 'does', 'did', 'can',
@@ -41,6 +43,23 @@ const UNSTRESSED_WORDS = new Set([
   'i', 'me', 'my', 'you', 'your', 'he', 'him', 'his', 'she', 'her', 'it', 'its', 'we',
   'us', 'our', 'they', 'them', 'their', 'there', 'who', 'whom',
 ]);
+
+// What the reading SHOWS for those words. The dictionary gives each one's citation form —
+// to /tuː/, was /wɑːz/, her /hɝː/ — whose length marks tell a reader to hold exactly the
+// words a sentence rushes through, and a Cantonese speaker already weighs every syllable
+// the same. So the build bakes in the form actually spoken (scripts/build-ipa-dict.mjs):
+//   - the usual weak form, where running speech reduces the vowel (to → tə, for → fɚ);
+//   - just the length mark dropped, for words with no schwa form (be, he, do, who);
+//   - left alone where a common use is strong — have/has/had as main verbs, does, that,
+//     there — none of which carries a length mark anyway.
+export const WEAK_FORMS = {
+  an: 'ən', but: 'bət', or: 'ɚ', nor: 'nɚ', as: 'əz', at: 'ət', for: 'fɚ', from: 'frəm',
+  of: 'əv', to: 'tə', than: 'ðən', am: 'əm', are: 'ɚ', was: 'wəz', were: 'wɚ',
+  can: 'kən', could: 'kəd', would: 'wəd', should: 'ʃəd', shall: 'ʃəl', must: 'məst',
+  just: 'dʒəst', some: 'səm', you: 'jə', your: 'jɚ', her: 'hɚ', us: 'əs', them: 'ðəm',
+  be: 'bi', he: 'hi', she: 'ʃi', we: 'wi', me: 'mi', do: 'du', who: 'hu', whom: 'hum',
+  on: 'ɑn',
+};
 
 /**
  * Split an IPA reading into symbols.
@@ -70,12 +89,17 @@ const wordKey = (word) => String(word || '').replace(/[’‘＇]/g, "'").toLowe
 /**
  * @param {string} ipa reading as baked by scripts/build-ipa-dict.mjs, e.g. "spiːd"
  * @param {string} [word] the written word, used only to skip unstressed function words
- * @returns {{ text: string, cue: 'long'|'longer'|'final'|null }[] | null} parts that
- *   rebuild `ipa` exactly, or null when nothing in the word needs a cue.
+ * @returns {{ text: string, cue: 'long'|'longer'|'final'|null, stressed: boolean }[] | null}
+ *   parts that rebuild `ipa` exactly, or null when there is nothing to show: a function
+ *   word, a reading this module cannot parse, or one with neither a cue nor a stress.
  *   - long:   hold this vowel — a long vowel (ː), or any stressed vowel before a voiced
  *             final consonant (bad, ride)
  *   - longer: both at once, so hold it longer still (speed, cards)
  *   - final:  a word-final consonant Cantonese has no habit of saying
+ *   - stressed: inside the syllable that carries the word's main stress (ˈ), or the whole
+ *             of a one-syllable word. The page shows it darker than the rest of the
+ *             reading, which is all it takes to see where the weight falls in distracted
+ *             /dɪˈstræk.təd/. Secondary stress (ˌ) stays light, so the main one stands out.
  */
 export function pronunciationCues(ipa, word = '') {
   if (UNSTRESSED_WORDS.has(wordKey(word))) return null;
@@ -122,15 +146,27 @@ export function pronunciationCues(ipa, word = '') {
     for (let i = last; i < symbols.length; i += 1) cues[i] = 'final';
   }
 
-  if (!cues.some(Boolean)) return null;
+  // The main stress runs from its ˈ mark to the next syllable mark. A word without one is
+  // stressed whole only when it has a single vowel (a one-syllable word carries no mark).
+  const hasPrimary = symbols.some((s) => s.text === 'ˈ');
+  const stress = new Array(symbols.length).fill(!hasPrimary && vowelCount === 1);
+  if (hasPrimary) {
+    let inPrimary = false;
+    symbols.forEach(({ text, kind }, i) => {
+      if (kind === 'mark') inPrimary = text === 'ˈ';
+      stress[i] = inPrimary;
+    });
+  }
 
-  // Merge neighbours with the same cue, so "dz" in cards is one span and the plain
+  if (!cues.some(Boolean) && !stress.some(Boolean)) return null;
+
+  // Merge neighbours alike in cue and stress, so "dz" in cards is one span and the plain
   // stretches stay plain text.
   const parts = [];
   symbols.forEach((symbol, i) => {
     const prev = parts[parts.length - 1];
-    if (prev && prev.cue === cues[i]) prev.text += symbol.text;
-    else parts.push({ text: symbol.text, cue: cues[i] });
+    if (prev && prev.cue === cues[i] && prev.stressed === stress[i]) prev.text += symbol.text;
+    else parts.push({ text: symbol.text, cue: cues[i], stressed: stress[i] });
   });
   return parts;
 }
