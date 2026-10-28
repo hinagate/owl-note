@@ -250,7 +250,7 @@ export function renderEditor(
     phoneticsBtn.title = phonetics.busy
       ? 'Loading the pronunciation dictionary…'
       : `${phonetics.enabled ? 'Hide' : 'Show'} pronunciation above each word in the preview`
-        + ' — English (IPA), Japanese (hiragana) and Chinese (pinyin) only';
+        + ' — English (IPA), Japanese (hiragana) and Cantonese (Jyutping) only';
     phoneticsBtn.addEventListener('click', () => {
       Promise.resolve(phonetics.onToggle?.()).catch((err) => console.warn('phonetics toggle failed', err));
     });

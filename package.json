@@ -1,6 +1,6 @@
 {
   "name": "owl-note",
-  "version": "2.3.43",
+  "version": "2.3.44",
   "private": true,
   "license": "GPL-3.0-or-later",
   "type": "module",
@@ -34,7 +34,6 @@
     "turndown-plugin-gfm": "^1.0.2"
   },
   "devDependencies": {
-    "cedict-json": "^1.2.0",
     "cmu-pronouncing-dictionary": "^3.0.0",
     "esbuild": "^0.21.0",
     "fake-indexeddb": "^6.2.5",

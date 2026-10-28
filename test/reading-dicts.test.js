@@ -2,7 +2,7 @@
 // no runtime test would catch. Both are pure functions over their source data.
 import { describe, it, expect } from 'vitest';
 import { buildKanaTable, toHiragana } from '../scripts/build-kana-dict.mjs';
-import { buildPinyinTable, toneMark } from '../scripts/build-pinyin-dict.mjs';
+import { buildJyutpingTable, dictRows, DEFAULT_READINGS } from '../scripts/build-jyutping-dict.mjs';
 import { buildIpaTable } from '../scripts/build-ipa-dict.mjs';
 import { MAX_SURFACE, MAX_PHRASE } from '../src/lib/segment.js';
 
@@ -99,92 +99,87 @@ describe('buildKanaTable', () => {
   });
 });
 
-describe('toneMark', () => {
-  it('places the mark on a or o first', () => {
-    expect(toneMark('hang2')).toBe('háng');
-    expect(toneMark('hao3')).toBe('hǎo');
-    expect(toneMark('guo2')).toBe('guó');
-  });
+// A Rime dict.yaml: a YAML header closed by "...", then tab-separated rows.
+const rimeDict = (rows) => `---\nname: test\nversion: "1"\n...\n${rows.join('\n')}\n`;
+const chars = (...rows) => rimeDict(rows.map((r) => r.join('\t')));
+const words = (...rows) => rimeDict(rows.map((r) => r.join('\t')));
 
-  it('falls back to e, then to the last vowel', () => {
-    expect(toneMark('hen3')).toBe('hěn');
-    expect(toneMark('jiu3')).toBe('jiǔ');  // iu marks the u
-    expect(toneMark('hui4')).toBe('huì');  // ui marks the i
-  });
-
-  it('writes CC-DICT\'s u: as ü', () => {
-    expect(toneMark('lu:4')).toBe('lǜ');
-    expect(toneMark('nu:3')).toBe('nǚ');
-  });
-
-  it('leaves the neutral tone unmarked and lowercases proper nouns', () => {
-    expect(toneMark('de5')).toBe('de');
-    expect(toneMark('Zhong1')).toBe('zhōng');
+describe('dictRows', () => {
+  it('reads the rows after the header, skipping comments and blank lines', () => {
+    const text = '# comment\n---\nname: x\n...\n# note\n中\tzung1\n\n國\tgwok3\t5%\n';
+    expect(dictRows(text)).toEqual([['中', 'zung1'], ['國', 'gwok3', '5%']]);
   });
 });
 
-describe('buildPinyinTable', () => {
-  const entry = (traditional, simplified, pinyin) => ({ traditional, simplified, pinyin });
-
-  it('gives every character a default reading', () => {
-    const table = rows(buildPinyinTable([
-      entry('中', '中', 'zhong1'), entry('國', '国', 'guo2'),
-    ]).text);
-    expect(table.get('中')).toBe('zhōng');
-    expect(table.get('国')).toBe('guó'); // both script forms are indexed
-    expect(table.get('國')).toBe('guó');
+describe('buildJyutpingTable', () => {
+  it('gives every character a default reading, the dictionary\'s favourite', () => {
+    const table = rows(buildJyutpingTable({
+      chars: chars(['中', 'zung1'], ['中', 'zung3', '5%'], ['國', 'gwok3']),
+      words: words(),
+    }).text);
+    expect(table.get('中')).toBe('zung1'); // unweighted is the standard reading
+    expect(table.get('國')).toBe('gwok3');
   });
 
-  it('stores a phrase only when it deviates from the per-character defaults', () => {
-    const built = buildPinyinTable([
-      entry('行', '行', 'xing2'),
-      entry('走', '走', 'zou3'),
-      entry('銀', '银', 'yin2'),
-      entry('行走', '行走', 'xing2 zou3'), // matches the defaults — not worth a row
-      entry('銀行', '银行', 'yin2 hang2'), // 行 reads háng: a genuine exception
-    ]);
+  it('stores a word only when it deviates from the per-character defaults', () => {
+    const built = buildJyutpingTable({
+      chars: chars(['銀', 'ngan4'], ['路', 'lou6'], ['行', 'haang4'], ['行', 'hong4', '5%']),
+      words: words(['行路', 'haang4 lou6'], ['銀行', 'ngan4 hong4']),
+    });
     const table = rows(built.text);
-    expect(table.has('行走')).toBe(false);
-    expect(table.get('银行')).toBe('yín háng');
-    expect(built.phrases).toBe(2); // the traditional and simplified spellings of 銀行
+    expect(table.has('行路')).toBe(false); // the defaults already read it right
+    expect(table.get('銀行')).toBe('ngan4 hong4');
+    expect(built.words).toBe(1);
   });
 
-  it('picks the default reading by corpus frequency, not by dictionary order', () => {
-    // 行 appears as xíng twice and háng once, so xíng is the default even though the
-    // háng entry comes first — which is what keeps the exception table small.
-    const table = rows(buildPinyinTable([
-      entry('銀行', '银行', 'yin2 hang2'),
-      entry('行走', '行走', 'xing2 zou3'),
-      entry('行動', '行动', 'xing2 dong4'),
-    ]).text);
-    expect(table.get('行')).toBe('xíng');
+  it('picks a default by how the word list uses it, the favourite counting three times', () => {
+    const favourite = chars(['長', 'coeng4', '5%'], ['長', 'zoeng2', '3%']);
+    const grow = [['長大', 'zoeng2 daai6'], ['校長', 'haau6 zoeng2'], ['家長', 'gaa1 zoeng2']];
+    // Three uses tie the favourite's weight of three, and the favourite keeps it ...
+    expect(rows(buildJyutpingTable({ chars: favourite, words: words(...grow) }).text).get('長')).toBe('coeng4');
+    // ... a fourth outvotes it.
+    const more = words(...grow, ['部長', 'bou6 zoeng2']);
+    expect(rows(buildJyutpingTable({ chars: favourite, words: more }).text).get('長')).toBe('zoeng2');
   });
 
-  it('lets a single-character citation reading outweigh incidental phrase usage', () => {
-    const table = rows(buildPinyinTable([
-      entry('了', '了', 'le5'),
-      entry('了解', '了解', 'liao3 jie3'),
-      entry('了結', '了结', 'liao3 jie2'),
-    ]).text);
-    expect(table.get('了')).toBe('le'); // weighted 3, against two phrase uses
+  // The word list never shows a character standing alone, so 我會去 used to read 會 as the
+  // wui2 of 開會. The commonest stand-alone readings are set by hand.
+  it('sets the stand-alone readings the word list cannot see', () => {
+    expect(DEFAULT_READINGS).toMatchObject({ 會: 'wui5', 呀: 'aa3' });
+    const table = rows(buildJyutpingTable({
+      chars: chars(['會', 'wui2', '3%'], ['會', 'wui5', '5%'], ['開', 'hoi1']),
+      words: words(['開會', 'hoi1 wui2'], ['大會', 'daai6 wui2'], ['社會', 'se5 wui2']),
+    }).text);
+    expect(table.get('會')).toBe('wui5');
+    expect(table.get('開會')).toBe('hoi1 wui2'); // the compound keeps its own reading
   });
 
-  it('skips entries whose pinyin cannot be aligned character by character', () => {
-    const built = buildPinyinTable([entry('中', '中', 'zhong1'), entry('中中', '中中', 'zhong1')]);
-    expect(rows(built.text).has('中中')).toBe(false);
+  it('skips rows it cannot align or read, and non-Han surfaces', () => {
+    const built = buildJyutpingTable({
+      chars: chars(['中', 'zung1'], ['A', 'ei1'], ['國', 'gwok']),
+      words: words(['中中', 'zung1'], ['中國', 'zung1 gwok3'], ['ab中', 'ei1 bi1 zung1']),
+    });
+    const table = rows(built.text);
+    expect(table.has('A')).toBe(false); // not Han
+    expect(table.get('國')).toBe('gwok3'); // its own row had no tone; 中國 supplies one
+    expect(table.has('中中')).toBe(false); // two characters, one syllable
+    expect(table.has('ab中')).toBe(false);
   });
 
-  it('ignores non-Han surfaces such as CC-CEDICT\'s numeric entries', () => {
-    const built = buildPinyinTable([entry('110', '110', 'yao1 yao1 ling2'), entry('中', '中', 'zhong1')]);
-    expect(built.chars).toBe(1);
-  });
-
-  it('drops phrases longer than the cap the runtime matcher scans to', () => {
+  it('drops words longer than the cap the runtime matcher scans to', () => {
     const long = '中'.repeat(MAX_PHRASE + 1);
-    const built = buildPinyinTable([
-      entry('中', '中', 'zhong1'),
-      entry(long, long, Array(MAX_PHRASE + 1).fill('zhong4').join(' ')),
-    ]);
+    const built = buildJyutpingTable({
+      chars: chars(['中', 'zung1']),
+      words: words([long, Array(MAX_PHRASE + 1).fill('zung3').join(' ')]),
+    });
     expect(rows(built.text).has(long)).toBe(false);
+  });
+
+  it('builds from the vendored rime-cantonese, reading Cantonese as written', () => {
+    const table = rows(buildJyutpingTable().text);
+    for (const [surface, reading] of [
+      ['銀行', 'ngan4 hong4'], ['廣東話', 'gwong2 dung1 waa2'], ['屋企', 'uk1 kei2'],
+      ['佢', 'keoi5'], ['嘅', 'ge3'], ['咗', 'zo2'], ['冇', 'mou5'], ['會', 'wui5'],
+    ]) expect(table.get(surface), surface).toBe(reading);
   });
 });

@@ -1,6 +1,6 @@
 // The segmenter is where the three languages actually differ, so this is where the
 // interesting cases live: dictionary-driven CJK boundaries, okurigana that must stay bare,
-// per-character pinyin, and mixed-script text.
+// per-character Jyutping, and mixed-script text.
 import { describe, it, expect } from 'vitest';
 import { parseTable } from '../src/lib/phonetics.js';
 import {
@@ -14,13 +14,15 @@ const KANA = parseTable([
   '日本\tにほん', '日本語\tにほんご', '私\tわたし', '食べる\tた', '新しい\tあたら',
   '新\tしん', '本\tほん', '読む\tよ', 'お茶\tちゃ', '山\tやま',
 ].join('\n'));
-const PINYIN = parseTable([
-  '银\tyín', '行\txíng', '走\tzǒu', '中\tzhōng', '国\tguó',
-  '银行\tyín háng', '中国银行\tzhōng guó yín háng',
+// Like scripts/build-jyutping-dict.mjs writes it: one default per character, and words
+// only where they differ from reading those defaults one by one.
+const JYUTPING = parseTable([
+  '銀\tngan4', '行\thaang4', '路\tlou6', '中\tzung1', '國\tgwok3',
+  '銀行\tngan4 hong4', '中國銀行\tzung1 gwok3 ngan4 hong4',
 ].join('\n'));
 
 const ja = makeSegmenter({ ipa: IPA, kana: KANA, script: 'ja' });
-const zh = makeSegmenter({ ipa: IPA, pinyin: PINYIN, script: 'zh' });
+const yue = makeSegmenter({ ipa: IPA, jyutping: JYUTPING, script: 'yue' });
 
 /** Every segmenter run must rebuild its input exactly — the annotator depends on it. */
 const rebuilds = (segment, text) => segment(text).map((r) => r.text).join('') === text;
@@ -33,9 +35,9 @@ describe('detectHanScript', () => {
     expect(detectHanScript('コンピュータ')).toBe('ja');
   });
 
-  it('reads bare Han as Chinese', () => {
-    expect(detectHanScript('中国银行')).toBe('zh');
-    expect(detectHanScript('')).toBe('zh');
+  it('reads bare Han as Cantonese, the only Chinese reading offered', () => {
+    expect(detectHanScript('中國銀行')).toBe('yue');
+    expect(detectHanScript('')).toBe('yue');
   });
 });
 
@@ -48,32 +50,44 @@ describe('scriptForBlock', () => {
   ].join('\n'));
 
   it('calls any block with kana Japanese, whatever the note is', () => {
-    expect(scriptForBlock('新しい言語', table, 'zh')).toBe('ja');
+    expect(scriptForBlock('新しい言語', table, 'yue')).toBe('ja');
   });
 
   it('keeps a kanji-only block Japanese when the note is Japanese', () => {
     // The regression this guards: 概 has no single-character row, so a per-character test
-    // would rate 概要 as foreign and read it as Chinese.
+    // would rate 概要 as foreign and read it as Cantonese.
     expect(scriptForBlock('概要', table, 'ja')).toBe('ja');
     expect(scriptForBlock('東京世界概要', table, 'ja')).toBe('ja');
   });
 
-  it('flips a block the Japanese dictionary cannot account for to Chinese', () => {
-    // 习 门 语 让 你 的 are simplified forms absent from a Japanese word list.
-    expect(scriptForBlock('学习一门新语言', table, 'ja')).toBe('zh');
-    expect(scriptForBlock('会让你看到更大的世界', table, 'ja')).toBe('zh');
+  it('flips a block the Japanese dictionary cannot account for to Cantonese', () => {
+    // 佢 哋 喺 傾 are written-Cantonese characters, and 會 學 the Traditional forms Japanese
+    // simplified: none of them is in a Japanese word list.
+    expect(scriptForBlock('佢哋喺度傾計', table, 'ja')).toBe('yue');
+    expect(scriptForBlock('你會唔會嚟大學', table, 'ja')).toBe('yue');
   });
 
   it('will not overrule the note on too little evidence', () => {
-    expect(scriptForBlock('习', table, 'ja')).toBe('ja'); // one stray character proves nothing
+    // 概 is Japanese (in 概要) but has no row of its own: one such character proves nothing.
+    expect(scriptForBlock('概', table, 'ja')).toBe('ja');
   });
 
-  it('never drags a Chinese note towards Japanese', () => {
-    expect(scriptForBlock('世界概要東京', table, 'zh')).toBe('zh');
+  // The reported case: a note with an English, a Japanese and a Cantonese line. The
+  // Japanese dictionary knows 出來 (an old spelling of 出来) and 飲茶, so five of the six
+  // characters looked Japanese and the line came out as え・でき・やむちゃ.
+  it('reads a line as Cantonese when it uses a character no Japanese word does', () => {
+    const japanese = parseTable(['得る\tえ', '出來\tでき', '飲茶\tやむちゃ', '今度\tこんど'].join('\n'));
+    expect(scriptForBlock('得閒出來飲茶', japanese, 'ja')).toBe('yue'); // 閒: never Japanese
+    expect(scriptForBlock('佢', japanese, 'ja')).toBe('yue'); // even alone: Japanese has no reading for it
+    expect(scriptForBlock('飲茶', japanese, 'ja')).toBe('ja'); // every character is Japanese too
+  });
+
+  it('never drags a Cantonese note towards Japanese', () => {
+    expect(scriptForBlock('世界概要東京', table, 'yue')).toBe('yue');
   });
 
   it('falls back to the note when the kana table has not loaded', () => {
-    expect(scriptForBlock('学习一门新语言', null, 'ja')).toBe('ja');
+    expect(scriptForBlock('佢哋喺度傾計', null, 'ja')).toBe('ja');
   });
 });
 
@@ -132,25 +146,25 @@ describe('Japanese segmentation', () => {
   });
 });
 
-describe('Chinese segmentation', () => {
-  it('writes pinyin per character, one ruby each', () => {
-    const runs = zh('银行');
-    expect(runs.map((r) => r.text)).toEqual(['银', '行']);
-    expect(runs.map((r) => r.reading)).toEqual(['yín', 'háng']);
+describe('Cantonese segmentation', () => {
+  it('writes Jyutping per character, one ruby each', () => {
+    const runs = yue('銀行');
+    expect(runs.map((r) => r.text)).toEqual(['銀', '行']);
+    expect(runs.map((r) => r.reading)).toEqual(['ngan4', 'hong4']);
   });
 
-  it('lets a phrase override the per-character default for a polyphonic character', () => {
-    expect(annotated(zh, '行走')).toEqual(['行=xíng', '走=zǒu']); // default reading
-    expect(annotated(zh, '银行')).toEqual(['银=yín', '行=háng']); // exception wins
+  it('lets a word override the per-character default for a polyphonic character', () => {
+    expect(annotated(yue, '行路')).toEqual(['行=haang4', '路=lou6']); // default reading
+    expect(annotated(yue, '銀行')).toEqual(['銀=ngan4', '行=hong4']); // exception wins
   });
 
-  it('prefers the longest phrase when several match', () => {
-    expect(annotated(zh, '中国银行'))
-      .toEqual(['中=zhōng', '国=guó', '银=yín', '行=háng']);
+  it('prefers the longest word when several match', () => {
+    expect(annotated(yue, '中國銀行'))
+      .toEqual(['中=zung1', '國=gwok3', '銀=ngan4', '行=hong4']);
   });
 
   it('rebuilds text with punctuation exactly', () => {
-    expect(rebuilds(zh, '中国，银行。')).toBe(true);
+    expect(rebuilds(yue, '中國，銀行。')).toBe(true);
   });
 
   it('attaches pronunciation cues and stress to English content words only', () => {
@@ -160,12 +174,12 @@ describe('Chinese segmentation', () => {
     // No cue in cup, but its stress is still shown.
     expect(en('cup')[0].parts).toEqual([{ text: 'kʌp', cue: null, stressed: true }]);
     expect('parts' in en('the')[0]).toBe(false);
-    expect(zh('中国').some((r) => 'parts' in r)).toBe(false);
+    expect(yue('中國').some((r) => 'parts' in r)).toBe(false);
   });
 
-  it('tags its runs as Chinese, and leaves English runs untagged', () => {
-    expect(zh('中国').every((r) => r.lang === 'zh')).toBe(true);
-    expect(zh('phonics').find((r) => r.reading).lang).toBeUndefined();
+  it('tags its runs as Cantonese (yue), and leaves English runs untagged', () => {
+    expect(yue('中國').every((r) => r.lang === 'yue')).toBe(true);
+    expect(yue('phonics').find((r) => r.reading).lang).toBeUndefined();
   });
 });
 
@@ -215,8 +229,8 @@ describe('mixed scripts', () => {
     expect(rebuilds(ja, 'phonics は 日本 です')).toBe(true);
   });
 
-  it('annotates English inside Chinese', () => {
-    expect(annotated(zh, 'phonics 中国')).toEqual(['phonics=ˈfɑnɪks', '中=zhōng', '国=guó']);
+  it('annotates English inside Cantonese', () => {
+    expect(annotated(yue, 'phonics 中國')).toEqual(['phonics=ˈfɑnɪks', '中=zung1', '國=gwok3']);
   });
 
   it('does nothing at all without tables', () => {
@@ -230,21 +244,21 @@ describe('mixed scripts', () => {
     expect(annotated(partial, 'phonics 日本')).toEqual(['phonics=ˈfɑnɪks']);
   });
 
-  it('reads a Chinese block as pinyin even inside a Japanese note', () => {
+  it('reads a Cantonese block as Jyutping even inside a Japanese note', () => {
     // The reported bug: one note holding an English, a Japanese and a Chinese sentence
     // classified the whole note Japanese, so the Chinese line came out as kanji readings.
     const KANA_MIX = parseTable([
       '世界\tせかい', '言語\tげんご', '新しい\tあたら', '学ぶ\tまな', '広がる\tひろ',
       '学\tがく', '新\tしん', '言\tげん', '大\tだい', '会\tかい',
     ].join('\n'));
-    const PINYIN_MIX = parseTable([
-      '学\txué', '习\txí', '一\tyī', '门\tmén', '新\txīn', '语\tyǔ', '言\tyán',
+    const JYUTPING_MIX = parseTable([
+      '佢\tkeoi5', '哋\tdei6', '學\thok6', '緊\tgan2', '新\tsan1', '語\tjyu5', '言\tjin4',
     ].join('\n'));
-    const note = makeSegmenter({ kana: KANA_MIX, pinyin: PINYIN_MIX, script: 'ja' });
+    const note = makeSegmenter({ kana: KANA_MIX, jyutping: JYUTPING_MIX, script: 'ja' });
 
     expect(annotated(note, '新しい言語')).toEqual(['新=あたら', '言語=げんご']);
-    expect(annotated(note, '学习一门新语言'))
-      .toEqual(['学=xué', '习=xí', '一=yī', '门=mén', '新=xīn', '语=yǔ', '言=yán']);
+    expect(annotated(note, '佢哋學緊新語言'))
+      .toEqual(['佢=keoi5', '哋=dei6', '學=hok6', '緊=gan2', '新=san1', '語=jyu5', '言=jin4']);
   });
 
   it('survives empty and nullish input', () => {

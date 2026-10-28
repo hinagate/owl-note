@@ -3,8 +3,8 @@
 // its fetch so tests never touch the network.
 //
 // Tables are fetched, not bundled, and one per language: English IPA (~830 KB), Japanese
-// kana (~1.7 MB) and Mandarin pinyin (~170 KB). Bundling them would tax every user with
-// 2.7 MB of parsing for a default-off feature, so each is pulled only when a note is
+// kana (~1.7 MB) and Cantonese Jyutping (~250 KB). Bundling them would tax every user with
+// 2.8 MB of parsing for a default-off feature, so each is pulled only when a note is
 // actually written in that language.
 
 const APOSTROPHES = /[’‘＇]/g;

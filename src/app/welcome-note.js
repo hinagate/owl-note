@@ -84,7 +84,7 @@ export const WELCOME_NOTE_BODY = [
   '- Notebooks nest, and a notebook shows its sub-notebooks\' notes too. Drag notes onto one to move them; Ctrl- or Shift-click to pick several.',
   '- Pin what matters, search every note from the top bar, or find text in this one. Notes are bookmarks, so their titles come up in the address bar too.',
   '- **⧉ Open in new tab** keeps a note open beside the one you\'re writing.',
-  '- **Phonetic Assistance (ˈɑ)** shows pronunciation above the words: IPA for English, hiragana for Japanese, pinyin for Chinese. In English, an underlined vowel is one to hold (double line: hold it longer), and orange marks final sounds to say out loud.',
+  '- **Phonetic Assistance (ˈɑ)** shows pronunciation above the words: IPA for English, hiragana for Japanese, Jyutping (粵拼) for Cantonese. In English, an underlined vowel is one to hold (double line: hold it longer), and orange marks final sounds to say out loud.',
   '- Deleted notes go to **Trash**, where they can be restored.',
   '',
   '## 🦉 Ask Owl',

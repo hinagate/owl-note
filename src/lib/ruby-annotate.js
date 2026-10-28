@@ -4,8 +4,8 @@
 // needs no change to the sanitizer's allowlist and can introduce no injection.
 //
 // Language-agnostic on purpose: the caller supplies a segmenter and this walker never
-// learns which language it is annotating. English IPA, Japanese furigana and Mandarin
-// pinyin all arrive here as the same {text, reading} runs.
+// learns which language it is annotating. English IPA, Japanese furigana and Cantonese
+// Jyutping all arrive here as the same {text, reading} runs.
 //
 // Segmenting is the caller's job rather than this file's because CJK word boundaries come
 // from the dictionary, not from the text — see makeSegmenter in ./segment.js.
@@ -57,7 +57,7 @@ export function annotateRuby(root, segment) {
         continue;
       }
       const ruby = document.createElement('ruby');
-      // Tagging the language lets the stylesheet size furigana and pinyin differently from
+      // Tagging the language lets the stylesheet size furigana and Jyutping differently from
       // IPA, and tells the font matcher and screen readers which script they are in.
       if (run.lang) ruby.lang = run.lang;
       ruby.append(run.text);

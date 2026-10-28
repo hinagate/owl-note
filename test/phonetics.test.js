@@ -20,8 +20,8 @@ describe('parseTable', () => {
     expect(parseTable(null).size).toBe(0);
   });
 
-  it('keeps a reading that itself contains spaces, as the pinyin table needs', () => {
-    expect(parseTable('银行\tyín háng\n').get('银行')).toBe('yín háng');
+  it('keeps a reading that itself contains spaces, as the Jyutping table needs', () => {
+    expect(parseTable('銀行\tngan4 hong4\n').get('銀行')).toBe('ngan4 hong4');
   });
 });
 

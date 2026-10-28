@@ -1336,19 +1336,23 @@ body.resizing { user-select: none; cursor: col-resize; }
   font-weight: 400;
   line-height: 1.2;
   color: var(--muted);
-  /* Three scripts share this one rt: IPA, hiragana and tone-marked pinyin. The IPA block
+  /* Three scripts share this one rt: IPA, hiragana and Cantonese Jyutping. The IPA block
      and the CJK faces live in different fonts, so list both — IPA resolves from the SIL
-     faces, kana falls through to the CJK ones, and pinyin's diacritics are covered by
+     faces, kana falls through to the CJK ones, and Jyutping's plain letters and tone digits by
      either. Without the CJK entries, kana lands on tofu on a default Windows install. */
   font-family: "Gentium Plus", "Charis SIL", "Doulos SIL", "Segoe UI",
     "Yu Gothic UI", "Meiryo", "Microsoft JhengHei", "Microsoft YaHei",
     "Noto Sans CJK JP", "Hiragino Sans", "Arial Unicode MS", sans-serif;
   user-select: none; /* copying the preview should yield prose, not prose+readings */
 }
-/* Furigana and pinyin sit over dense CJK glyphs rather than between Latin words, so the
+/* Furigana and Jyutping sit over dense CJK glyphs rather than between Latin words, so the
    same 0.6em reads oversized and pushes the characters apart. */
 .preview-content.phonetics ruby:lang(ja) rt,
-.preview-content.phonetics ruby:lang(zh) rt { font-size: 0.5em; }
+.preview-content.phonetics ruby:lang(yue) rt { font-size: 0.5em; }
+/* A Jyutping syllable (ngan4, hoeng1) is wider than the character under it, and one sits
+   over every character, so side by side they ran together: ngo5dei6gam1. A little room on
+   each side keeps every syllable its own word. */
+.preview-content.phonetics ruby:lang(yue) rt { padding-inline: 0.25em; }
 /* Headings already carry their own weight and spacing; a reading over them is
    readable at a smaller relative size. */
 .preview-content.phonetics :is(h1, h2, h3, h4, h5, h6) rt { font-size: 0.42em; }
@@ -1372,7 +1376,7 @@ body.resizing { user-select: none; cursor: col-resize; }
 /* Room under every English reading for that line: without it the underline lands on the
    top of the word below and reads as if the WORD were underlined. Every English rt gets
    it, cued or not, so the readings on one line stay level. */
-.preview-content.phonetics ruby:not(:lang(ja)):not(:lang(zh)) rt { padding-bottom: 0.35em; }
+.preview-content.phonetics ruby:not(:lang(ja)):not(:lang(yue)) rt { padding-bottom: 0.35em; }
 .preview-content.phonetics rt .cue-longer { text-decoration-style: double; }
 .preview-content.phonetics rt .cue-final { color: #c2410c; font-weight: 600; }
 .editor-bar .phonetics-toggle.on { background: rgba(45, 190, 96, 0.16); border-color: var(--accent); color: var(--accent-dark); font-weight: 600; }

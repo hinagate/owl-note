@@ -501,12 +501,12 @@ function adoptNewBookmark(id, res, session) {
 // Off by default and per-reader, not per-note: whether you want pronunciation help is
 // a property of who is reading, and it must never alter the note's own text.
 //
-// One table per language — IPA over English, hiragana over kanji, pinyin over hanzi — and
-// each is fetched only when a note actually uses that script. That is what keeps the cost
-// honest: a reader of English notes never pays to parse the 1.7 MB kana table, and a
-// reader of Chinese notes pays 170 KB rather than all 2.7 MB.
+// One table per language — IPA over English, hiragana over kanji, Cantonese Jyutping over
+// Chinese characters — and each is fetched only when a note actually uses that script. That
+// is what keeps the cost honest: a reader of English notes never pays to parse the 1.7 MB
+// kana table, and a reader of Cantonese notes pays 250 KB rather than all 2.8 MB.
 const PHONETICS_KEY = 'owl:phonetics';
-const TABLE_FILES = { en: 'ipa-en.tsv.gz', ja: 'kana-ja.tsv.gz', zh: 'pinyin-zh.tsv.gz' };
+const TABLE_FILES = { en: 'ipa-en.tsv.gz', ja: 'kana-ja.tsv.gz', yue: 'jyutping-yue.tsv.gz' };
 const tableUrl = (lang) => chrome.runtime?.getURL?.(TABLE_FILES[lang]) || TABLE_FILES[lang];
 
 const currentBody = () => ui.current?.body || '';
@@ -523,12 +523,12 @@ function neededTables(text) {
 
   const script = detectHanScript(text);
   need.push(script);
-  // A note with kana in it is Japanese overall, but can still hold a Chinese paragraph —
-  // a language-learning note comparing the two is the obvious case. The pinyin table is
-  // 167 KB against the kana table's 1.7 MB, so carrying it as insurance is cheap enough to
+  // A note with kana in it is Japanese overall, but can still hold a Cantonese paragraph —
+  // a language-learning note comparing the two is the obvious case. The Jyutping table is
+  // 250 KB against the kana table's 1.7 MB, so carrying it as insurance is cheap enough to
   // be worth doing unconditionally. The reverse does not hold: a note with no kana anywhere
   // has no Japanese in it, so it never pays for the big table.
-  if (script === 'ja') need.push('zh');
+  if (script === 'ja') need.push('yue');
   return need;
 }
 
@@ -627,9 +627,9 @@ function restorePhonetics(enabled) {
 /** null while nothing is loaded, which renders the note plain instead of half-annotated. */
 function phoneticsSegmenter(text) {
   if (!ui.phonetics) return null;
-  const { en, ja, zh } = ui.phoneticsTables;
-  if (!en && !ja && !zh) return null;
-  return makeSegmenter({ ipa: en, kana: ja, pinyin: zh, script: detectHanScript(text) });
+  const { en, ja, yue } = ui.phoneticsTables;
+  if (!en && !ja && !yue) return null;
+  return makeSegmenter({ ipa: en, kana: ja, jyutping: yue, script: detectHanScript(text) });
 }
 
 // ── Preview zoom ────────────────────────────────────────────────────────────────
@@ -705,7 +705,7 @@ const CAPTURE_EDIT_FRESH_MS = 2 * 60 * 1000;
 let lastQuickCaptureToken = null;
 let quickCaptureQueue = Promise.resolve();
 
-const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, session: null, editorNoteId: null, toolbar: null, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1, indexReady: null, driveEnabled: false, phonetics: false, phoneticsTables: { en: null, ja: null, zh: null }, phoneticsLoading: new Set(), phoneticsBusy: false, previewZoom: DEFAULT_ZOOM, keyBackupNeedsAccess: false, keyBackupNoticeForced: false, keyProtection: null, driveKeysReady: null };
+const ui = { rootId: null, trashId: null, activeFolder: null, activeBookmarkId: null, activeLocalId: null, activeLocalFolderId: null, current: null, editor: null, session: null, editorNoteId: null, toolbar: null, query: '', notes: [], notebooks: [], collapsed: new Set(), hashWired: false, isNew: false, selected: new Set(), anchor: null, focus: -1, indexReady: null, driveEnabled: false, phonetics: false, phoneticsTables: { en: null, ja: null, yue: null }, phoneticsLoading: new Set(), phoneticsBusy: false, previewZoom: DEFAULT_ZOOM, keyBackupNeedsAccess: false, keyBackupNoticeForced: false, keyProtection: null, driveKeysReady: null };
 
 export function resetUI() {
   ui.rootId = null;
@@ -734,7 +734,7 @@ export function resetUI() {
   ui.indexReady = null;
   ui.driveEnabled = false;
   ui.phonetics = false;
-  ui.phoneticsTables = { en: null, ja: null, zh: null };
+  ui.phoneticsTables = { en: null, ja: null, yue: null };
   ui.phoneticsLoading = new Set();
   ui.phoneticsBusy = false;
   phoneticsFailed.clear();

@@ -6,11 +6,11 @@ import { installFakeChrome } from './helpers/fake-chrome.js';
 import { resetTables } from '../src/lib/phonetics.js';
 
 // One stub table per language file the build produces. Values follow the baked format:
-// the kana value is the kanji core only, the pinyin value is one syllable per character.
+// the kana value is the kanji core only, the Jyutping value is one syllable per character.
 const TABLES = {
   'ipa-en.tsv.gz': "phonics\tˈfɑnɪks\nis\tɪz\nuseful\tˈjusfəl\n",
   'kana-ja.tsv.gz': '日本語\tにほんご\n日本\tにほん\n私\tわたし\n読む\tよ\n',
-  'pinyin-zh.tsv.gz': '中\tzhōng\n国\tguó\n银\tyín\n行\txíng\n银行\tyín háng\n',
+  'jyutping-yue.tsv.gz': '中\tzung1\n國\tgwok3\n銀\tngan4\n行\thaang4\n銀行\tngan4 hong4\n',
 };
 
 let fetches;
@@ -134,7 +134,8 @@ describe('phonetics reader', () => {
     // A note in an unsupported language just renders plain, with nothing to explain why,
     // so the tooltip has to carry the scope.
     const hint = toggleBtn().title;
-    for (const language of ['English', 'Japanese', 'Chinese']) expect(hint).toContain(language);
+    for (const language of ['English', 'Japanese', 'Cantonese']) expect(hint).toContain(language);
+    expect(hint).not.toMatch(/Chinese|pinyin|Mandarin/);
     expect(hint).toContain('only');
 
     toggleBtn().click();
@@ -154,23 +155,24 @@ describe('phonetics reader', () => {
     expect(document.querySelector('#editor .preview-content').textContent).toContain('む');
   });
 
-  it('puts pinyin over each hanzi in a Chinese note, with the phrase exception applied', async () => {
-    await openNoteWithBody('中国银行');
+  it('puts Jyutping over each character in a Cantonese note, with the word exception applied', async () => {
+    await openNoteWithBody('中國銀行');
     toggleBtn().click();
     await waitFor(() => rubies().length > 0);
 
     expect(rubies().map((r) => r.querySelector('rt').textContent))
-      .toEqual(['zhōng', 'guó', 'yín', 'háng']); // 行 reads háng here, not xíng
+      .toEqual(['zung1', 'gwok3', 'ngan4', 'hong4']); // 行 reads hong4 here, not haang4
+    expect(rubies().every((r) => r.lang === 'yue')).toBe(true);
   });
 
   it('fetches only the table the note actually needs', async () => {
-    await openNoteWithBody('中国银行');
+    await openNoteWithBody('中國銀行');
     toggleBtn().click();
     await waitFor(() => rubies().length > 0);
 
-    // The whole point of splitting the tables: a Chinese note never pulls the 1.7 MB kana
+    // The whole point of splitting the tables: a Cantonese note never pulls the 1.7 MB kana
     // table, and never pulls the 830 KB English one either.
-    expect(fetches).toEqual(['pinyin-zh.tsv.gz']);
+    expect(fetches).toEqual(['jyutping-yue.tsv.gz']);
   });
 
   it('pulls a second table when the reader opens a note in another language', async () => {

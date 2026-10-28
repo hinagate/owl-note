@@ -168,7 +168,7 @@ own licence:
 | --- | --- | --- |
 | `ipa-en.tsv.gz` — English IPA | [CMU Pronouncing Dictionary](https://github.com/cmusphinx/cmudict) (Carnegie Mellon University) | ISC |
 | `kana-ja.tsv.gz` — Japanese kanji readings | [yomi-dict](https://github.com/marmooo/yomi-dict) | Apache‑2.0 |
-| `pinyin-zh.tsv.gz` — Mandarin pinyin | [CC‑CEDICT](https://www.mdbg.net/chinese/dictionary?page=cc-cedict), via [cedict-json](https://github.com/matt-tingen/cedict-json) | CC BY‑SA 4.0 |
+| `jyutping-yue.tsv.gz` — Cantonese Jyutping | [rime-cantonese](https://github.com/rime/rime-cantonese) (CanCLID), vendored in [`vendor/rime-cantonese`](vendor/rime-cantonese) | CC BY 4.0 |
 
-`pinyin-zh.tsv.gz` is a derivative of CC‑CEDICT and is therefore itself distributed under
-[CC BY‑SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+`jyutping-yue.tsv.gz` is adapted from rime-cantonese's character and word dictionaries and
+is distributed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).

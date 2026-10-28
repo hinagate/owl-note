@@ -18,22 +18,24 @@ const KANA = /[぀-ヿ]/;
 
 // Longest key the baked tables contain. The builders enforce these, and the matcher trusts
 // them: without a bound, one long entry would cost every character in the document a scan
-// that deep. Keep in step with scripts/build-{kana,pinyin}-dict.mjs, which import them.
+// that deep. Keep in step with scripts/build-{kana,jyutping}-dict.mjs, which import them.
 export const MAX_SURFACE = 8;
 export const MAX_PHRASE = 6;
 
 /**
  * Han characters alone cannot say whether text is Japanese or Chinese, so decide from the
- * company they keep: any kana at all means Japanese.
- * @returns {'ja'|'zh'}
+ * company they keep: any kana at all means Japanese. Chinese is read in Cantonese — the
+ * only Chinese reading this app offers.
+ * @returns {'ja'|'yue'}
  */
 export function detectHanScript(text) {
-  return KANA.test(String(text || '')) ? 'ja' : 'zh';
+  return KANA.test(String(text || '')) ? 'ja' : 'yue';
 }
 
 // How much of a kana-less block the Japanese dictionary must account for before we still
-// call it Japanese. Real Japanese scores near 1.0; Chinese lands around 0.5, because
-// simplified forms (习, 门, 让, 的) match nothing in a Japanese word list.
+// call it Japanese. Real Japanese scores near 1.0; written Cantonese lands far lower,
+// because its own characters (嘅, 咗, 佢, 哋) and Traditional forms Japanese simplified
+// (們, 個, 這) match nothing in a Japanese word list.
 const JA_COVERAGE = 0.8;
 // Below this many Han characters there is not enough signal to overrule the note.
 const MIN_HAN = 3;
@@ -61,21 +63,42 @@ function japaneseCoverage(text, kana) {
   return { han, ratio: han ? covered / han : 1 };
 }
 
+// Every character any Japanese entry is written with, per loaded kana table. Built once —
+// a pass over its ~374k keys — the first time a kana-less block needs judging.
+const japaneseChars = new WeakMap();
+function charsJapaneseUses(kana) {
+  let chars = japaneseChars.get(kana);
+  if (!chars) {
+    chars = new Set();
+    for (const key of kana.keys()) for (const char of key) chars.add(char);
+    japaneseChars.set(kana, chars);
+  }
+  return chars;
+}
+
 /**
  * Which script THIS block is in, given what the note as a whole looked like.
  *
  * Per block rather than per note because one note really can hold both: a language-learning
- * note setting a Japanese sentence beside its Chinese equivalent is the case this exists
+ * note setting a Japanese sentence beside its Cantonese equivalent is the case this exists
  * for. Kana in the block settles it outright. Without kana the note-level answer usually
  * still applies — a kanji-only heading inside a Japanese note is Japanese — so that is the
- * default, and only a block the Japanese dictionary cannot account for moves to Chinese.
- * @returns {'ja'|'zh'}
+ * default, and only a block the Japanese dictionary cannot account for moves to Cantonese.
+ *
+ * Coverage alone was fooled by 得閒出來飲茶: the dictionary knows 出來 (an old spelling of
+ * 出来) and 飲茶, so five of six characters "were Japanese". A character that no Japanese
+ * entry is written with at all settles it instead — written Cantonese (佢, 哋, 嘅) and
+ * Traditional forms Japanese replaced (閒, 們). Japanese has no reading for such a character
+ * anyway, so even a lone one is better read as Cantonese.
+ * @returns {'ja'|'yue'}
  */
-export function scriptForBlock(text, kana, fallback = 'zh') {
+export function scriptForBlock(text, kana, fallback = 'yue') {
   if (KANA.test(text)) return 'ja';
-  if (fallback === 'zh' || !kana) return fallback;
+  if (fallback === 'yue' || !kana) return fallback;
+  const japanese = charsJapaneseUses(kana);
+  for (const char of text) if (KANJI.test(char) && !japanese.has(char)) return 'yue';
   const { han, ratio } = japaneseCoverage(text, kana);
-  return han >= MIN_HAN && ratio < JA_COVERAGE ? 'zh' : fallback;
+  return han >= MIN_HAN && ratio < JA_COVERAGE ? 'yue' : fallback;
 }
 
 /** @returns {boolean} whether the text has any Han character worth a CJK table at all. */
@@ -101,7 +124,7 @@ function longestMatch(table, text, from, limit) {
 
 /**
  * Build a segmenter over whichever tables are loaded.
- * @param {{ ipa?: Map|null, kana?: Map|null, pinyin?: Map|null, script?: 'ja'|'zh' }} tables
+ * @param {{ ipa?: Map|null, kana?: Map|null, jyutping?: Map|null, script?: 'ja'|'yue' }} tables
  *   `script` is the note-level reading, used as the default for blocks that hold no kana
  *   of their own; each block is still classified individually.
  * @returns {(text: string) => { text: string, reading: string|null, parts?: object[] }[]}
@@ -110,19 +133,19 @@ function longestMatch(table, text, from, limit) {
  *   English runs may carry `parts`, the reading split into pronunciation cues
  *   (see ./ipa-cues.js).
  */
-export function makeSegmenter({ ipa = null, kana = null, pinyin = null, script = 'zh' } = {}) {
+export function makeSegmenter({ ipa = null, kana = null, jyutping = null, script = 'yue' } = {}) {
   return function segment(input) {
     const text = String(input || '');
     // The annotator calls this once per text node, so "block" is a paragraph or smaller —
-    // fine enough that a Chinese line inside a Japanese note is judged on its own.
+    // fine enough that a Cantonese line inside a Japanese note is judged on its own.
     const blockScript = scriptForBlock(text, kana, script);
-    const cjk = blockScript === 'ja' ? kana : pinyin;
+    const cjk = blockScript === 'ja' ? kana : jyutping;
     const limit = blockScript === 'ja' ? MAX_SURFACE : MAX_PHRASE;
     // Where a dictionary entry may begin. Japanese has to include kana, because entries
     // like お茶 and ご飯 start with one — matching only at kanji would leave those forever
     // unread. The kana table only holds kanji-bearing surfaces, so trying at a kana costs
-    // a miss at worst, never a wrong reading. Pinyin keys are Han-only, so Chinese needs
-    // no such rule.
+    // a miss at worst, never a wrong reading. Jyutping keys are Han-only, so Cantonese
+    // needs no such rule.
     const startsEntry = blockScript === 'ja' ? /[一-鿿㐀-䶿぀-ヿ]/ : KANJI;
 
     const runs = [];
@@ -140,7 +163,7 @@ export function makeSegmenter({ ipa = null, kana = null, pinyin = null, script =
         const hit = longestMatch(cjk, text, at, limit);
         if (hit) {
           if (blockScript === 'ja') emitJapanese(hit, keep, flush, runs);
-          else emitChinese(hit, flush, runs);
+          else emitCantonese(hit, flush, runs);
           at += hit.key.length;
           continue;
         }
@@ -206,11 +229,11 @@ function emitJapanese({ key, value }, keep, flush, runs) {
   keep(key.slice(end));
 }
 
-/** Pinyin is written per character, so a matched phrase becomes one ruby per hanzi. */
-function emitChinese({ key, value }, flush, runs) {
+/** Jyutping is written per character, so a matched word becomes one ruby per character. */
+function emitCantonese({ key, value }, flush, runs) {
   const syllables = value.split(' ');
   flush();
   [...key].forEach((char, i) => {
-    runs.push({ text: char, reading: syllables[i] ?? null, lang: 'zh' });
+    runs.push({ text: char, reading: syllables[i] ?? null, lang: 'yue' });
   });
 }
