@@ -27,6 +27,18 @@ describe('buildIpaTable', () => {
     expect(table.get('speed')).toBe('spiːd'); // content words untouched
   });
 
+  it('bakes the spoken form of words CMUdict gives in a careful one', () => {
+    const table = rows(buildIpaTable({
+      vehicle: 'V IY1 HH IH0 K AH0 L', vehicles: 'V IY1 HH IH0 K AH0 L Z',
+      camera: 'K AE1 M ER0 AH0', cameras: 'K AE1 M ER0 AH0 Z', lead: 'L EH1 D',
+    }).text);
+    expect(table.get('vehicle')).toBe('ˈviː.ɪ.kəl'); // the h is silent
+    expect(table.get('vehicles')).toBe('ˈviː.ɪ.kəlz');
+    expect(table.get('camera')).toBe('ˈkæm.rə'); // two syllables
+    expect(table.get('cameras')).toBe('ˈkæm.rəz');
+    expect(table.get('lead')).toBe('liːd'); // not the metal
+  });
+
   // The point of the weak forms: no function word tells the reader to hold it. The full
   // dictionary is the source, so a new entry or a changed reading is caught here.
   it('leaves no length mark on any function word, except the ones stressed on purpose', async () => {

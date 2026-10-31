@@ -11,8 +11,13 @@ const APOSTROPHES = /[’‘＇]/g;
 
 // A word may carry internal apostrophes and hyphens because CMUdict does too: "don't",
 // "cat's" and "well-known" are all single entries. Splitting on them would turn one
-// correct lookup into two misses.
-const WORD = /\p{L}+(?:['-]\p{L}+)*/gu;
+// correct lookup into two misses. The apostrophe may be typographic (’) — Word, phones and
+// most web text type it — and normalizeWord maps it back: before it was accepted here,
+// I’ve split into I + "ve", read as the letter V, and don’t into the name Don + the letter T.
+// A run of digits is a token too, so a number can be read as its words. Separators bind
+// it to its neighbours (1,000 · 3.5 · 10:30), so the whole run is one token and is
+// either read whole or left alone — never "1" + "000".
+const TOKEN = /(\p{L}+(?:['’‘＇-]\p{L}+)*)|(\d+(?:[.,:]\d+)*)/gu;
 
 /** @param {string} text TSV as produced by the scripts/build-*-dict.mjs bakers */
 export function parseTable(text) {
@@ -33,16 +38,16 @@ export function normalizeWord(raw) {
 
 /**
  * Split text into alternating runs so an annotator can wrap the words and leave every
- * space, digit and punctuation mark exactly where it was.
- * @returns {{ text: string, isWord: boolean }[]}
+ * space and punctuation mark exactly where it was.
+ * @returns {{ text: string, isWord: boolean, isNumber?: boolean }[]}
  */
 export function tokenize(text) {
   const source = String(text || '');
   const out = [];
   let at = 0;
-  for (const match of source.matchAll(WORD)) {
+  for (const match of source.matchAll(TOKEN)) {
     if (match.index > at) out.push({ text: source.slice(at, match.index), isWord: false });
-    out.push({ text: match[0], isWord: true });
+    out.push(match[1] ? { text: match[0], isWord: true } : { text: match[0], isWord: false, isNumber: true });
     at = match.index + match[0].length;
   }
   if (at < source.length) out.push({ text: source.slice(at), isWord: false });

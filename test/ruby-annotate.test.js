@@ -136,6 +136,53 @@ describe('annotateRuby', () => {
     expect([...rt.children].map((span) => span.className)).toEqual(['stressed', 'cue-long stressed', 'cue-final stressed']);
   });
 
+  it('marks a held stop with its own class, alongside any cue', () => {
+    annotateRuby(html('<p>asked</p>'), () => [{
+      text: 'asked',
+      reading: 'æskt',
+      parts: [
+        { text: 'æ', cue: null, stressed: true },
+        { text: 'sk', cue: 'final', stressed: true },
+        { text: 't', cue: 'final', stressed: true, held: true },
+      ],
+    }]);
+    const rt = root.querySelector('rt');
+    expect(rt.textContent).toBe('æskt'); // the brackets are drawn by CSS, not written
+    expect(rt.querySelector('.held').className).toBe('cue-final stressed held');
+  });
+
+  it('marks the start of a word that takes the falling mark', () => {
+    annotateRuby(html('<p>street</p>'), () => [{
+      text: 'street',
+      reading: 'striːt',
+      parts: [
+        { text: 'str', cue: null, stressed: true, fall: true },
+        { text: 'iː', cue: 'long', stressed: true },
+        { text: 't', cue: null, stressed: true, held: true },
+      ],
+    }]);
+    const rt = root.querySelector('rt');
+    expect(rt.textContent).toBe('striːt'); // the arrow is drawn by CSS, not written
+    expect(rt.firstElementChild.className).toBe('stressed fall');
+  });
+
+  // Every ruby is nowrap, so Chrome stopped seeing the spaces between them as places to
+  // break; a comma then won, and "Second," sat alone on its line.
+  it('puts a break opportunity after each space and between touching readings', () => {
+    annotateRuby(html('<p>Second, live video 銀行</p>'), (text) => [
+      { text: 'Second', reading: 'ˈsɛk.ənd' }, { text: ', ', reading: null },
+      { text: 'live', reading: 'laɪv' }, { text: ' ', reading: null },
+      { text: 'video', reading: 'ˈvɪd.i.oʊ' }, { text: ' ', reading: null },
+      { text: '銀', reading: 'ngan4', lang: 'yue' }, { text: '行', reading: 'hong4', lang: 'yue' },
+    ].filter(() => text.length));
+    const p = root.querySelector('p');
+    const plain = p.cloneNode(true); plain.querySelectorAll('rt').forEach((rt) => rt.remove());
+    expect(plain.textContent).toBe('Second, live video 銀行'); // <wbr> adds no text: copying is unchanged
+    const shape = [...p.childNodes].map((n) => (n.nodeType === 3 ? JSON.stringify(n.nodeValue) : n.tagName.toLowerCase())).join(' ');
+    expect(shape).toBe('ruby ", " wbr ruby " " wbr ruby " " wbr ruby wbr ruby');
+    expect([...p.querySelectorAll('ruby')].map((r) => r.firstChild.nodeValue).join('')).toBe('Secondlivevideo銀行');
+  });
+
   it('ignores parts that would not rebuild the reading', () => {
     annotateRuby(html('<p>speed</p>'), () => [{
       text: 'speed',

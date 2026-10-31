@@ -10,8 +10,9 @@
 // English and kana on the kanji without either table knowing the other exists.
 
 import { tokenize } from './phonetics.js';
-import { pronunciationCues } from './ipa-cues.js';
-import { readEnglish, PREFIX_READINGS } from './english-forms.js';
+import { pronunciationCues, holdFinalStop, startsWithConsonant } from './ipa-cues.js';
+import { readEnglish, readNumber, PREFIX_READINGS } from './english-forms.js';
+import { heteronymReading, isHeteronym, isSkipped } from './heteronyms.js';
 
 const KANJI = /[一-鿿㐀-䶿]/;
 const KANA = /[぀-ヿ]/;
@@ -186,7 +187,21 @@ export function makeSegmenter({ ipa = null, kana = null, jyutping = null, script
         const parts = pronunciationCues(reading, word);
         runs.push(parts ? { text, reading, parts } : { text, reading });
       };
+      // A number is read in English only in English company: 8 in "for about 8 years" is
+      // eight, but in 我有8個 or a line with no Latin letters at all it is not English.
+      const latinBlock = hasLatin(text);
+      let offset = at;
       for (const run of tokenize(text.slice(at, end))) {
+        const from = offset;
+        offset += run.text.length;
+        if (run.isNumber) {
+          const touchesCjk = startsEntry.test(text[from - 1] || '') || startsEntry.test(text[offset] || '');
+          const number = ipa && latinBlock && !touchesCjk ? readNumber(ipa, run.text) : null;
+          if (!number) { keep(run.text); continue; }
+          // One word (8 → eight) gets that word's cues; several (25) read plainly.
+          emitEnglish(number.words.length === 1 ? number.words[0] : run.text, number.reading, run.text);
+          continue;
+        }
         if (!run.isWord || !ipa) { keep(run.text); continue; }
         const reading = readEnglish(ipa, run.text);
         if (reading || !run.text.includes('-')) { emitEnglish(run.text, reading); continue; }
@@ -207,8 +222,82 @@ export function makeSegmenter({ ipa = null, kana = null, jyutping = null, script
     }
 
     flush();
-    return runs;
+    return markHeldStops(applyHeteronyms(runs));
   };
+}
+
+const isEnglishRun = (run) => Boolean(run?.reading) && !run.lang;
+
+/**
+ * Give each heteronym (use, read, live …) the reading its neighbours call for — see
+ * ./heteronyms.js. Runs before markHeldStops, which depends on how the word now ends.
+ */
+function applyHeteronyms(runs) {
+  runs.forEach((run, i) => {
+    if (!isEnglishRun(run) || !isHeteronym(run.text)) return;
+    const reading = heteronymReading(run.text, neighbours(runs, i));
+    if (!reading || reading === run.reading) return;
+    run.reading = reading;
+    const parts = pronunciationCues(reading, run.text);
+    if (parts) run.parts = parts;
+    else delete run.parts;
+  });
+  return runs;
+}
+
+/**
+ * The words either side of runs[i]. Looking back, adverbs are passed over (We also use →
+ * We); a pause, a word with no reading, or CJK text ends the search with nothing found,
+ * and a sentence end — or the start of the text — also says the word opens a sentence.
+ * Looking forward, only spaces may come between.
+ */
+function neighbours(runs, i) {
+  let prev = null;
+  let sentenceStart = false;
+  for (let j = i - 1; ; j -= 1) {
+    if (j < 0) { sentenceStart = true; break; }
+    const run = runs[j];
+    if (isEnglishRun(run)) {
+      if (isSkipped(run.text)) continue;
+      prev = run.text;
+      break;
+    }
+    if (run.lang) break;
+    const gap = run.text.trim();
+    if (!gap) continue;
+    if (/^[.!?…"”’)\]]+$/.test(gap)) sentenceStart = true;
+    break;
+  }
+  let next = null;
+  for (let j = i + 1; j < runs.length; j += 1) {
+    const run = runs[j];
+    if (isEnglishRun(run)) { next = run.text; break; }
+    if (run.lang || /\S/.test(run.text)) break;
+  }
+  return { prev, next, sentenceStart };
+}
+
+/**
+ * Mark the words whose final p, t or k is held — which depends on the word AFTER it. Only
+ * a consonant takes the stop silently (what do → wʌ(t)); a vowel links to it instead
+ * (what is → "wha-dis"), and before a pause it varies, so neither is marked. Nothing but
+ * spaces may come between the two words: a comma is a pause.
+ */
+function markHeldStops(runs) {
+  const isEnglish = isEnglishRun;
+  runs.forEach((run, i) => {
+    if (!isEnglish(run)) return;
+    let next = runs[i + 1];
+    // A hyphenated part (high-) carries its hyphen, so the next part follows with no gap.
+    if (!run.text.endsWith('-')) {
+      if (!next || next.reading || !/^[ \t\u00a0]+$/.test(next.text)) return;
+      next = runs[i + 2];
+    }
+    if (!isEnglish(next) || !startsWithConsonant(next.reading)) return;
+    const parts = holdFinalStop(run.reading, run.parts ?? null);
+    if (parts) run.parts = parts;
+  });
+  return runs;
 }
 
 /**

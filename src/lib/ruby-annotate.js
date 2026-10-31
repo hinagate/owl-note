@@ -17,13 +17,21 @@
 //   .mermaid-diagram  — SVG text laid out to the pixel; HTML ruby inside it is invalid
 const SKIP = 'code, pre, kbd, samp, .katex, ruby, .mermaid-diagram';
 
+// Every ruby is white-space: nowrap (app.css), so Chrome cannot break a word and its reading
+// across two lines. The cost: Chrome stops treating the space between two such rubies as a
+// place to break. Lines still wrapped, but only through the preview's emergency
+// overflow-wrap — until a comma or full stop offered a real break, which Chrome then took
+// however early it came: "Second," alone on a line, the rest of the sentence on the next.
+// An explicit <wbr> after each space, and between two rubies that touch, gives back every
+// break the plain text had. It adds no text, so copying the preview is unchanged.
+
 /**
  * @param {Element} root subtree to annotate, mutated in place
- * @param {(text: string) => { text: string, reading: string|null, lang?: string, parts?: { text: string, cue: string|null, stressed?: boolean }[] }[]} segment
+ * @param {(text: string) => { text: string, reading: string|null, lang?: string, parts?: { text: string, cue: string|null, stressed?: boolean, held?: boolean, fall?: boolean }[] }[]} segment
  *   splits text into runs, each carrying its reading or null and optionally the BCP-47
  *   language of that reading; the runs must rebuild the text exactly. A run may also
- *   split its reading into `parts`; each part with a `cue` or `stressed` is wrapped in
- *   <span class="cue-… stressed"> so the stylesheet can mark it. Parts that do not
+ *   split its reading into `parts`; each part with a `cue`, `stressed`, `held` or `fall`
+ *   is wrapped in <span class="cue-… stressed held fall"> so the stylesheet can mark it. Parts that do not
  *   rebuild the reading are ignored rather than trusted.
  * @returns {number} how many runs were annotated
  */
@@ -51,10 +59,11 @@ export function annotateRuby(root, segment) {
     if (!runs.some((run) => run.reading)) continue;
 
     const fragment = document.createDocumentFragment();
-    for (const run of runs) {
+    runs.forEach((run, i) => {
       if (!run.reading) {
         fragment.append(run.text);
-        continue;
+        if (/\s$/.test(run.text)) fragment.append(document.createElement('wbr'));
+        return;
       }
       const ruby = document.createElement('ruby');
       // Tagging the language lets the stylesheet size furigana and Jyutping differently from
@@ -66,9 +75,10 @@ export function annotateRuby(root, segment) {
         // Cued or stressed pieces of the reading become spans the stylesheet can mark; the
         // rest stays text. The check above guarantees the rt still says exactly the reading.
         for (const part of run.parts) {
-          if (!part.cue && !part.stressed) { rt.append(part.text); continue; }
+          if (!part.cue && !part.stressed && !part.held && !part.fall) { rt.append(part.text); continue; }
           const span = document.createElement('span');
-          span.className = [part.cue && `cue-${part.cue}`, part.stressed && 'stressed'].filter(Boolean).join(' ');
+          span.className = [part.cue && `cue-${part.cue}`, part.stressed && 'stressed', part.held && 'held', part.fall && 'fall']
+            .filter(Boolean).join(' ');
           span.textContent = part.text;
           rt.append(span);
         }
@@ -77,8 +87,11 @@ export function annotateRuby(root, segment) {
       }
       ruby.append(rt);
       fragment.append(ruby);
+      // Two readings side by side — a hyphenated part (high-) and the next, or two Chinese
+      // characters — may break between them, as the text would without the readings.
+      if (runs[i + 1]?.reading) fragment.append(document.createElement('wbr'));
       annotated += 1;
-    }
+    });
     node.parentNode?.replaceChild(fragment, node);
   }
   return annotated;

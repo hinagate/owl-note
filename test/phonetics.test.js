@@ -33,6 +33,20 @@ describe('tokenize', () => {
       .toEqual(['Phonics', 'is', 'useful']);
   });
 
+  // Word, phones and most web text type the curly ’. It used to split I’ve into I + "ve"
+  // (read as the letter V) and don’t into the name Don + the letter T.
+  it('keeps a word whole across a typographic apostrophe', () => {
+    expect(tokenize('I\u2019ve been, don\u2019t, it\u2019s').filter((t) => t.isWord).map((t) => t.text))
+      .toEqual(['I\u2019ve', 'been', 'don\u2019t', 'it\u2019s']);
+  });
+
+  it('gives a number a token of its own, separators and all, apart from the words', () => {
+    const tokens = tokenize('for about 8 years, 1,000 and 3.5');
+    expect(tokens.filter((t) => t.isNumber).map((t) => t.text)).toEqual(['8', '1,000', '3.5']);
+    expect(tokens.filter((t) => t.isWord).map((t) => t.text)).toEqual(['for', 'about', 'years', 'and']);
+    expect(tokens.map((t) => t.text).join('')).toBe('for about 8 years, 1,000 and 3.5');
+  });
+
   it('holds apostrophes and hyphens inside the word, matching CMUdict entries', () => {
     expect(tokenize("don't stop").filter((t) => t.isWord).map((t) => t.text))
       .toEqual(["don't", 'stop']);

@@ -183,6 +183,99 @@ describe('Cantonese segmentation', () => {
   });
 });
 
+// "Wha' do you want": a final p, t or k before another consonant is held, silently.
+describe('held stops before a consonant', () => {
+  const en = makeSegmenter({
+    ipa: parseTable([
+      'what\twʌt', 'do\tdu', 'you\tjə', 'want\twɑːnt', 'is\tɪz', 'it\tɪt', 'at\tət',
+      'school\tskuːl', 'asked\tæskt', 'me\tmi', 'hour\tˈaʊ.ɚ', 'book\tbʊk', 'well-known\tˈwɛlˈnoʊn',
+    ].join('\n')),
+  });
+  const held = (text) => en(text).filter((r) => r.parts?.some((p) => p.held))
+    .map((r) => `${r.text}=${r.parts.map((p) => (p.held ? `(${p.text})` : p.text)).join('')}`);
+
+  it('holds the t of what before do, but not the t of want at the end', () => {
+    expect(held('What do you want')).toEqual(['What=wʌ(t)']);
+  });
+
+  it('lets a vowel link instead: what is, it is, at an hour', () => {
+    expect(held('what is it')).toEqual([]);
+    expect(held('at an hour')).toEqual([]);
+  });
+
+  it('treats punctuation as a pause, not a link', () => {
+    expect(held('what, do')).toEqual([]);
+    expect(held('what. Do')).toEqual([]);
+  });
+
+  it('holds a function word too, and a stop inside an orange cluster', () => {
+    expect(held('at school')).toEqual(['at=ə(t)']);
+    expect(held('asked me')).toEqual(['asked=æsk(t)']);
+    expect(held('book me')).toEqual(['book=bʊ(k)']);
+  });
+
+  it('gives street smarts the falling mark and the held t together', () => {
+    const seg = makeSegmenter({ ipa: parseTable('street\tstriːt\nsmarts\tsmɑːrts\n') });
+    const [street, , smarts] = seg('street smarts');
+    expect(street.parts.map((p) => [p.text, Boolean(p.fall), Boolean(p.held)]))
+      .toEqual([['str', true, false], ['iː', false, false], ['t', false, true]]);
+    expect(smarts.parts[0].fall).toBe(true); // held vowel too; at the end, nothing to hold
+    expect(smarts.parts.some((p) => p.held)).toBe(false);
+  });
+
+  it('never changes what the runs say', () => {
+    for (const text of ['What do you want', 'at school', 'asked me, what is it']) {
+      expect(rebuilds(en, text)).toBe(true);
+      for (const run of en(text)) {
+        if (run.parts) expect(run.parts.map((p) => p.text).join('')).toBe(run.reading);
+      }
+    }
+  });
+});
+
+// From a review of real notes: each of these was read wrong.
+describe('reading English in context', () => {
+  const en = makeSegmenter({
+    ipa: parseTable([
+      'second\tˈsɛk.ənd', 'live\tlaɪv', 'video\tˈvɪd.i.oʊ', 'we\twi', 'also\tˈɔːl.soʊ', 'use\tjuːs',
+      'this\tðɪs', "i've\taɪv", 'been\tbɪn', 'for\tfɚ', 'about\təˈbaʊt', 'eight\teɪt',
+      'years\tjɪrz', 'people\tˈpiː.pəl', 'who\thu', 'in\tɪn', 'i\taɪ', 'have\thæv', 'read\trɛd',
+      'it\tɪt', 'the\tðə', 'news\tnuːz', 'make\tmeɪk', 'of\təv',
+    ].join('\n')),
+  });
+  const reading = (text, word) => en(text).find((r) => r.text === word)?.reading;
+
+  it('keeps live an adjective before a noun, and a verb after a subject or before in', () => {
+    expect(reading('Second, live video', 'live')).toBe('laɪv');
+    expect(reading('People who live in', 'live')).toBe('lɪv');
+  });
+
+  it('looks past an adverb to find the subject: We also use → the verb', () => {
+    expect(reading('We also use this', 'use')).toBe('juːz');
+    expect(reading('Make use of this', 'use')).toBe('juːs');
+  });
+
+  it('reads read as the past only after have', () => {
+    expect(reading('I read the news', 'read')).toBe('riːd');
+    expect(reading('I have read it', 'read')).toBe('rɛd');
+  });
+
+  it('reads I\u2019ve as one word, and 8 as eight with its t held', () => {
+    const runs = en('I\u2019ve been for about 8 years');
+    expect(runs.find((r) => r.text === 'I\u2019ve').reading).toBe('aɪv');
+    const eight = runs.find((r) => r.text === '8');
+    expect(eight.reading).toBe('eɪt');
+    expect(eight.parts.map((p) => (p.held ? `(${p.text})` : p.text)).join('')).toBe('eɪ(t)');
+    expect(rebuilds(en, 'I\u2019ve been for about 8 years')).toBe(true);
+  });
+
+  it('never reads a number in Chinese or Japanese company', () => {
+    const mixed = makeSegmenter({ ipa: parseTable('eight\teɪt\n'), jyutping: parseTable('有\tjau5\n個\tgo3\n') });
+    expect(mixed('我有8個').some((r) => r.text === '8' && r.reading)).toBe(false);
+    expect(mixed('有 8 個').some((r) => r.text === '8' && r.reading)).toBe(false);
+  });
+});
+
 describe('English words the dictionary does not list', () => {
   const en = makeSegmenter({
     ipa: parseTable([

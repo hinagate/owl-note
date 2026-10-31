@@ -1357,11 +1357,14 @@ body.resizing { user-select: none; cursor: col-resize; }
    readable at a smaller relative size. */
 .preview-content.phonetics :is(h1, h2, h3, h4, h5, h6) rt { font-size: 0.42em; }
 /* Pronunciation cues inside an English reading (src/lib/ipa-cues.js), each on its own
-   channel so they never compete at 0.6em: SHADE is stress (the main stressed syllable
-   dark, the rest the muted rt grey, so function words stay light all through), a line
-   under a vowel means "hold it" (double: hold it longer still), and orange on the last
-   consonants means "say these, don't swallow them". */
-.preview-content.phonetics rt .stressed { color: var(--text); }
+   channel so they never compete at 0.6em: BLUE is stress (the main stressed syllable blue,
+   the rest the muted rt grey, so function words stay grey all through), a line under a
+   vowel means "hold it" (double: hold it longer still), orange on the last consonants
+   means "don't drop these", (t) a stop made silently, and ↘ "let the pitch fall".
+   Blue rather than dark: dark against the grey was too close to tell apart. #0284c7 keeps
+   a readable contrast (~4:1); the paler #87CEFA first asked for measured 1.7:1, fainter
+   than the grey it was meant to stand out from. */
+.preview-content.phonetics rt .stressed { color: #0284c7; }
 .preview-content.phonetics rt .cue-long,
 .preview-content.phonetics rt .cue-longer {
   /* inline-block: a reading narrower than its word is centred, and Chrome hands that
@@ -1379,6 +1382,24 @@ body.resizing { user-select: none; cursor: col-resize; }
 .preview-content.phonetics ruby:not(:lang(ja)):not(:lang(yue)) rt { padding-bottom: 0.35em; }
 .preview-content.phonetics rt .cue-longer { text-decoration-style: double; }
 .preview-content.phonetics rt .cue-final { color: #c2410c; font-weight: 600; }
+/* A final p/t/k held before the next consonant — What do you want → wʌ(t): the stop
+   happens, silently. Brackets drawn here, not written into the reading, so the reading's
+   text stays exactly the dictionary's. They take the sound's own colour, orange included. */
+.preview-content.phonetics rt .held::before { content: '('; }
+.preview-content.phonetics rt .held::after { content: ')'; }
+/* A one-syllable word whose vowel is held: hold it, but let the pitch FALL — the Cantonese
+   habit is to rise, like 史 si2, which sounds like a question (street smarts). Drawn in
+   the reading's grey so it never reads as part of the stress colour. */
+/* inline-block: a word that starts with its held vowel (eat) carries the arrow inside the
+   underlined span, and an underline does not reach into an inline-block. The filled arrow
+   ⬊ rather than the IPA ↘: at reading size the thin one's head vanished and it read as a
+   backslash (\juːs). The symbol fonts carry it on Windows, macOS and ChromeOS. */
+.preview-content.phonetics rt .fall::before {
+  content: '⬊'; display: inline-block; margin-right: 0.1em;
+  font-family: "Segoe UI Symbol", "Apple Symbols", "Noto Sans Symbols 2", sans-serif;
+  font-size: 1.15em; line-height: 1;
+  color: var(--muted); font-weight: 400; text-decoration: none;
+}
 .editor-bar .phonetics-toggle.on { background: rgba(45, 190, 96, 0.16); border-color: var(--accent); color: var(--accent-dark); font-weight: 600; }
 .editor-bar .phonetics-toggle[disabled] { opacity: 0.6; cursor: progress; }
 

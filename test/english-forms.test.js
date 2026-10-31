@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { inflectionBases, addEnding, readEnglish } from '../src/lib/english-forms.js';
+import {
+  inflectionBases, addEnding, readEnglish, numberWords, readNumber,
+} from '../src/lib/english-forms.js';
 import { parseTable } from '../src/lib/phonetics.js';
 import { arpabetToIpa } from '../src/lib/arpabet.js';
 
@@ -57,6 +59,42 @@ describe('readEnglish — words the dictionary lacks, built from their base', ()
     expect(readEnglish(table, 'car')).toBe('kɑːr');
     expect(readEnglish(table, 'kubernetes')).toBeNull();
     expect(readEnglish(null, 'architecting')).toBeNull();
+  });
+});
+
+describe('numberWords', () => {
+  it('reads whole numbers as American cardinals', () => {
+    expect(numberWords('8')).toEqual(['eight']);
+    expect(numberWords('0')).toEqual(['zero']);
+    expect(numberWords('25')).toEqual(['twenty', 'five']);
+    expect(numberWords('105')).toEqual(['one', 'hundred', 'five']);
+    expect(numberWords('3412')).toEqual(['three', 'thousand', 'four', 'hundred', 'twelve']);
+  });
+
+  it('reads a four-digit year in pairs', () => {
+    expect(numberWords('2026')).toEqual(['twenty', 'twenty', 'six']);
+    expect(numberWords('1999')).toEqual(['nineteen', 'ninety', 'nine']);
+    expect(numberWords('1905')).toEqual(['nineteen', 'oh', 'five']);
+    expect(numberWords('1900')).toEqual(['nineteen', 'hundred']);
+    expect(numberWords('2005')).toEqual(['two', 'thousand', 'five']);
+  });
+
+  it('leaves alone what depends on what the number is', () => {
+    for (const text of ['007', '10000', '1,000', '3.5', '10:30', '', 'eight']) expect(numberWords(text), text).toBeNull();
+  });
+});
+
+describe('readNumber', () => {
+  const nums = parseTable(['eight\teɪt', 'twenty\tˈtwɛn.ti', 'five\tfaɪv'].join('\n'));
+
+  it('looks each word up and joins the readings', () => {
+    expect(readNumber(nums, '8')).toEqual({ words: ['eight'], reading: 'eɪt' });
+    expect(readNumber(nums, '25')).toEqual({ words: ['twenty', 'five'], reading: 'ˈtwɛn.ti faɪv' });
+  });
+
+  it('gives up when any word has no reading', () => {
+    expect(readNumber(nums, '9')).toBeNull();
+    expect(readNumber(null, '8')).toBeNull();
   });
 });
 

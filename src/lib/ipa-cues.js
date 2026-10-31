@@ -61,6 +61,16 @@ export const WEAK_FORMS = {
   on: 'ɑn',
 };
 
+// Readings CMUdict gives in a careful or dated form rather than as the word is said, baked
+// in by scripts/build-ipa-dict.mjs the same way. vehicle keeps an h natural speech drops,
+// camera a middle syllable it squeezes out; lead's first reading is the metal (lɛd), rarer
+// in a note than to lead or the lead (liːd).
+export const SPOKEN_FORMS = {
+  vehicle: 'ˈviː.ɪ.kəl', vehicles: 'ˈviː.ɪ.kəlz',
+  camera: 'ˈkæm.rə', cameras: 'ˈkæm.rəz',
+  lead: 'liːd',
+};
+
 /**
  * Split an IPA reading into symbols.
  * @returns {{ text: string, kind: 'vowel'|'consonant'|'mark' }[] | null} null when the
@@ -97,9 +107,10 @@ const wordKey = (word) => String(word || '').replace(/[’‘＇]/g, "'").toLowe
  *   - longer: both at once, so hold it longer still (speed, cards)
  *   - final:  a word-final consonant Cantonese has no habit of saying
  *   - stressed: inside the syllable that carries the word's main stress (ˈ), or the whole
- *             of a one-syllable word. The page shows it darker than the rest of the
- *             reading, which is all it takes to see where the weight falls in distracted
- *             /dɪˈstræk.təd/. Secondary stress (ˌ) stays light, so the main one stands out.
+ *             of a one-syllable word. The page shows it in blue against the grey of the
+ *             rest, which is all it takes to see where the weight falls in distracted
+ *             /dɪˈstræk.təd/. Secondary stress (ˌ) stays grey, so the main one stands out.
+ *   - fall (on the first part only): a one-syllable word whose vowel is held — see below.
  */
 export function pronunciationCues(ipa, word = '') {
   if (UNSTRESSED_WORDS.has(wordKey(word))) return null;
@@ -168,5 +179,51 @@ export function pronunciationCues(ipa, word = '') {
     if (prev && prev.cue === cues[i] && prev.stressed === stress[i]) prev.text += symbol.text;
     else parts.push({ text: symbol.text, cue: cues[i], stressed: stress[i] });
   });
+
+  // A single held syllable is where a Cantonese reader's pitch rises: street said like the
+  // rising tone of 史 si2, which sounds like a question and cuts it off from the next
+  // word (street smarts). English says a stressed syllable high and lets it fall, so such
+  // a word gets ↘ before it: hold the vowel, but let the pitch go down. Longer words get
+  // their shape from their syllables, and an unheld vowel gives the habit nothing to grab.
+  if (vowelCount === 1 && cues.some((cue) => cue === 'long' || cue === 'longer')) parts[0].fall = true;
   return parts;
+}
+
+// A word-final p, t or k before another consonant is held: the mouth closes and the air
+// stops, but nothing is released — What do you want sounds like "Wha' do you want", with
+// the pause still there. Cantonese ends 入聲 syllables exactly this way, so it is the one
+// final a Cantonese reader already says right; the page brackets it, wʌ(t), to say "stop
+// here, silently" and to tell it apart from swallowing the sound altogether.
+const HELD_STOPS = new Set(['p', 't', 'k']);
+
+/** Whether a reading begins with a consonant sound (stress marks aside). */
+export function startsWithConsonant(ipa) {
+  const symbols = splitIpa(ipa);
+  const first = symbols?.find((s) => s.kind !== 'mark');
+  return first?.kind === 'consonant';
+}
+
+/**
+ * Split a reading's final p, t or k into a part of its own, marked `held`, keeping every
+ * other part — and that stop's own cue and stress — as they were.
+ * @param {string} ipa the word's reading
+ * @param {{ text: string, cue: string|null, stressed: boolean }[] | null} parts its parts
+ *   from pronunciationCues, or null for a word that has none (a function word)
+ * @returns {object[] | null} parts that still rebuild `ipa` exactly, or null when the
+ *   reading does not end in a stop
+ */
+export function holdFinalStop(ipa, parts) {
+  const symbols = splitIpa(ipa);
+  const last = symbols?.[symbols.length - 1];
+  if (!last || !HELD_STOPS.has(last.text)) return null;
+  const base = parts?.length ? parts : [{ text: String(ipa), cue: null, stressed: false }];
+  const tail = base[base.length - 1];
+  if (!tail.text.endsWith(last.text)) return null;
+  const head = tail.text.slice(0, -last.text.length);
+  return [
+    ...base.slice(0, -1),
+    ...(head ? [{ ...tail, text: head }] : []),
+    // The ↘ belongs before the word, so it stays with whatever comes first.
+    { ...tail, text: last.text, held: true, fall: undefined },
+  ];
 }

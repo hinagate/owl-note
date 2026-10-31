@@ -96,3 +96,51 @@ const spelledOut = (ipa) => (ipa.match(/ˈ/g) || []).length > 1;
 // The reading a hyphenated prefix takes when a compound is read part by part. CMUdict
 // gives "re" as the musical note /reɪ/; as in re-enter, it is /riː/.
 export const PREFIX_READINGS = { re: 'riː' };
+
+const ONES = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+  'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'];
+const TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+
+function below100(n) {
+  if (n < 20) return [ONES[n]];
+  return n % 10 ? [TENS[Math.floor(n / 10)], ONES[n % 10]] : [TENS[n / 10]];
+}
+
+function below1000(n) {
+  if (n < 100) return below100(n);
+  const rest = n % 100;
+  return [ONES[Math.floor(n / 100)], 'hundred', ...(rest ? below100(rest) : [])];
+}
+
+/**
+ * The words a written number is read as — "for about 8 years" reads 8 as eight, so it
+ * gets eɪ(t) like any word. American cardinals, with no "and"; a four-digit number in
+ * 1100–1999 or 2010–2099 is almost always a year in a note, and is read in pairs (2026 →
+ * twenty twenty six, 1905 → nineteen oh five).
+ * @returns {string[] | null} null for what is better left unread: anything over 9999,
+ *   a leading zero (007), or a number with separators (1,000 · 3.5 · 10:30), whose
+ *   reading depends on what it is.
+ */
+export function numberWords(text) {
+  if (!/^(0|[1-9]\d{0,3})$/.test(String(text || ''))) return null;
+  const n = Number(text);
+  if (n < 1000) return below1000(n);
+  const [hi, lo] = [Math.floor(n / 100), n % 100];
+  if ((n >= 1100 && n < 2000) || (n >= 2010 && n < 2100)) {
+    if (!lo) return [...below100(hi), 'hundred'];
+    return [...below100(hi), ...(lo < 10 ? ['oh', ONES[lo]] : below100(lo))];
+  }
+  const rest = n % 1000;
+  return [ONES[Math.floor(n / 1000)], 'thousand', ...(rest ? below1000(rest) : [])];
+}
+
+/**
+ * A number's reading: each of its words looked up, joined by spaces.
+ * @returns {{ words: string[], reading: string } | null}
+ */
+export function readNumber(table, text) {
+  const words = numberWords(text);
+  if (!words || !table) return null;
+  const readings = words.map((word) => readEnglish(table, word));
+  return readings.every(Boolean) ? { words, reading: readings.join(' ') } : null;
+}

@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { splitIpa, pronunciationCues, WEAK_FORMS, UNSTRESSED_WORDS } from '../src/lib/ipa-cues.js';
+import {
+  splitIpa, pronunciationCues, WEAK_FORMS, UNSTRESSED_WORDS, holdFinalStop, startsWithConsonant,
+} from '../src/lib/ipa-cues.js';
 import { arpabetToIpa } from '../src/lib/arpabet.js';
 
 /** Render cues compactly: [x] long, [[x]] longer, {x} final; null when none. Stress aside. */
@@ -114,7 +116,7 @@ describe('pronunciationCues — stress', () => {
 
   it('keeps a cue and the stress on the same stretch apart', () => {
     expect(pronunciationCues('bæd', 'bad')).toEqual([
-      { text: 'b', cue: null, stressed: true },
+      { text: 'b', cue: null, stressed: true, fall: true }, // a held one-syllable word: ↘
       { text: 'æ', cue: 'long', stressed: true },
       { text: 'd', cue: 'final', stressed: true },
     ]);
@@ -123,6 +125,76 @@ describe('pronunciationCues — stress', () => {
   it('leaves function words light all through, which shows the sentence rhythm', () => {
     expect(pronunciationCues('ðə', 'the')).toBeNull();
     expect(pronunciationCues('tuː', 'to')).toBeNull();
+  });
+});
+
+// What do you want → "Wha' do you want": the t is not released, but the stop still happens.
+describe('holdFinalStop', () => {
+  it('splits off a final p, t or k as its own held part, keeping the rest as it was', () => {
+    const parts = holdFinalStop('wʌt', pronunciationCues('wʌt', 'what'));
+    expect(parts).toEqual([
+      { text: 'wʌ', cue: null, stressed: true },
+      { text: 't', cue: null, stressed: true, held: true },
+    ]);
+  });
+
+  it('keeps the orange of a final cluster on the stop it holds', () => {
+    const parts = holdFinalStop('æskt', pronunciationCues('æskt', 'asked'));
+    expect(parts.map((p) => p.text).join('')).toBe('æskt');
+    expect(parts.at(-1)).toEqual({ text: 't', cue: 'final', stressed: true, held: true });
+    expect(parts.at(-2)).toMatchObject({ text: 'sk', cue: 'final' });
+  });
+
+  it('builds parts for a function word, which has none of its own', () => {
+    expect(pronunciationCues('ət', 'at')).toBeNull();
+    expect(holdFinalStop('ət', null)).toEqual([
+      { text: 'ə', cue: null, stressed: false },
+      { text: 't', cue: null, stressed: false, held: true },
+    ]);
+  });
+
+  it('holds only p, t and k — not an affricate, a fricative or a voiced stop', () => {
+    expect(holdFinalStop('kʌp', null).at(-1).text).toBe('p');
+    expect(holdFinalStop('bʊk', null).at(-1).text).toBe('k');
+    expect(holdFinalStop('wɑtʃ', null)).toBeNull(); // watch: tʃ is one sound
+    expect(holdFinalStop('lʌv', null)).toBeNull();
+    expect(holdFinalStop('bæd', null)).toBeNull();
+    expect(holdFinalStop('kæt!', null)).toBeNull(); // unparseable
+  });
+});
+
+describe('startsWithConsonant', () => {
+  it('reads the first sound, past any stress mark', () => {
+    expect(startsWithConsonant('du')).toBe(true);
+    expect(startsWithConsonant('ˈskuːl')).toBe(true);
+    expect(startsWithConsonant('ɪz')).toBe(false);
+    expect(startsWithConsonant('ˈaʊ.ɚ')).toBe(false); // hour: spelled with h, sounds a vowel
+    expect(startsWithConsonant('')).toBe(false);
+  });
+});
+
+// street said like the rising 史 si2 sounds like a question and breaks off from smarts.
+// A one-syllable word with a held vowel gets ↘: hold it, but let the pitch fall.
+describe('pronunciationCues — the falling mark', () => {
+  const falls = (ipa, word) => Boolean(pronunciationCues(ipa, word)?.[0]?.fall);
+
+  it('marks a one-syllable word whose vowel is held', () => {
+    for (const [ipa, word] of [['striːt', 'street'], ['smɑːrts', 'smarts'], ['spiːd', 'speed'], ['fiːl', 'feel'], ['bæd', 'bad']]) {
+      expect(falls(ipa, word), word).toBe(true);
+    }
+  });
+
+  it('leaves alone a vowel that is not held, a longer word, and a function word', () => {
+    expect(falls('bæt', 'bat')).toBe(false); // short, before a voiceless stop
+    expect(falls('tʊk', 'took')).toBe(false);
+    expect(falls('fəˈtɑː.ɡrə.fɚ', 'photographer')).toBe(false); // several syllables
+    expect(pronunciationCues('wəz', 'was')).toBeNull();
+  });
+
+  it('puts it on the first part only, even when the final stop is split off', () => {
+    const parts = holdFinalStop('striːt', pronunciationCues('striːt', 'street'));
+    expect(parts.map((p) => p.text)).toEqual(['str', 'iː', 't']);
+    expect(parts.filter((p) => p.fall).map((p) => p.text)).toEqual(['str']);
   });
 });
 
