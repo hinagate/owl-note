@@ -137,6 +137,9 @@
       /* Full mode is read, not glanced at — the controls stay put rather than
          fading out from under a pointer that has moved into the transcript. */
       .bubble.full .meta { opacity: 1; }
+      /* A question needs its answers on show, not behind a hover. */
+      .bubble.asking .meta { opacity: 1; }
+      button.live { background: #8ab4f8; color: #0b1a33; font-weight: 600; }
       .spacer { flex: 1; }
       button {
         font: inherit;
@@ -155,6 +158,34 @@
         animation: pulse 1.6s ease-in-out infinite;
       }
       .dot.idle { background: #9aa0a6; animation: none; }
+      /* The transcription language, switchable mid-video. Its menu opens upward
+         from the controls row and lists only languages already installed. */
+      .menu {
+        position: absolute;
+        right: 16px;
+        bottom: 44px;
+        min-width: 220px;
+        padding: 6px;
+        border-radius: 10px;
+        background: rgba(48, 49, 52, .98);
+        box-shadow: 0 6px 20px rgba(0, 0, 0, .5);
+        font-size: 13px;
+        cursor: default;
+      }
+      .menu button {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        width: 100%;
+        text-align: left;
+        border-radius: 6px;
+        background: transparent;
+        padding: 6px 10px;
+      }
+      .menu button:hover { background: rgba(255, 255, 255, .12); }
+      .menu button[aria-checked="true"]::after { content: '✓'; margin-left: auto; color: #8ab4f8; }
+      .menu .label { color: #9aa0a6; font-size: 12px; }
+      .menu .add { margin-top: 4px; border-top: 1px solid rgba(255, 255, 255, .12); border-radius: 0 0 6px 6px; color: #8ab4f8; }
       @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
     </style>
     <div class="bubble" part="bubble">
@@ -167,9 +198,12 @@
         <span class="dot" id="dot"></span>
         <span id="state">listening</span>
         <span class="spacer"></span>
+        <button id="lang" title="Transcription language" aria-haspopup="menu" aria-expanded="false" hidden></button>
+        <button id="live" class="live" hidden>Transcribe live</button>
         <button id="save" class="save" hidden>Save note</button>
         <button id="stop">Cancel</button>
       </div>
+      <div class="menu" id="menu" role="menu" hidden></div>
     </div>
   `;
 
@@ -182,7 +216,12 @@
     stop: root.getElementById('stop'),
     full: root.getElementById('full'),
     jump: root.getElementById('jump'),
+    lang: root.getElementById('lang'),
+    menu: root.getElementById('menu'),
+    live: root.getElementById('live'),
   };
+  let languages = [];    // [{ tag, label, name }] installed on this machine
+  let currentLang = '';
   let armedMode = true;
   let fullMode = false;
   let liveText = '';     // the tail the worker pushes on every cue
@@ -197,6 +236,10 @@
   }
 
   root.getElementById('save').addEventListener('click', () => send({ type: 'owl-panel-save' }));
+  els.live.addEventListener('click', () => {
+    setAsking(false);
+    send({ type: 'owl-panel-start-live' });
+  });
   root.getElementById('stop').addEventListener('click', () => send({
     type: armedMode ? 'owl-panel-cancel-arm' : 'owl-panel-discard',
   }));
@@ -204,7 +247,7 @@
   // Drag to move: captions sit where the user wants them, not where we guessed.
   let drag = null;
   bubble.addEventListener('pointerdown', (e) => {
-    if (e.target.tagName === 'BUTTON') return;
+    if (e.target.tagName === 'BUTTON' || els.menu.contains(e.target)) return;
     // In full mode the transcript is a scroll-and-select surface, so a drag
     // started inside it would fight both. The frame around it still drags.
     if (fullMode && els.text.contains(e.target)) return;
@@ -222,19 +265,86 @@
   });
   bubble.addEventListener('pointerup', () => { drag = null; bubble.classList.remove('dragging'); });
 
+  // Where the newest sentence begins: after ". " in spaced scripts, or straight after
+  // 。！？, which Chinese and Japanese follow with no space. Skipping a fixed two
+  // characters, as this once did, cut the first character off every new Chinese or
+  // Japanese sentence.
+  function newestSentenceStart(text) {
+    let start = 0;
+    for (const m of text.matchAll(/[.!?]\s+|[。！？]/g)) start = m.index + m[0].length;
+    return start;
+  }
+
   // The compact pill: a clamped tail with everything but the newest sentence
   // dimmed, the way Live Caption does it.
   function renderCompact() {
     const trimmed = liveText.length > MAX_CHARS ? liveText.slice(-MAX_CHARS) : liveText;
-    const split = Math.max(trimmed.lastIndexOf('. '), trimmed.lastIndexOf('。'));
+    const start = newestSentenceStart(trimmed);
     els.text.replaceChildren();
-    if (split > 0) {
+    if (start > 0) {
       const old = document.createElement('span');
       old.className = 'old';
-      old.textContent = `${trimmed.slice(0, split + 1)} `;
+      old.textContent = trimmed.slice(0, start);
       els.text.append(old);
     }
-    els.text.append(document.createTextNode(split > 0 ? trimmed.slice(split + 2) : trimmed));
+    els.text.append(document.createTextNode(trimmed.slice(start)));
+  }
+
+  /* ------------------------------------------------------------ language */
+
+  function closeMenu() {
+    els.menu.hidden = true;
+    els.lang.setAttribute('aria-expanded', 'false');
+  }
+
+  function menuItem(text, label, onPick) {
+    const item = document.createElement('button');
+    item.textContent = text;
+    if (label) {
+      const small = document.createElement('span');
+      small.className = 'label';
+      small.textContent = label;
+      item.append(small);
+    }
+    item.addEventListener('click', () => { closeMenu(); onPick(); });
+    return item;
+  }
+
+  function openMenu() {
+    els.menu.replaceChildren(
+      ...languages.map(({ tag, label, name }) => {
+        const item = menuItem(name, name === label ? '' : label, () => {
+          if (tag !== currentLang) send({ type: 'owl-panel-language', lang: tag });
+        });
+        item.setAttribute('role', 'menuitemradio');
+        item.setAttribute('aria-checked', String(tag === currentLang));
+        return item;
+      }),
+      Object.assign(menuItem('Add a language…', '', () => send({ type: 'owl-panel-add-language' })), { className: 'add' }),
+    );
+    els.menu.hidden = false;
+    els.lang.setAttribute('aria-expanded', 'true');
+  }
+
+  els.lang.addEventListener('click', () => (els.menu.hidden ? openMenu() : closeMenu()));
+  // Any press outside the menu closes it, on the page or elsewhere in the bubble.
+  // Two listeners, because the root is closed: seen from the window, a press inside
+  // it has the host as its deepest node, so the window can only tell "not ours".
+  const closeOnOutside = (e) => {
+    if (!els.menu.hidden && !e.composedPath().includes(host)) closeMenu();
+  };
+  window.addEventListener('pointerdown', closeOnOutside, true);
+  root.addEventListener('pointerdown', (e) => {
+    if (!els.menu.hidden && !els.menu.contains(e.target) && !els.lang.contains(e.target)) closeMenu();
+  });
+
+  function renderLanguage({ lang, langName, languages: list }) {
+    if (Array.isArray(list)) languages = list;
+    if (typeof lang === 'string') currentLang = lang;
+    if (typeof langName === 'string') els.lang.textContent = `${langName} ▾`;
+    // Only while recording: before setup there is nothing to switch.
+    els.lang.hidden = armedMode || !languages.length || !currentLang;
+    if (els.lang.hidden) closeMenu();
   }
 
   // Full mode: the session's markdown as paragraphs and `## mm:ss` headings.
@@ -272,7 +382,16 @@
     if (fullMode && atBottom) els.text.scrollTop = els.text.scrollHeight;
   }
 
-  function render({ text, state, canSave, armed }) {
+  // The video had no subtitles to read: ask before listening to it.
+  function setAsking(asking) {
+    els.live.hidden = !asking;
+    bubble.classList.toggle('asking', asking);
+  }
+
+  function render(update) {
+    const { text, state, canSave, armed, offerLive } = update;
+    if (typeof offerLive === 'boolean') setAsking(offerLive);
+    else if (armed === false) setAsking(false);
     if (typeof text === 'string') {
       liveText = text;
       if (fullMode && pinned) requestHistory();
@@ -292,6 +411,7 @@
       armedMode = armed;
       els.stop.textContent = armed ? 'Cancel' : 'Discard';
     }
+    renderLanguage(update);
   }
 
   /* ----------------------------------------------------------- full mode */
@@ -365,6 +485,7 @@
     clearInterval(timer);
     clearTimeout(historyPending);
     document.removeEventListener('fullscreenchange', attach);
+    window.removeEventListener('pointerdown', closeOnOutside, true);
     host.remove();
     window.__owlOverlay = null;
   }

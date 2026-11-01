@@ -5,6 +5,7 @@ import {
   withSpeechTimeout,
   isSpeechTimeout,
   SPEECH_CALL_TIMEOUT_MS,
+  SPEECH_INSTALL_TIMEOUT_MS,
   ON_DEVICE_LANGUAGES,
   SPEECH_LANG_KEY,
 } from '../src/lib/native-speech.js';
@@ -37,8 +38,21 @@ describe('speech calls cannot hang the UI', () => {
     vi.useFakeTimers();
     const R = fakeRecognition({ install: hanging });
     const pending = installNativeSpeech(R, 'zh-TW');
-    await vi.advanceTimersByTimeAsync(SPEECH_CALL_TIMEOUT_MS + 10);
+    await vi.advanceTimersByTimeAsync(SPEECH_INSTALL_TIMEOUT_MS + 10);
     expect(await pending).toEqual({ ok: false, timedOut: true });
+    vi.useRealTimers();
+  });
+
+  // install() resolves when the download is done, not when it starts: two Mandarin
+  // packs took 19.5 s on a real connection, and at the old 15 s deadline that
+  // success was reported as a failure.
+  it('waits out a slow real download instead of calling it a failure', async () => {
+    vi.useFakeTimers();
+    const R = fakeRecognition({ install: () => new Promise((resolve) => setTimeout(() => resolve(true), 20000)) });
+    const pending = installNativeSpeech(R, 'zh-TW');
+    await vi.advanceTimersByTimeAsync(20010);
+    expect(await pending).toEqual({ ok: true, timedOut: false });
+    expect(SPEECH_INSTALL_TIMEOUT_MS).toBeGreaterThan(SPEECH_CALL_TIMEOUT_MS);
     vi.useRealTimers();
   });
 
@@ -102,8 +116,15 @@ describe('the on-device language list', () => {
   it('matches the tags Chrome documents, so the picker offers real options', () => {
     expect(ON_DEVICE_LANGUAGES.map((e) => e.tag).sort()).toEqual([
       'de-DE', 'en-US', 'es-ES', 'fr-FR', 'hi-IN', 'id-ID', 'it-IT', 'ja-JP', 'ko-KR',
-      'pl-PL', 'pt-BR', 'ru-RU', 'th-TH', 'tr-TR', 'vi-VN', 'zh-CN', 'zh-TW',
+      'pl-PL', 'pt-BR', 'ru-RU', 'th-TH', 'tr-TR', 'vi-VN', 'zh-TW',
     ]);
+  });
+
+  // Chinese is Traditional Mandarin only; zh-CN's model writes Simplified.
+  it('offers Mandarin in Traditional characters, never Simplified', () => {
+    const chinese = ON_DEVICE_LANGUAGES.filter((e) => e.tag.startsWith('zh'));
+    expect(chinese).toEqual([{ tag: 'zh-TW', label: 'Chinese, Mandarin (Traditional)' }]);
+    expect(ON_DEVICE_LANGUAGES.some((e) => /simplified/i.test(e.label))).toBe(false);
   });
 
   it('gives every entry a human label, since a bare tag is not a choice', () => {

@@ -111,3 +111,113 @@ describe('overlay full mode', () => {
     expect(el('text').textContent).toContain('hello there');
   });
 });
+
+describe('overlay compact pill', () => {
+  const newest = () => [...el('text').childNodes].filter((n) => n.nodeType === 3).map((n) => n.nodeValue).join('');
+  const older = () => root.querySelector('.text .old')?.textContent || '';
+
+  // Skipping a fixed ". " after 。 cut the first character off every new sentence.
+  it('keeps the first character of a new Chinese or Japanese sentence', () => {
+    deliver({ type: 'owl-overlay-update', text: '今天很好。我們走吧' });
+    expect(older()).toBe('今天很好。');
+    expect(newest()).toBe('我們走吧');
+    deliver({ type: 'owl-overlay-update', text: '今日は晴れです。明日は雨' });
+    expect(newest()).toBe('明日は雨');
+  });
+
+  it('dims everything before the newest English sentence', () => {
+    deliver({ type: 'owl-overlay-update', text: 'First one. Is this second? Third here' });
+    expect(older()).toBe('First one. Is this second? ');
+    expect(newest()).toBe('Third here');
+    expect(el('text').textContent).toBe('First one. Is this second? Third here');
+  });
+});
+
+describe('overlay question when a video has no subtitles', () => {
+  it('shows its answers without a hover, and starts live on request', () => {
+    deliver({ type: 'owl-overlay-update', state: 'no subtitles', text: 'This video has no subtitles.', armed: true, offerLive: true });
+    expect(el('live').hidden).toBe(false);
+    expect(bubble().classList.contains('asking')).toBe(true);
+    expect(el('stop').textContent).toBe('Cancel');
+
+    el('live').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(sent).toContainEqual({ type: 'owl-panel-start-live' });
+    expect(el('live').hidden).toBe(true);
+  });
+
+  it('puts the question away once recording starts', () => {
+    deliver({ type: 'owl-overlay-update', armed: true, offerLive: true });
+    deliver({ type: 'owl-overlay-update', canSave: true, armed: false });
+    expect(el('live').hidden).toBe(true);
+    expect(bubble().classList.contains('asking')).toBe(false);
+  });
+});
+
+describe('overlay language button', () => {
+  const LANGS = [
+    { tag: 'en-US', label: 'English (United States)', name: 'English' },
+    { tag: 'zh-TW', label: 'Chinese, Mandarin (Traditional)', name: '中文' },
+  ];
+  const press = (node) => {
+    node.dispatchEvent(new Event('pointerdown', { bubbles: true, composed: true }));
+    node.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  };
+  const recording = () => deliver({
+    type: 'owl-overlay-update', canSave: true, armed: false, lang: 'en-US', langName: 'English', languages: LANGS,
+  });
+
+  it('stays hidden until the session records and knows its languages', () => {
+    expect(el('lang').hidden).toBe(true);
+    deliver({ type: 'owl-overlay-update', canSave: true, armed: false });
+    expect(el('lang').hidden).toBe(true);
+    recording();
+    expect(el('lang').hidden).toBe(false);
+    expect(el('lang').textContent).toContain('English');
+  });
+
+  it('lists the installed languages, marks the current one, and switches on a pick', () => {
+    recording();
+    press(el('lang'));
+    expect(el('menu').hidden).toBe(false);
+    const items = [...el('menu').querySelectorAll('button')];
+    // Each language in its own name, with the English label beside it.
+    expect(items.map((b) => [b.firstChild.nodeValue, b.querySelector('.label')?.textContent])).toEqual([
+      ['English', 'English (United States)'],
+      ['中文', 'Chinese, Mandarin (Traditional)'],
+      ['Add a language…', undefined],
+    ]);
+    expect(items[0].getAttribute('aria-checked')).toBe('true');
+    expect(items[1].getAttribute('aria-checked')).toBe('false');
+
+    press(items[1]);
+    expect(sent).toContainEqual({ type: 'owl-panel-language', lang: 'zh-TW' });
+    expect(el('menu').hidden).toBe(true);
+  });
+
+  it('does not ask to switch to the language already in use', () => {
+    recording();
+    press(el('lang'));
+    press(el('menu').querySelector('button'));
+    expect(sent.some((m) => m.type === 'owl-panel-language')).toBe(false);
+  });
+
+  it('opens setup for a language that is not installed yet', () => {
+    recording();
+    press(el('lang'));
+    press(el('menu').querySelector('.add'));
+    expect(sent).toContainEqual({ type: 'owl-panel-add-language' });
+  });
+
+  it('closes when the page is pressed', () => {
+    recording();
+    press(el('lang'));
+    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true, composed: true }));
+    expect(el('menu').hidden).toBe(true);
+  });
+
+  it('hides again when the session parks for setup', () => {
+    recording();
+    deliver({ type: 'owl-overlay-update', canSave: false, armed: true });
+    expect(el('lang').hidden).toBe(true);
+  });
+});

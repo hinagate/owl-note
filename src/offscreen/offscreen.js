@@ -10,9 +10,21 @@ import {
   configureNativeRecognition,
   nativeSpeechConstructor,
   normalizeSpeechLanguage,
+  ON_DEVICE_LANGUAGES,
 } from '../lib/native-speech.js';
+import { tidyRecognizedText } from '../lib/transcript.js';
 
 const RETRY_DELAY_MS = 250;
+// Errors that mean recognition can never work here. Anything else is a hiccup: an
+// error event is always followed by end, and onend starts the recognizer again —
+// stopping for good on any error ended a long transcription at its first glitch.
+const FATAL_ERRORS = new Set([
+  'not-allowed', 'service-not-allowed', 'language-not-supported', 'phrases-not-supported', 'bad-grammar',
+]);
+// Failing again and again is broken, not hiccuping: past this many error restarts
+// within the window, stop and say why rather than loop.
+const ERROR_RESTART_LIMIT = 5;
+const ERROR_RESTART_WINDOW_MS = 60000;
 const AVAILABILITY_POLL_MS = 1000;
 // A download that never finishes polled forever, leaving the overlay on its
 // progress text with no way out. Chrome reports "downloading" for a language it
@@ -28,6 +40,7 @@ let availabilityTimer = null;
 let availabilityDeadline = 0;
 let language = 'en-US';
 let stopping = false;
+let errorRestarts = []; // when recent error restarts happened, for the limit above
 
 function send(message) {
   try {
@@ -77,6 +90,19 @@ function availabilityError(result) {
   return 'Chrome live transcription is unavailable.';
 }
 
+// Which languages this machine can transcribe right now, for the overlay's language
+// button. available() overstates what can be downloaded, but not what is installed:
+// it answers "available" only for a model that really is.
+async function reportLanguages(Recognition) {
+  const states = await Promise.all(
+    ON_DEVICE_LANGUAGES.map(({ tag }) => checkNativeSpeechAvailability(Recognition, tag)),
+  );
+  send({
+    type: 'owl-native-speech-languages',
+    languages: ON_DEVICE_LANGUAGES.filter((_, i) => states[i] === 'available').map(({ tag }) => tag),
+  });
+}
+
 async function prepare({ lang, sessionToken, polling = false }) {
   language = normalizeSpeechLanguage(lang);
   clearTimeout(availabilityTimer);
@@ -88,6 +114,7 @@ async function prepare({ lang, sessionToken, polling = false }) {
   if (availability === 'available') {
     status({ asr: 'ready', engine: 'chrome-native', lang: language });
     send({ type: 'owl-native-speech-ready', lang: language, sessionToken });
+    void reportLanguages(Recognition);
     return;
   }
 
@@ -113,16 +140,27 @@ async function prepare({ lang, sessionToken, polling = false }) {
   status({ asr: 'error', engine: 'chrome-native', error: availabilityError(availability) });
 }
 
+// True while another restart is within budget; once it is spent, the session ends
+// with the error that spent it.
+function mayRestartAfter(error) {
+  const now = Date.now();
+  errorRestarts = errorRestarts.filter((at) => now - at < ERROR_RESTART_WINDOW_MS);
+  errorRestarts.push(now);
+  if (errorRestarts.length <= ERROR_RESTART_LIMIT) return true;
+  stopping = true;
+  status({ asr: 'error', engine: 'chrome-native', error });
+  return false;
+}
+
 function startRecognizer() {
   if (stopping || !recognition || recognitionTrack?.readyState !== 'live') return;
   try {
     recognition.start(recognitionTrack);
   } catch (error) {
-    status({
-      asr: 'error',
-      engine: 'chrome-native',
-      error: `speech-start-failed: ${error?.message || error}`,
-    });
+    if (mayRestartAfter(`speech-start-failed: ${error?.message || error}`)) {
+      status({ asr: 'restarting', engine: 'chrome-native' });
+      restartTimer = setTimeout(startRecognizer, RETRY_DELAY_MS * 4);
+    }
   }
 }
 
@@ -136,7 +174,7 @@ function wireRecognition(Recognition) {
     const interim = [];
     for (let i = event.resultIndex; i < event.results.length; i += 1) {
       const result = event.results[i];
-      const text = String(result?.[0]?.transcript || '').trim();
+      const text = tidyRecognizedText(result?.[0]?.transcript);
       if (!text) continue;
       if (result.isFinal) cues.push({ text, videoTime: null, at: Date.now() });
       else interim.push(text);
@@ -150,12 +188,14 @@ function wireRecognition(Recognition) {
       status({ asr: 'listening', engine: 'chrome-native' });
       return;
     }
-    stopping = true;
-    status({
-      asr: 'error',
-      engine: 'chrome-native',
-      error: `native-speech-${event?.error || 'failed'}${event?.message ? `: ${event.message}` : ''}`,
-    });
+    const error = `native-speech-${event?.error || 'failed'}${event?.message ? `: ${event.message}` : ''}`;
+    if (FATAL_ERRORS.has(event?.error)) {
+      stopping = true;
+      status({ asr: 'error', engine: 'chrome-native', error });
+      return;
+    }
+    // A hiccup: the end event that follows starts the recognizer again.
+    if (mayRestartAfter(error)) status({ asr: 'restarting', engine: 'chrome-native' });
   };
   recognition.onend = () => {
     if (stopping || recognitionTrack?.readyState !== 'live') return;
@@ -167,6 +207,7 @@ function wireRecognition(Recognition) {
 async function start({ streamId, lang, sessionToken }) {
   teardown();
   stopping = false;
+  errorRestarts = [];
   language = normalizeSpeechLanguage(lang);
 
   const Recognition = nativeSpeechConstructor(globalThis);

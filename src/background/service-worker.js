@@ -4,8 +4,13 @@ import {
   startSession, appendCues, getSession, getSessionMeta, getSessionTail, patchSession,
   stopSession, clearSession, isSilent,
 } from '../lib/capture-session.js';
-import { SPEECH_LANG_KEY } from '../lib/native-speech.js';
+import {
+  ON_DEVICE_LANGUAGES, pickSpeechLanguage, SPEECH_LANG_KEY, speechLanguageName,
+} from '../lib/native-speech.js';
 import { buildTranscriptNote, cuesToMarkdown } from '../lib/transcript.js';
+import {
+  fetchPageText, isYouTubeWatchUrl, pickSubtitleTrack, subtitleCues, subtitleFetchUrl, youtubeSubtitleInfo,
+} from '../lib/youtube-subtitles.js';
 import { decode } from '../lib/codec.js';
 import { captureFullPage } from '../lib/full-page-capture.js';
 import { captureSmartPage } from '../lib/smart-page-capture.js';
@@ -329,6 +334,18 @@ async function saveSmartPageCapture(info, tab, capture, noteCreated) {
 // service worker owns the session; the page overlay is only a view of it.
 
 let lastVideoTime = null; // most recent player position reported by the overlay
+// The utterance still being spoken. Chrome finalizes text only at a pause, so what
+// the overlay shows when Save is pressed has not arrived as a cue — and the end of a
+// talk was missing from its note. Kept in memory only: interim text changes several
+// times a second, and the session store is written per final cue.
+let pendingInterim = null;
+
+// Whatever was mid-sentence becomes the last cue before the recognizer goes away.
+async function keepPendingInterim() {
+  const pending = pendingInterim;
+  pendingInterim = null;
+  if (pending) await appendCues([{ text: pending.text, videoTime: lastVideoTime, at: pending.at }]);
+}
 let asrStarting = false; // a double-click must not start two readiness checks
 let captureStarting = false; // two ready messages must not mint two streams
 
@@ -425,9 +442,9 @@ async function clearArmedTranscription(tabId) {
 async function preferredSpeechLanguage() {
   try {
     const saved = (await chrome.storage.local.get(SPEECH_LANG_KEY))[SPEECH_LANG_KEY];
-    if (typeof saved === 'string' && saved) return saved;
+    if (typeof saved === 'string' && saved) return pickSpeechLanguage(saved);
   } catch { /* storage unavailable — fall through to the UI language */ }
-  return chrome.i18n?.getUILanguage?.() || 'en-US';
+  return pickSpeechLanguage(chrome.i18n?.getUILanguage?.() || 'en-US');
 }
 
 export async function handleTranscribe(info, tab) {
@@ -453,19 +470,88 @@ export async function handleTranscribe(info, tab) {
   // nothing is ever captured without a visible overlay.
   if (!(await showOverlay(tabId))) return null;
 
-  return startTranscription({
+  const target = {
     tabId,
     windowId: tab?.windowId,
     url: info.pageUrl || tab?.url || '',
     title: title === 'Full-page capture' ? 'Transcript' : title,
     lang,
+  };
+  if (isYouTubeWatchUrl(target.url)) return transcribeFromSubtitles(target);
+  return startTranscription(target);
+}
+
+// A video with subtitles is transcribed from them: the whole video at once, in the
+// creator's own words, with nothing listened to. Without subtitles, the reader is
+// asked before the tab's audio is captured — the overlay offers live transcription,
+// parked as an armed start so the activeTab grant from this click carries it.
+async function transcribeFromSubtitles(target) {
+  updateOverlay(target.tabId, { state: 'reading subtitles', text: 'Reading this video’s subtitles…', canSave: false, armed: true });
+  const found = await readVideoSubtitles(target.tabId);
+  if (found?.cues.length) {
+    const startedAt = Date.now();
+    const { title, body } = buildTranscriptNote({
+      title: target.title,
+      url: target.url,
+      cues: found.cues,
+      startedAt,
+      endedAt: startedAt + found.cues[found.cues.length - 1].endAt,
+      subtitles: found.label,
+    });
+    try { await chrome.tabs?.sendMessage?.(target.tabId, { type: 'owl-overlay-close' }); } catch { /* tab gone */ }
+    return saveTranscriptNote({ title: title || 'Transcript', body });
+  }
+  await armTranscription(target);
+  updateOverlay(target.tabId, {
+    state: 'no subtitles',
+    text: found
+      ? 'This video’s subtitles could not be read. Transcribe its speech live instead?'
+      : 'This video has no subtitles. Transcribe its speech live?',
+    canSave: false,
+    armed: true,
+    offerLive: true,
   });
+  return true;
+}
+
+// Both steps run in the page's own world: YouTube's player API and its subtitle
+// requests exist only there, and activeTab from this click is what grants it.
+async function readVideoSubtitles(tabId) {
+  try {
+    const [{ result: info } = {}] = await chrome.scripting.executeScript({
+      target: { tabId }, world: 'MAIN', func: youtubeSubtitleInfo,
+    });
+    const picked = pickSubtitleTrack(info?.tracks, info?.defaultIndex);
+    if (!picked) return null;
+    const [{ result: text } = {}] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: fetchPageText,
+      args: [subtitleFetchUrl(picked.track.baseUrl, info.playerUrl, picked.translateTo)],
+    });
+    const { name, kind } = picked.track;
+    const label = kind === 'asr' ? `YouTube auto-generated subtitles (${name})` : `YouTube subtitles: ${name}`;
+    return {
+      cues: subtitleCues(text),
+      label: picked.translateTo ? `${label}, in Traditional characters` : label,
+    };
+  } catch (error) {
+    console.warn('[owl-note] Reading the video subtitles failed:', error);
+    return { cues: [], label: '' };
+  }
+}
+
+// The overlay's "Transcribe live" after no subtitles were found.
+export async function handleStartLive() {
+  const armed = await getArmedTranscription();
+  return armed ? startTranscription(armed) : null;
 }
 
 async function startTranscription(armed) {
   if (!armed || !Number.isInteger(armed.tabId)) return false;
   await clearArmedTranscription(armed.tabId);
   lastVideoTime = null;
+  pendingInterim = null;
   await startSession(armed);
   if (!(await showOverlay(armed.tabId))) {
     await clearSession();
@@ -479,14 +565,71 @@ async function startTranscription(armed) {
 // The language download is finished. Installing it happened in an extension
 // window, which never navigated the source tab, so that tab's activeTab grant —
 // capture access included — is still live: return to the video and just start.
-export async function handleTranscribeSetupComplete() {
+// In the language the setup page installed, which need not be the one the session
+// was armed with: starting in the armed one sent a reader who picked another
+// language straight back to the setup page.
+export async function handleTranscribeSetupComplete(lang) {
   const armed = await getArmedTranscription();
-  if (!armed) return null;
+  if (!armed) return handleLanguageAdded(lang);
   try { await chrome.tabs?.update?.(armed.tabId, { active: true }); } catch { /* tab may have closed */ }
   if (Number.isInteger(armed.windowId)) {
     try { await chrome.windows?.update?.(armed.windowId, { focused: true }); } catch { /* best-effort */ }
   }
-  return startTranscription(armed);
+  return startTranscription(lang ? { ...armed, lang: pickSpeechLanguage(lang) } : armed);
+}
+
+// "Add a language…" from a running overlay: the setup page finished while the
+// capture kept going, so move the running session onto the new language.
+async function handleLanguageAdded(lang) {
+  const session = await getSessionMeta();
+  if (!lang || !session || session.state !== 'recording') return null;
+  return handleSwitchLanguage(lang);
+}
+
+// Switching mid-video restarts only the recognizer. The session and everything
+// already transcribed carry over, and so does the tab's activeTab grant, which is
+// what lets handleNativeSpeechReady capture the same tab again without a click.
+export async function handleSwitchLanguage(lang) {
+  const session = await getSessionMeta();
+  if (!lang || !session || session.state !== 'recording') return null;
+  const next = pickSpeechLanguage(lang);
+  if (next === session.lang) return true;
+  try { await chrome.storage.local.set({ [SPEECH_LANG_KEY]: next }); } catch { /* preference only */ }
+  await patchSession({ switchedFrom: session.lang });
+  return handleStartAsr(next);
+}
+
+async function handleAddLanguage() {
+  const session = await getSessionMeta();
+  if (!session) return null;
+  await openLanguageSetup(session.lang);
+  return true;
+}
+
+// What the overlay's language button needs: the current language, and the ones this
+// machine can transcribe right now. Only installed ones are offered, so picking one
+// never lands mid-video on a download; the rest go through "Add a language…".
+function overlayLanguages(session) {
+  const ready = new Set([...(session.languages || []), session.lang]);
+  return {
+    lang: session.lang,
+    langName: speechLanguageName(session.lang),
+    languages: ON_DEVICE_LANGUAGES
+      .filter((entry) => ready.has(entry.tag))
+      .map(({ tag, label }) => ({ tag, label, name: speechLanguageName(tag) })),
+  };
+}
+
+async function showSpeechLanguages(languages) {
+  const session = await patchSession({ languages: Array.isArray(languages) ? languages : [] });
+  if (session) updateOverlay(session.tabId, overlayLanguages(session));
+  return session;
+}
+
+// Status lines stand in for captions only until there are captions: a language
+// switch mid-video must not blank what the reader is following.
+function statusText(session, text) {
+  return session?.cueCount ? {} : { text };
 }
 
 export async function handleCancelArmedTranscription() {
@@ -536,8 +679,12 @@ export async function handleStartAsr(lang) {
   asrStarting = true;
   const useLang = lang || session.lang;
   try {
+    await keepPendingInterim(); // a language switch restarts the recognizer mid-sentence
     await patchSession({ lang: useLang, status: { asr: 'starting', error: null } });
-    updateOverlay(session.tabId, { state: 'checking native speech', text: 'Checking Chrome’s local speech model…' });
+    updateOverlay(session.tabId, {
+      state: 'checking native speech',
+      ...statusText(session, 'Checking Chrome’s local speech model…'),
+    });
     await releaseCapture();
     await ensureOffscreen();
     await chrome.runtime.sendMessage({
@@ -566,7 +713,7 @@ export async function handleNativeSpeechReady(lang, readyToken) {
   captureStarting = true;
   try {
     await patchSession({ status: { asr: 'starting-capture', error: null } });
-    updateOverlay(session.tabId, { state: 'starting', text: 'Listening for speech…' });
+    updateOverlay(session.tabId, { state: 'starting', ...statusText(session, 'Listening for speech…') });
     const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: session.tabId });
     await chrome.runtime.sendMessage({
       target: 'offscreen',
@@ -604,6 +751,17 @@ export async function handleNativeSpeechInstallRequired(lang, readyToken) {
   if (!session || session.state !== 'recording') return null;
   if (lang && lang !== session.lang) return null;
   if (readyToken !== sessionToken(session)) return null;
+  // Mid-video, the session already holds what was said, and parking it as an armed
+  // start would throw that away. Open setup beside it and keep going in the language
+  // it was switched from; finishing setup switches over (handleLanguageAdded).
+  if (session.cueCount > 0) {
+    await openLanguageSetup(session.lang);
+    const fallback = session.switchedFrom && session.switchedFrom !== session.lang ? session.switchedFrom : null;
+    if (fallback) return handleStartAsr(fallback);
+    await releaseCapture();
+    updateOverlay(session.tabId, { state: 'setup required' });
+    return true;
+  }
   // Preserve the source page untouched while the user installs the language
   // resource: leaving it un-navigated is what keeps its activeTab grant alive,
   // so handleTranscribeSetupComplete can resume without another gesture.
@@ -628,6 +786,7 @@ async function teardownEngines(tabId) {
 export async function handleStopCapture() {
   const session = await getSessionMeta();
   if (!session) return null;
+  await keepPendingInterim();
   await stopSession();
   await teardownEngines(session.tabId);
   return true;
@@ -639,8 +798,8 @@ export async function handleResumeCapture() {
   const session = await getSessionMeta();
   if (!session || session.state !== 'paused') return null;
   if (await showOverlay(session.tabId)) {
-    await patchSession({ state: 'recording', lastCueAt: Date.now() });
-    updateOverlay(session.tabId, { canSave: true, armed: false });
+    const resumed = await patchSession({ state: 'recording', lastCueAt: Date.now() });
+    updateOverlay(session.tabId, { canSave: true, armed: false, ...overlayLanguages(resumed) });
   }
   return true;
 }
@@ -656,8 +815,9 @@ async function ensureTranscriptsNotebook() {
 }
 
 export async function handleSaveTranscript() {
+  if (!(await getSessionMeta())) return null;
+  await keepPendingInterim();
   const session = await getSession();
-  if (!session) return null;
   await stopSession();
   await teardownEngines(session.tabId);
   if (!session.cues?.length) {
@@ -671,11 +831,18 @@ export async function handleSaveTranscript() {
     startedAt: session.startedAt,
     endedAt: session.endedAt || Date.now(),
   });
+  // Cleared only once the note is saved: a failed save keeps the session to retry.
+  return saveTranscriptNote({ title: title || 'Transcript', body, onSaved: clearSession });
+}
+
+// Shared by live sessions and video subtitles. A subtitle save passes no onSaved:
+// a live session running in another tab is not its to clear.
+async function saveTranscriptNote({ title, body, onSaved = null }) {
   try {
-    const note = createNote({ title: title || 'Transcript', body });
+    const note = createNote({ title, body });
     // An hour-long transcript passes the bookmark cap and uploads to Drive as a note body.
     const saved = await withKeepAlive(async () => saveNote(note, await ensureTranscriptsNotebook(), undefined));
-    await clearSession();
+    await onSaved?.();
     await signalQuickCapture(note, { openNote: true });
     await focusOrOpenApp();
     await flashSaved();
@@ -688,6 +855,7 @@ export async function handleSaveTranscript() {
 }
 
 export async function handleDiscardTranscript() {
+  pendingInterim = null;
   const session = await getSessionMeta();
   const armed = await getArmedTranscription();
   const tabId = session?.tabId ?? armed?.tabId;
@@ -720,6 +888,7 @@ export async function finalizeIfSilent() {
 // Web Speech receives an audio track, not a video player, so its cues carry no
 // position. Stamp them with the player time the overlay last reported.
 async function appendAsrCues(cues) {
+  pendingInterim = null; // a final supersedes it — cleared before any await, to keep message order
   const stamped = (cues || []).map((cue) => (
     cue.videoTime == null && lastVideoTime != null ? { ...cue, videoTime: lastVideoTime } : cue
   ));
@@ -727,12 +896,16 @@ async function appendAsrCues(cues) {
   if (!count) return 0;
   const session = await getSessionTail();
   if (session) {
-    updateOverlay(session.tabId, { text: cuesToMarkdown(session.cues).replace(/\n+/g, ' '), state: 'listening' });
+    // Paragraph breaks flatten to a space, except after Chinese or Japanese
+    // sentence punctuation, which takes none.
+    const text = cuesToMarkdown(session.cues).replace(/([。！？])\n+/g, '$1').replace(/\n+/g, ' ');
+    updateOverlay(session.tabId, { text, state: 'listening' });
   }
   return count;
 }
 
 async function showInterimCaption(text) {
+  pendingInterim = String(text || '').trim() ? { text: String(text).trim(), at: Date.now() } : null;
   const session = await getSessionMeta();
   if (!session || session.state !== 'recording') return null;
   updateOverlay(session.tabId, { text: String(text || ''), state: 'listening' });
@@ -769,7 +942,11 @@ export function handleCaptureMessage(message) {
       return handleNativeSpeechReady(message.lang, message.sessionToken);
     case 'owl-native-speech-install-required':
       return handleNativeSpeechInstallRequired(message.lang, message.sessionToken);
-    case 'owl-transcribe-setup-complete': return handleTranscribeSetupComplete();
+    case 'owl-native-speech-languages': return showSpeechLanguages(message.languages);
+    case 'owl-transcribe-setup-complete': return handleTranscribeSetupComplete(message.lang);
+    case 'owl-panel-language': return handleSwitchLanguage(message.lang);
+    case 'owl-panel-add-language': return handleAddLanguage();
+    case 'owl-panel-start-live': return handleStartLive();
     case 'owl-transcribe-setup-cancelled':
     case 'owl-panel-cancel-arm': return handleCancelArmedTranscription();
     case 'owl-panel-stop': return handleStopCapture();

@@ -16,6 +16,10 @@ export const NATIVE_SPEECH_QUALITY = 'command';
 // measured: every tag, in 0 ms, including ones absent from this list — so it cannot
 // be used to discover what actually exists. This list is what the picker offers; the
 // truth about a given language only emerges from install().
+//
+// Chinese is Mandarin written in Traditional characters, and only that: Chrome's
+// zh-CN model writes Simplified, which OWL-Note does not offer. Chrome has no
+// on-device Cantonese model (yue-HK answers "unavailable").
 export const ON_DEVICE_LANGUAGES = [
   { tag: 'en-US', label: 'English (United States)' },
   { tag: 'de-DE', label: 'German (Germany)' },
@@ -32,13 +36,49 @@ export const ON_DEVICE_LANGUAGES = [
   { tag: 'th-TH', label: 'Thai (Thailand)' },
   { tag: 'tr-TR', label: 'Turkish (Turkey)' },
   { tag: 'vi-VN', label: 'Vietnamese (Vietnam)' },
-  { tag: 'zh-CN', label: 'Chinese, Mandarin (Simplified)' },
   { tag: 'zh-TW', label: 'Chinese, Mandarin (Traditional)' },
 ];
+
+// Packs Chrome needs installed alongside a language before it will use it. Measured
+// on Chrome 156, three fresh profiles: zh-TW's own pack (cmn-Hant-TW) downloads in
+// full and install() resolves true, yet available() stays "downloadable" for good —
+// across restarts, with English installed first or not — until zh-CN's pack
+// (cmn-Hans-CN) is installed too, at which moment zh-TW turns "available". The
+// companion is only ever installed, never recognized with, so transcripts stay
+// Traditional. One install() call naming both takes a single click; two calls do
+// not, because the first consumes the gesture and the second is refused.
+export const SPEECH_PACK_COMPANIONS = { 'zh-TW': ['zh-CN'] };
+
+export function speechPacksFor(lang) {
+  const tag = normalizeSpeechLanguage(lang);
+  return [tag, ...(SPEECH_PACK_COMPANIONS[tag] || [])];
+}
 
 // Where the chosen language is remembered. Device-local: it describes which model
 // this machine has, which says nothing about any other machine.
 export const SPEECH_LANG_KEY = 'owl:speechLang';
+
+/**
+ * The language to start with, from a saved choice or the browser's UI language.
+ * Every Chinese tag means Traditional Mandarin here: zh-HK is a trap on its own —
+ * Chrome offers it as "downloadable", then hangs on "downloading" forever while
+ * fetching the Simplified pack — and zh-CN is Simplified, which is not offered.
+ */
+export function pickSpeechLanguage(tag) {
+  const lang = normalizeSpeechLanguage(tag);
+  return /^(zh|cmn)(-|$)/i.test(lang) ? 'zh-TW' : lang;
+}
+
+// The language's own name for itself, short enough for a button: English, 中文,
+// 日本語. Falls back to the tag where Intl has no name.
+export function speechLanguageName(tag) {
+  const lang = normalizeSpeechLanguage(tag);
+  try {
+    return new Intl.DisplayNames([lang], { type: 'language' }).of(lang.split('-')[0]) || lang;
+  } catch {
+    return lang;
+  }
+}
 
 export function normalizeSpeechLanguage(tag) {
   const candidate = String(tag || '').trim().replace(/_/g, '-');
@@ -106,11 +146,18 @@ export async function checkNativeSpeechAvailability(Recognition, lang) {
   }
 }
 
+// install() resolves only once the download is done, which is no quick answer: the
+// two Mandarin packs took 19.5 s on one connection and English alone over 30 s on
+// another. The deadline exists for a call that never settles, so it is set well past
+// a slow real download — at 15 s, a successful install was reported as a failure.
+export const SPEECH_INSTALL_TIMEOUT_MS = 180000;
+
 // install() can hang the same way, and it runs behind a disabled button, so a hang
 // leaves the page with no controls at all. Resolves false rather than never.
-export async function installNativeSpeech(Recognition, lang) {
+export async function installNativeSpeech(Recognition, lang, ms = SPEECH_INSTALL_TIMEOUT_MS) {
   try {
-    const result = await withSpeechTimeout(Recognition.install(nativeSpeechOptions(lang)));
+    const options = { ...nativeSpeechOptions(lang), langs: speechPacksFor(lang) };
+    const result = await withSpeechTimeout(Recognition.install(options), ms);
     return isSpeechTimeout(result) ? { ok: false, timedOut: true } : { ok: !!result, timedOut: false };
   } catch (error) {
     return { ok: false, timedOut: false, error };

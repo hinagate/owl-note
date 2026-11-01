@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { dedupeCues, cuesToMarkdown, buildTranscriptNote } from '../src/lib/transcript.js';
+import { dedupeCues, cuesToMarkdown, buildTranscriptNote, tidyRecognizedText } from '../src/lib/transcript.js';
 
 const cue = (text, over = {}) => ({ text, videoTime: null, at: 0, ...over });
 
@@ -40,6 +40,85 @@ describe('cuesToMarkdown — paragraphs', () => {
     expect(cuesToMarkdown(cues)).toBe(
       'First sentence here. Still the same thought.\n\nA new topic entirely.',
     );
+  });
+});
+
+describe('cuesToMarkdown — a video’s own subtitles', () => {
+  // Subtitle lines run back to back: a 10 s pause never comes, so time breaks them.
+  const line = (text, s, len = 2) => ({ text, videoTime: s, at: s * 1000, endAt: (s + len) * 1000 - 100 });
+
+  it('breaks paragraphs by video time, at a small gap once 30 s have passed', () => {
+    const cues = [];
+    for (let s = 0; s < 70; s += 2) cues.push(line(`L${s}`, s));
+    cues[17] = { ...line('L34', 34), at: 34500 }; // a 0.6 s gap past the 30 s mark
+    const paragraphs = cuesToMarkdown(cues, { subtitles: true }).split('\n\n');
+    expect(paragraphs[0].split(' ').at(-1)).toBe('L32');
+    expect(paragraphs[1].startsWith('L34')).toBe(true);
+  });
+
+  it('breaks after 45 s even without a gap', () => {
+    const cues = [];
+    for (let s = 0; s < 60; s += 2) cues.push(line(`L${s}`, s));
+    const paragraphs = cuesToMarkdown(cues, { subtitles: true }).split('\n\n');
+    expect(paragraphs[0].split(' ').at(-1)).toBe('L44');
+  });
+
+  // Subtitles are exact. The rolling-caption merge would eat a repeated word.
+  it('never merges lines the way rolling captions are merged', () => {
+    const cues = [line('I think that', 0), line('that is right', 2)];
+    expect(cuesToMarkdown(cues, { subtitles: true })).toBe('I think that that is right');
+    expect(cuesToMarkdown(cues)).toBe('I think that is right');
+  });
+
+  it('names the subtitle track in the note header', () => {
+    const note = buildTranscriptNote({
+      title: 'Talk',
+      url: 'https://www.youtube.com/watch?v=abc',
+      cues: [line('大家好', 0)],
+      startedAt: Date.UTC(2026, 10, 1),
+      endedAt: Date.UTC(2026, 10, 1) + 20 * 60000,
+      subtitles: 'YouTube subtitles: 中文（繁體字）',
+    });
+    expect(note.body.split('\n\n')[0]).toBe(
+      'Source: <https://www.youtube.com/watch?v=abc> · 2026-11-01 · 20 min · YouTube subtitles: 中文（繁體字）',
+    );
+  });
+});
+
+describe('tidyRecognizedText', () => {
+  // Verbatim from Chrome's zh-TW model on a real talk, partway through a session.
+  it('closes the spaces Chrome puts between Chinese characters', () => {
+    expect(tidyRecognizedText('那 青 山 之 間 合 歷 史 上 的 舊 3 0 年 正 有 什 麼 連 續？ 有 什 麼 區 別？'))
+      .toBe('那青山之間合歷史上的舊30年正有什麼連續？有什麼區別？');
+    expect(tidyRecognizedText('說 一 下 新 30 年 戰 爭， 那 我 想')).toBe('說一下新30年戰爭，那我想');
+  });
+
+  it('leaves the spaces around Latin words and between English words', () => {
+    expect(tidyRecognizedText('我們先用 Python 寫一個簡單的 API，然後')).toBe('我們先用 Python 寫一個簡單的 API，然後');
+    expect(tidyRecognizedText('we had 2 3 ideas')).toBe('we had 2 3 ideas');
+    expect(tidyRecognizedText('  plain English  ')).toBe('plain English');
+  });
+
+  it('closes them in Japanese too', () => {
+    expect(tidyRecognizedText('今 日 は 晴 れ で す。')).toBe('今日は晴れです。');
+  });
+});
+
+describe('cuesToMarkdown — Chinese and Japanese', () => {
+  it('joins sentences after 。！？ with no space, as the scripts are written', () => {
+    const cues = [
+      cue('今天很好。', { at: 0 }),
+      cue('我們走吧！', { at: 2000 }),
+      cue('今日は晴れです。', { at: 4000 }),
+      cue('and then English', { at: 6000 }),
+    ];
+    expect(cuesToMarkdown(cues)).toBe('今天很好。我們走吧！今日は晴れです。and then English');
+  });
+
+  // Without punctuation the space is the only mark of where one utterance ended.
+  it('keeps a space between unpunctuated utterances', () => {
+    const cues = [cue('我們今天討論', { at: 0 }), cue('這個問題', { at: 2000 })];
+    expect(cuesToMarkdown(cues)).toBe('我們今天討論 這個問題');
   });
 });
 

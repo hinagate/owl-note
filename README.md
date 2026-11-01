@@ -71,7 +71,7 @@ Scrolls and stitches the full page (including below the fold) into a single long
 
 Right-click → **Live Transcription save to OWL‑Note**
 
-Turn a playing tab's speech into a Markdown note with a draggable live-caption overlay. Right-click **Live Transcription save to OWL‑Note** to start — one right-click, first session included. Chrome 139+ uses its native on-device speech engine; the first session in a language pauses for a one-click confirmation while Chrome downloads that language's local model, then resumes on its own. Audio is never uploaded or stored, and OWL‑Note never falls back to cloud transcription.
+Turn a playing tab's speech into a Markdown note with a draggable live-caption overlay. Right-click **Live Transcription save to OWL‑Note** to start — one right-click, first session included. On a YouTube video that has subtitles, OWL‑Note saves the whole video from them straight away instead — the creator's own words, timed to the video, with nothing listened to; a video without subtitles asks before transcribing live. Chrome 139+ uses its native on-device speech engine; the first session in a language pauses for a one-click confirmation while Chrome downloads that language's local model, then resumes on its own. The overlay's language button switches language mid-video and keeps what was already transcribed. Chinese is transcribed as Mandarin in Traditional characters. Audio is never uploaded or stored, and OWL‑Note never falls back to cloud transcription.
 
 **Smart Selection Capture**
 

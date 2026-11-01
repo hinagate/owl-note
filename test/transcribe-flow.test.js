@@ -132,6 +132,37 @@ describe('transcription flow', () => {
     expect((await bm.listNotebooks(root)).find((item) => item.title === 'Transcripts')).toBeUndefined();
   });
 
+  // Chrome finalizes only at a pause: what was mid-sentence at Save is interim text.
+  it('keeps the sentence still being spoken when Save is pressed', async () => {
+    stubTranscribeApis();
+    await armAndStart();
+    await sw.handleCaptureMessage({ type: 'owl-cue', cues: [cue('the talk so far.', Date.now())] });
+    await sw.handleCaptureMessage({ type: 'owl-interim', text: 'and its very last words' });
+
+    const { note } = await sw.handleSaveTranscript();
+    expect(note.body).toContain('the talk so far. and its very last words');
+  });
+
+  it('does not add interim text a final result already replaced', async () => {
+    stubTranscribeApis();
+    await armAndStart();
+    await sw.handleCaptureMessage({ type: 'owl-interim', text: 'half a sen' });
+    await sw.handleCaptureMessage({ type: 'owl-cue', cues: [cue('half a sentence, finished.', 1000)] });
+
+    const { note } = await sw.handleSaveTranscript();
+    expect(note.body).toContain('half a sentence, finished.');
+    expect(note.body).not.toContain('half a sen half');
+    expect(note.body.match(/half a sen/g)).toHaveLength(1);
+  });
+
+  it('keeps it on Stop too, ready for a later Save', async () => {
+    stubTranscribeApis();
+    await armAndStart();
+    await sw.handleCaptureMessage({ type: 'owl-interim', text: 'still talking' });
+    await sw.handleStopCapture();
+    expect((await getSession()).cues.map((c) => c.text)).toEqual(['still talking']);
+  });
+
   it('drops cues that arrive after the session stopped', async () => {
     stubTranscribeApis();
     await armAndStart();
@@ -376,6 +407,235 @@ describe('Chrome-native capture', () => {
     });
 
     expect((await getSession()).cues[0].videoTime).toBe(12);
+  });
+});
+
+describe('transcription language', () => {
+  const prepares = (runtimeMessages) => runtimeMessages
+    .filter((m) => m.type === 'owl-offscreen-prepare')
+    .map((m) => m.lang);
+  const ready = async (lang) => sw.handleCaptureMessage({
+    type: 'owl-native-speech-ready',
+    lang,
+    sessionToken: tokenFor(await getSession()),
+  });
+
+  // Chrome offers zh-HK as downloadable, then hangs on "downloading" forever while
+  // it fetches the Simplified pack. It must never reach Chrome.
+  it('starts a Hong Kong browser in Traditional Mandarin, never zh-HK', async () => {
+    const { runtimeMessages } = stubTranscribeApis();
+    chrome.i18n = { getUILanguage: () => 'zh-HK' };
+    await armAndStart();
+    expect(prepares(runtimeMessages)).toEqual(['zh-TW']);
+  });
+
+  it('reads a Simplified choice saved by an older version as Traditional Mandarin', async () => {
+    const { runtimeMessages } = stubTranscribeApis();
+    await chrome.storage.local.set({ 'owl:speechLang': 'zh-CN' });
+    await armAndStart();
+    expect(prepares(runtimeMessages)).toEqual(['zh-TW']);
+  });
+
+  // Starting in the ARMED language sent a reader who picked another one on the
+  // setup page straight back to the setup page.
+  it('starts in the language the setup page installed, not the one it was armed with', async () => {
+    const { runtimeMessages } = stubTranscribeApis();
+    await armViaLanguageDownload();
+    await sw.handleCaptureMessage({ type: 'owl-transcribe-setup-complete', lang: 'zh-TW' });
+    expect((await getSession()).lang).toBe('zh-TW');
+    expect(prepares(runtimeMessages).at(-1)).toBe('zh-TW');
+  });
+
+  it('switches language mid-video and keeps what was already said', async () => {
+    const { runtimeMessages, captured } = stubTranscribeApis();
+    await armAndStart();
+    await ready('en-US');
+    await sw.handleCaptureMessage({ type: 'owl-cue', cues: [cue('said in English', 1000)] });
+
+    await sw.handleCaptureMessage({ type: 'owl-panel-language', lang: 'zh-TW' });
+    expect(prepares(runtimeMessages).at(-1)).toBe('zh-TW');
+    await ready('zh-TW');
+
+    const session = await getSession();
+    expect(session).toMatchObject({ lang: 'zh-TW', state: 'recording' });
+    expect(session.cues.map((c) => c.text)).toEqual(['said in English']);
+    // The same tab is captured again on the original grant, with no second click.
+    expect(captured).toEqual([{ targetTabId: 42 }, { targetTabId: 42 }]);
+    expect((await chrome.storage.local.get('owl:speechLang'))['owl:speechLang']).toBe('zh-TW');
+  });
+
+  it('does not blank the captions while the switch checks the new language', async () => {
+    const { overlayMessages } = stubTranscribeApis();
+    await armAndStart();
+    await ready('en-US');
+    await sw.handleCaptureMessage({ type: 'owl-cue', cues: [cue('keep showing this', 1000)] });
+    const before = overlayMessages.length;
+
+    await sw.handleCaptureMessage({ type: 'owl-panel-language', lang: 'zh-TW' });
+    await ready('zh-TW');
+
+    const texts = overlayMessages.slice(before).map((m) => m.message.text).filter((t) => t !== undefined);
+    expect(texts).toEqual([]);
+  });
+
+  it('offers the overlay only the languages this machine has installed', async () => {
+    const { overlayMessages } = stubTranscribeApis();
+    await armAndStart();
+    await sw.handleCaptureMessage({ type: 'owl-native-speech-languages', languages: ['en-US', 'zh-TW'] });
+
+    expect(overlayMessages.at(-1).message).toMatchObject({
+      type: 'owl-overlay-update',
+      lang: 'en-US',
+      langName: 'English',
+      languages: [
+        { tag: 'en-US', name: 'English', label: 'English (United States)' },
+        { tag: 'zh-TW', name: '中文', label: 'Chinese, Mandarin (Traditional)' },
+      ],
+    });
+  });
+
+  it('keeps the transcript when a switch lands on a language that needs a download', async () => {
+    const { runtimeMessages, windows } = stubTranscribeApis();
+    await armAndStart();
+    await ready('en-US');
+    await sw.handleCaptureMessage({ type: 'owl-cue', cues: [cue('worth keeping', 1000)] });
+    await sw.handleCaptureMessage({ type: 'owl-panel-language', lang: 'zh-TW' });
+
+    await sw.handleCaptureMessage({
+      type: 'owl-native-speech-install-required',
+      lang: 'zh-TW',
+      sessionToken: tokenFor(await getSession()),
+    });
+
+    const session = await getSession();
+    expect(session).toMatchObject({ state: 'recording', lang: 'en-US' });
+    expect(session.cues.map((c) => c.text)).toEqual(['worth keeping']);
+    expect(windows.at(-1).url).toContain('enable.html?lang=zh-TW');
+    expect(prepares(runtimeMessages).at(-1)).toBe('en-US'); // carried on in English
+  });
+
+  it('adds a language beside the running capture and switches once it is installed', async () => {
+    const { windows } = stubTranscribeApis();
+    await armAndStart();
+    await ready('en-US');
+    await sw.handleCaptureMessage({ type: 'owl-cue', cues: [cue('first part', 1000)] });
+
+    await sw.handleCaptureMessage({ type: 'owl-panel-add-language' });
+    expect(windows.at(-1).url).toContain('enable.html?lang=en-US');
+    expect((await getSession()).state).toBe('recording');
+
+    await sw.handleCaptureMessage({ type: 'owl-transcribe-setup-complete', lang: 'ja-JP' });
+    const session = await getSession();
+    expect(session.lang).toBe('ja-JP');
+    expect(session.cues.map((c) => c.text)).toEqual(['first part']);
+  });
+});
+
+describe('YouTube subtitles', () => {
+  const YT = { id: 77, windowId: 7, title: 'A Mandarin talk - YouTube', url: 'https://www.youtube.com/watch?v=abc' };
+  const JSON3 = JSON.stringify({
+    events: [
+      { tStartMs: 120, dDurationMs: 600, segs: [{ utf8: '大家好 我參老' }] },
+      { tStartMs: 720, dDurationMs: 1720, segs: [{ utf8: '今天來說一下新30年戰爭' }] },
+      { tStartMs: 1180000, dDurationMs: 2000, segs: [{ utf8: '我們下次再見' }] },
+    ],
+  });
+  const TRACKS = [{ baseUrl: 'https://www.youtube.com/api/timedtext?v=abc&lang=zh-Hant', languageCode: 'zh-Hant', kind: '', name: '中文（繁體字）' }];
+
+  // Each page function answers as YouTube's page would.
+  function youtubePage({ tracks = TRACKS, text = JSON3 } = {}) {
+    const apis = stubTranscribeApis();
+    const pageCalls = [];
+    chrome.scripting.executeScript = async (opts) => {
+      apis.injected.push(opts);
+      if (!opts.func) return [{ result: undefined }];
+      pageCalls.push({ name: opts.func.name, world: opts.world, args: opts.args });
+      if (opts.func.name === 'youtubeSubtitleInfo') {
+        return [{ result: { videoId: 'abc', tracks, defaultIndex: 0, playerUrl: 'https://www.youtube.com/api/timedtext?v=abc&lang=zh-Hant&pot=T&c=WEB' } }];
+      }
+      return [{ result: text }];
+    };
+    return { ...apis, pageCalls };
+  }
+  const transcribe = (tab = YT) => sw.handleTranscribe({ menuItemId: 'owl-transcribe-video', pageUrl: tab.url }, tab);
+  const savedNotes = async () => {
+    const root = await bm.ensureRoot();
+    const notebook = (await bm.listNotebooks(root)).find((item) => item.title === 'Transcripts');
+    return notebook ? Promise.all((await bm.listNotes(notebook.id)).map((n) => decode(n.payload))) : [];
+  };
+
+  it('saves the whole video from its subtitles, without listening to it', async () => {
+    const { captured, runtimeMessages, pageCalls } = youtubePage();
+    await transcribe();
+
+    expect(pageCalls.map((c) => [c.name, c.world])).toEqual([
+      ['youtubeSubtitleInfo', 'MAIN'],
+      ['fetchPageText', 'MAIN'],
+    ]);
+    expect(pageCalls[1].args[0]).toContain('pot=T');
+    const [note] = await savedNotes();
+    expect(note.body).toContain('大家好 我參老 今天來說一下新30年戰爭');
+    expect(note.body).toContain('## 15:00');
+    expect(note.body.split('\n\n')[0]).toContain('· 19 min · YouTube subtitles: 中文（繁體字）');
+    // Nothing captured, nothing prepared, no session left behind.
+    expect(captured).toEqual([]);
+    expect(runtimeMessages.filter((m) => m.type === 'owl-offscreen-prepare')).toEqual([]);
+    expect(await getSession()).toBe(null);
+  });
+
+  it('leaves a live transcription running in another tab alone', async () => {
+    youtubePage();
+    await armAndStart();
+    await sw.handleCaptureMessage({ type: 'owl-cue', cues: [cue('another tab, still going', 1000)] });
+
+    await transcribe();
+
+    expect(await getSession()).toMatchObject({ tabId: 42, state: 'recording' });
+    expect((await getSession()).cues.map((c) => c.text)).toEqual(['another tab, still going']);
+  });
+
+  it('asks before listening when the video has no subtitles', async () => {
+    const { captured, overlayMessages } = youtubePage({ tracks: [] });
+    await transcribe();
+
+    expect(captured).toEqual([]);
+    expect(await getSession()).toBe(null);
+    expect(await savedNotes()).toEqual([]);
+    expect(overlayMessages.at(-1).message).toMatchObject({
+      state: 'no subtitles',
+      text: expect.stringContaining('no subtitles'),
+      offerLive: true,
+      armed: true,
+    });
+
+    await sw.handleCaptureMessage({ type: 'owl-panel-start-live' });
+    expect(await getSession()).toMatchObject({ tabId: 77, state: 'recording', url: YT.url });
+  });
+
+  it('offers live transcription when the subtitles cannot be read', async () => {
+    const { overlayMessages } = youtubePage({ text: '' });
+    await transcribe();
+    expect(await savedNotes()).toEqual([]);
+    expect(overlayMessages.at(-1).message).toMatchObject({
+      text: expect.stringContaining('could not be read'),
+      offerLive: true,
+    });
+  });
+
+  it('cancelling the question closes the overlay and captures nothing', async () => {
+    const { captured, overlayMessages } = youtubePage({ tracks: [] });
+    await transcribe();
+    await sw.handleCaptureMessage({ type: 'owl-panel-cancel-arm' });
+    expect(overlayMessages.at(-1).message).toEqual({ type: 'owl-overlay-close' });
+    expect(await sw.handleCaptureMessage({ type: 'owl-panel-start-live' })).toBe(null);
+    expect(captured).toEqual([]);
+  });
+
+  it('starts live at once on other sites, where there are no subtitles to read', async () => {
+    const { pageCalls, runtimeMessages } = youtubePage();
+    await armAndStart();
+    expect(pageCalls).toEqual([]);
+    expect(runtimeMessages.some((m) => m.type === 'owl-offscreen-prepare')).toBe(true);
   });
 });
 

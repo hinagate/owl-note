@@ -8,16 +8,17 @@ import {
   checkNativeSpeechAvailability,
   installNativeSpeech,
   nativeSpeechConstructor,
-  normalizeSpeechLanguage,
   ON_DEVICE_LANGUAGES,
+  pickSpeechLanguage,
   SPEECH_LANG_KEY,
+  SPEECH_PACK_COMPANIONS,
 } from '../lib/native-speech.js';
 
 const note = document.getElementById('note');
 const enable = document.getElementById('enable');
 const cancel = document.getElementById('cancel');
 const picker = document.getElementById('lang');
-const requested = normalizeSpeechLanguage(new URL(location.href).searchParams.get('lang')
+const requested = pickSpeechLanguage(new URL(location.href).searchParams.get('lang')
   || chrome.i18n?.getUILanguage?.()
   || 'en-US');
 // The browser's UI language used to be the ONLY choice, so anyone whose language
@@ -39,7 +40,14 @@ let finished = false;
 
 function explain(result) {
   if (result === 'available') return `${lang} local speech is ready.`;
-  if (result === 'downloadable') return `${lang} needs a one-time Chrome speech-resource download.`;
+  if (result === 'downloadable') {
+    // Said up front: the download is twice the size the reader would expect, and
+    // it would otherwise look like the Simplified model is being set up.
+    return SPEECH_PACK_COMPANIONS[lang]
+      ? `${lang} needs a one-time Chrome speech-resource download. Chrome requires a second`
+        + ' Mandarin pack before it will start this one; transcripts stay in Traditional characters.'
+      : `${lang} needs a one-time Chrome speech-resource download.`;
+  }
   if (result === 'downloading') return `${lang} speech resources are currently downloading.`;
   if (result === 'unsupported') return 'Native transcription requires Chrome 139 or newer.';
   if (result === 'timeout') {
@@ -123,7 +131,9 @@ enable.addEventListener('click', async () => {
     finished = true;
     note.textContent = 'Ready. Returning to the video…';
     enable.textContent = 'Enabled';
-    try { await chrome.runtime.sendMessage({ type: 'owl-transcribe-setup-complete' }); } catch { /* worker unavailable */ }
+    // The language goes with the message: the reader may have picked a different
+    // one here than the session was started with.
+    try { await chrome.runtime.sendMessage({ type: 'owl-transcribe-setup-complete', lang }); } catch { /* worker unavailable */ }
     window.close();
   } catch (error) {
     note.textContent = `Could not enable live transcription: ${error?.message || error}`;

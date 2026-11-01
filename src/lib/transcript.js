@@ -6,6 +6,22 @@
  * @typedef {{ text: string, videoTime: number|null, at: number }} Cue
  */
 
+// Chrome's Mandarin model falls into putting a space between every character partway
+// through a session — measured on a real talk: 中 和 歷 史 上 的 舊 3 0 年. Chinese
+// and Japanese take no spaces, so a gap between two such characters, or around digits
+// they enclose, is the recognizer's and never the speaker's. Latin words keep theirs
+// (用 Python 寫 stays as it is).
+const CJK = '\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\u3000-\\u303f\\uff00-\\uffef';
+const CJK_GAP = new RegExp(`(?<=[${CJK}])\\s+(?=[${CJK}])`, 'gu');
+const CJK_DIGITS = new RegExp(`(?<=[${CJK}])\\s*\\d(?:\\s*\\d)*\\s*(?=[${CJK}])`, 'gu');
+
+export function tidyRecognizedText(text) {
+  return String(text ?? '')
+    .replace(CJK_DIGITS, (digits) => digits.replace(/\s+/g, ''))
+    .replace(CJK_GAP, '')
+    .trim();
+}
+
 function words(text) {
   return String(text ?? '').trim().split(/\s+/).filter(Boolean);
 }
@@ -33,6 +49,15 @@ const PARAGRAPH_GAP_MS = 10000;
 // Bare `## mm:ss` headings this far apart give the heading-aware chunker real
 // boundaries (ARCHITECTURE §4.5) without turning prose into a log file.
 const HEADING_EVERY_S = 300;
+
+// Utterances in spaced scripts join with a space. After Chinese or Japanese
+// punctuation a space is a stray gap (今天很好。 我們走吧); between two unpunctuated
+// CJK utterances it stays, as the only mark of where one ended.
+const NO_SPACE_AFTER = /[。！？，、；：」』）]$/u;
+
+function joinUtterances(parts) {
+  return parts.reduce((out, part) => (out ? `${out}${NO_SPACE_AFTER.test(out) ? '' : ' '}${part}` : part), '');
+}
 
 function mmss(totalSeconds) {
   const s = Math.max(0, Math.round(totalSeconds));
@@ -69,24 +94,35 @@ export function dedupeCues(cues) {
   return out;
 }
 
+// A video's subtitles are short timed lines with no pause worth the name — measured
+// on a 20-minute talk: the longest gap between lines 1.6 s, the median 0.16 s, and no
+// punctuation at all. Breaking on a speaker's pause would make each five-minute
+// section one block, so subtitle paragraphs break by video time instead: past 30 s,
+// at the next gap of 0.3 s or more; past 45 s, at the next line regardless.
+const SUBTITLE_PARAGRAPH_S = 30;
+const SUBTITLE_PARAGRAPH_MAX_S = 45;
+const SUBTITLE_BREAK_GAP_MS = 300;
+
 /**
  * Render a session's raw cues as the note body: de-duplicated utterances packed
- * into prose paragraphs, broken where the speaker paused.
+ * into prose paragraphs, broken where the speaker paused. A video's own subtitles
+ * (`subtitles: true`) are exact already — never merged — and break by video time.
  * @param {Cue[]} cues
  * @returns {string}
  */
-export function cuesToMarkdown(cues) {
+export function cuesToMarkdown(cues, { subtitles = false } = {}) {
   const out = [];
   let current = [];
   let prevAt = 0;
+  let paragraphStart = 0; // video time the open paragraph began at
   let block = null; // which HEADING_EVERY_S block of the video we're in
   const flush = () => {
-    if (current.length) out.push(current.join(' '));
+    if (current.length) out.push(joinUtterances(current));
     current = [];
   };
 
   let firstAt = null;
-  for (const u of dedupeCues(cues)) {
+  for (const u of subtitles ? (cues || []) : dedupeCues(cues)) {
     if (firstAt === null) firstAt = Number(u.at) || 0;
     // Player position when the page exposes it; otherwise how long we've been
     // recording — the ASR path has no player to ask.
@@ -102,7 +138,13 @@ export function cuesToMarkdown(cues) {
       out.push(`## ${mmss(b * HEADING_EVERY_S)}`);
       block = b;
     }
-    if (current.length && Number(u.at) - prevAt >= PARAGRAPH_GAP_MS) flush();
+    const gap = Number(u.at) - prevAt;
+    const elapsed = t - paragraphStart;
+    const breakHere = subtitles
+      ? elapsed >= SUBTITLE_PARAGRAPH_MAX_S || (elapsed >= SUBTITLE_PARAGRAPH_S && gap >= SUBTITLE_BREAK_GAP_MS)
+      : gap >= PARAGRAPH_GAP_MS;
+    if (current.length && breakHere) flush();
+    if (!current.length) paragraphStart = t;
     current.push(u.text);
     prevAt = Number(u.endAt ?? u.at) || 0;
   }
@@ -130,12 +172,16 @@ function isoDate(ms) {
  * Turn a finished session into the note that gets saved.
  * @returns {{ title: string, body: string }}
  */
-export function buildTranscriptNote({ title = '', url = '', cues = [], startedAt = 0, endedAt = 0 } = {}) {
+export function buildTranscriptNote({
+  title = '', url = '', cues = [], startedAt = 0, endedAt = 0, subtitles = '',
+} = {}) {
   // Floor, not round: a 42½-minute recording is "42 min", never "43".
   const minutes = Math.max(0, Math.floor((Number(endedAt) - Number(startedAt)) / 60000));
-  const header = [sourceLine(url), isoDate(startedAt), minutes ? `${minutes} min` : '']
+  // `subtitles` names the track the text came from, so a reader can tell the
+  // creator's own words from speech recognition.
+  const header = [sourceLine(url), isoDate(startedAt), minutes ? `${minutes} min` : '', subtitles]
     .filter(Boolean)
     .join(' · ');
-  const body = [header, cuesToMarkdown(cues)].filter(Boolean).join('\n\n');
+  const body = [header, cuesToMarkdown(cues, { subtitles: !!subtitles })].filter(Boolean).join('\n\n');
   return { title: String(title ?? '').replace(/\s+/g, ' ').trim(), body };
 }
