@@ -145,6 +145,7 @@ export function renderToolbar(container, { query = '', onSearch, onExportNote, o
   // toggled through this rather than re-rendered — same shape as the editor's
   // setShareActionVisible.
   const api = {
+    setQuery: (q) => { search.value = q; },
     setNoteExportEnabled: (on) => { noteItem.disabled = !on; },
     setKeyBackup: ({ label, title = '', enabled = true }) => {
       backupItem.textContent = label;

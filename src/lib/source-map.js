@@ -18,6 +18,7 @@
 //      nothing. Below the threshold the answer is "not enough to go on" rather
 //      than a coin flip.
 import { lexBlocks } from './markdown.js';
+import { findKeyword } from './search.js';
 
 // Below this, a selection is too common to place: "the", "普", "/s/" occur all
 // over a note. VS Code's preview sidesteps this with line numbers baked into the
@@ -105,4 +106,31 @@ export function locateSelection(source, block, selected) {
   const lastChar = haystack.index[at + needle.length - 1];
   if (start === undefined || lastChar === undefined) return null;
   return { start: from + start, end: from + lastChar + 1 };
+}
+
+// Text in the preview that is not the note's own words: pronunciation readings, code
+// block buttons, image placeholders, and drawings whose text is laid out as glyphs.
+const NOT_NOTE_TEXT = 'rt, rp, button, svg, .katex, .owl-image-placeholder';
+
+// The other direction: a DOM Range over the first place `query` reads in `root`, or null.
+// It may span several text nodes, since "<b>pas</b>ta" and a word split across <ruby>
+// runs both read as one word.
+export function keywordRange(root, query) {
+  if (!root) return null;
+  const nodes = [];
+  let text = '';
+  const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node.parentElement?.closest(NOT_NOTE_TEXT)) continue;
+    nodes.push({ node, start: text.length });
+    text += node.data;
+  }
+  const spot = findKeyword(text, query);
+  if (!spot) return null;
+  const startAt = nodes.findLast((n) => n.start <= spot.start);
+  const endAt = nodes.findLast((n) => n.start < spot.end);
+  const range = root.ownerDocument.createRange();
+  range.setStart(startAt.node, spot.start - startAt.start);
+  range.setEnd(endAt.node, spot.end - endAt.start);
+  return range;
 }

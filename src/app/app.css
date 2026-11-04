@@ -224,6 +224,23 @@ body.resizing { user-select: none; cursor: col-resize; }
 }
 #note-list .list-notice-actions button:first-child { background: #f5b301; border-color: #f5b301; color: #2b2100; font-weight: 600; }
 #note-list .select-status { position: sticky; top: 44px; z-index: 3; background: var(--accent); color: #fff; font-size: 12px; padding: 5px 10px; border-radius: 6px; margin: 0 4px 6px; }
+/* A search is narrowing this list. Sticks under "+ New note" so it cannot scroll out of
+   sight, and search-yellow to match the hits it refers to. One line, always: the
+   select-status below it is offset by this fixed height (30px + 6px margin). */
+#note-list .list-filter {
+  position: sticky; top: 44px; z-index: 3;
+  display: flex; align-items: center; gap: 8px;
+  box-sizing: border-box; width: calc(100% - 8px); height: 30px; margin: 0 4px 6px; padding: 0 10px;
+  border: 1px solid #f0c36d; border-radius: 6px; background: #fff3cd; color: #5c4400;
+  font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+}
+#note-list .list-filter:hover { background: #ffe8a3; }
+#note-list .list-filter:focus-visible { outline: 2px solid #b98900; outline-offset: 1px; }
+#note-list .list-filter-keyword { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#note-list .list-filter-count { flex: none; opacity: 0.75; font-variant-numeric: tabular-nums; }
+#note-list .list-filter-clear { flex: none; margin-left: auto; font-weight: 600; white-space: nowrap; }
+#note-list .list-filter + .select-status { top: 80px; }
+#note-list .trash-bar + .list-filter { top: 0; } /* Trash has no sticky button above it */
 
 /* Editor */
 .editor-breadcrumb { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; padding: 8px 14px 0; }
@@ -1294,6 +1311,9 @@ body.resizing { user-select: none; cursor: col-resize; }
 /* The source behind the current preview selection. Distinct from a search hit — this
    is a live mirror, not a result — and blue to read as "the same thing, over there". */
 .note-body-highlights mark.note-linked-hit { background: rgba(90, 150, 245, 0.34); box-shadow: 0 0 0 1px rgba(50, 110, 210, 0.28); }
+/* The same keyword in the preview, when a search result is opened. Painted by the CSS
+   Highlight API, so the preview's DOM (and so copying and exporting it) stays untouched. */
+::highlight(owl-note-keyword) { background-color: rgba(90, 150, 245, 0.42); }
 .note-body-highlights mark.note-search-hit { background: rgba(255, 213, 79, 0.42); box-shadow: 0 0 0 1px rgba(226, 174, 0, 0.18); }
 .note-body-highlights mark.note-search-hit.active { background: rgba(255, 174, 0, 0.68); box-shadow: 0 0 0 1px rgba(190, 120, 0, 0.42); }
 /* Highlight (<mark>) in the rendered preview — generated palette classes keep

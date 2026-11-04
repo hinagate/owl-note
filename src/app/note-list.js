@@ -1,11 +1,14 @@
 // src/app/note-list.js
 import { relativeTime } from '../lib/relative-time.js';
 
-export function renderNoteList(container, { notes, activeHandle, onOpen = () => {}, onTogglePin = () => {}, onNew = () => {}, trashView = false, onRestore = () => {}, onDeleteForever = () => {}, onEmptyTrash = () => {}, selected = new Set(), focusIndex = -1, onCardClick = null, onMove = () => {}, onSelectAll = () => {}, onClearSelection = () => {}, onOpenFocused = () => {}, onBatchDelete = () => {}, driveEnabled = false, query = '', onAsk = null, notice = null }) {
+export function renderNoteList(container, { notes, activeHandle, onOpen = () => {}, onTogglePin = () => {}, onNew = () => {}, trashView = false, onRestore = () => {}, onDeleteForever = () => {}, onEmptyTrash = () => {}, selected = new Set(), focusIndex = -1, onCardClick = null, onMove = () => {}, onSelectAll = () => {}, onClearSelection = () => {}, onOpenFocused = () => {}, onBatchDelete = () => {}, driveEnabled = false, query = '', totalCount = notes.length, onClearQuery = null, onAsk = null, notice = null }) {
   // Fall back to onOpen for plain clicks when no modifier-aware handler is provided
   // (maintains backward compat with unit tests that pass onOpen directly).
   const _cardClick = onCardClick ?? ((idx, handle, mod) => { if (!mod.ctrl && !mod.shift) onOpen(handle); });
   container.innerHTML = '';
+  const hint = String(query).trim() && onClearQuery
+    ? filterHint(container, { query, shown: notes.length, total: totalCount, onClear: onClearQuery })
+    : null;
 
   if (trashView) {
     const bar = document.createElement('div');
@@ -17,6 +20,7 @@ export function renderNoteList(container, { notes, activeHandle, onOpen = () => 
     empty.addEventListener('click', () => onEmptyTrash());
     bar.appendChild(empty);
     container.appendChild(bar);
+    if (hint) container.appendChild(hint);
     if (!notes.length) {
       const empty = document.createElement('div');
       empty.className = 'empty';
@@ -138,6 +142,8 @@ export function renderNoteList(container, { notes, activeHandle, onOpen = () => 
     else if (e.key === 'Enter') { e.preventDefault(); onOpenFocused(); }
     else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); onBatchDelete(); }
   };
+
+  if (hint) container.appendChild(hint);
 
   if (selected.size) {
     const status = document.createElement('div');
@@ -261,6 +267,38 @@ export function renderNoteList(container, { notes, activeHandle, onOpen = () => 
 
     container.appendChild(card);
   }
+}
+
+// A search stays on after the reader has stopped thinking about it: it survives opening
+// notes and switching notebooks, and the box that holds it is far from the list. Without
+// this the list just looks like notes have gone missing. The whole strip is the button,
+// so getting out of the filter never takes aiming.
+function filterHint(container, { query, shown, total, onClear }) {
+  const keyword = String(query).trim();
+  const hint = document.createElement('button');
+  hint.type = 'button';
+  hint.className = 'list-filter';
+  hint.title = `Clear the search for “${keyword}” and show all notes`;
+  const part = (className, text) => {
+    const span = document.createElement('span');
+    span.className = className;
+    span.textContent = text;
+    return span;
+  };
+  hint.append(
+    part('list-filter-keyword', `Filtered by “${keyword}”`),
+    part('list-filter-count', `${shown} of ${total}`),
+    part('list-filter-clear', '✕ Clear'),
+  );
+  hint.addEventListener('click', () => {
+    // This button is about to be rebuilt away. The list keeps the keyboard, where the
+    // arrow keys can walk the notes that just came back.
+    container.focus({ preventScroll: true });
+    onClear();
+  });
+  // The list claims Enter for "open the focused note" and would cancel this click.
+  hint.addEventListener('keydown', (e) => { if (e.key === 'Enter') e.stopPropagation(); });
+  return hint;
 }
 
 function snippetOf(body) {

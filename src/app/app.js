@@ -1473,6 +1473,7 @@ async function refreshNoteList() {
   // A press may have started while the notes loaded: redraw only once it is over.
   await pressOver();
   if (ui.activeFolder !== folder || !ui.rootId) return; // a newer refresh lists the new notebook
+  const totalCount = notes.length;
   if (ui.query) notes = searchNotes(notes, ui.query);
   const list = orderNotes(notes);
   const isDraft = ui.isNew && ui.current && !ui.activeBookmarkId && !ui.query;
@@ -1488,15 +1489,12 @@ async function refreshNoteList() {
   renderNoteList(document.getElementById('note-list'), {
     notes: list,
     query: ui.query,
+    totalCount,
+    onClearQuery: clearSearch,
     notice: inTrash ? null : keyNotice(list, protection),
     driveEnabled,
     activeHandle: ui.activeBookmarkId ?? ui.activeLocalId ?? (isDraft ? DRAFT_ID : null),
-    onOpen: (handle) => {
-      if (handle === DRAFT_ID) return;
-      const note = (ui.notes || []).find((n) => (n.bookmarkId ?? n.id) === handle);
-      if (note && note.localOnly) openLocalNote(note.id);
-      else openBookmark(handle);
-    },
+    onOpen: (handle) => { if (handle !== DRAFT_ID) openHandle(handle); },
     onTogglePin: (handle) => togglePin(handle),
     onNew: () => newNote(),
     trashView: inTrash,
@@ -1515,10 +1513,26 @@ async function refreshNoteList() {
   });
 }
 
+// Opening from the list. While a search is on, every note listed is a search result, so
+// it opens on the keyword that put it there.
 function openHandle(handle) {
   const note = (ui.notes || []).find((n) => (n.bookmarkId ?? n.id) === handle);
-  if (note && note.localOnly) openLocalNote(note.id);
-  else openBookmark(handle);
+  const reveal = String(ui.query || '').trim();
+  if (note && note.localOnly) openLocalNote(note.id, { reveal });
+  else openBookmark(handle, null, { reveal });
+}
+
+async function setSearch(q) {
+  ui.selected = new Set(); ui.anchor = null; ui.focus = -1; ui.query = q;
+  ui.editor?.clearRevealed?.(); // the open note may be lit up for the old keyword
+  await refreshNoteList();
+}
+
+async function clearSearch() {
+  ui.toolbar?.setQuery?.('');
+  await setSearch('');
+  // The list just got longer: keep the open note's card in sight within it.
+  document.querySelector('#note-list .item.card.active')?.scrollIntoView?.({ block: 'nearest' });
 }
 
 function onCardClick(H, index, handle, mod) {
@@ -1880,7 +1894,7 @@ async function refreshPanes() {
   ui.driveEnabled = await isEnabled();
   ui.toolbar = renderToolbar(document.getElementById('toolbar'), {
     query: ui.query,
-    onSearch: async (q) => { ui.selected = new Set(); ui.anchor = null; ui.focus = -1; ui.query = q; await refreshNoteList(); },
+    onSearch: setSearch,
     onExportNote: () => exportCurrentOwlNote(),
     onExportMarkdown: () => doExportMarkdown(),
     onExportKey: doExportRecoveryKey,
@@ -2156,6 +2170,7 @@ function renderCurrentEditor(opts = {}) {
   // A locked note's body is a placeholder, so there is nothing worth packaging.
   ui.toolbar?.setNoteExportEnabled?.(!!ui.current && !ui.current.locked);
   if (ui.editorNoteId && viewStates) ui.editor.restoreViewState?.(viewStates[ui.editorNoteId]);
+  if (opts.reveal) ui.editor.revealKeyword?.(opts.reveal); // after the restore, which it overrides
 
   // Every note open/close/switch funnels through this function, so this one call
   // keeps the Ask drawer's context chip following the open note live (not just at
@@ -2282,7 +2297,7 @@ function newNote() {
   refreshNoteList();
 }
 
-async function openLocalNote(id) {
+async function openLocalNote(id, { reveal } = {}) {
   const ticket = ++openTicket;
   markActiveCard(id); // before any wait, so the click feels answered
   const settled = await settleSaves(id, stillSaving(() => ticket === openTicket));
@@ -2290,7 +2305,7 @@ async function openLocalNote(id) {
     if (ticket !== openTicket) return; // another note was asked for meanwhile
     // That save may have moved it back into bookmarks (it shrank under the cap).
     const { stored } = settled;
-    if (stored?.bookmarkId) { await openBookmark(stored.bookmarkId, { ...stored.note, bookmarkId: stored.bookmarkId }); return; }
+    if (stored?.bookmarkId) { await openBookmark(stored.bookmarkId, { ...stored.note, bookmarkId: stored.bookmarkId }, { reveal }); return; }
   }
   const backup = await mirror.getBackup(id);
   if (!backup || !backup.current || ticket !== openTicket) return;
@@ -2300,7 +2315,7 @@ async function openLocalNote(id) {
     if (!(ui.notes || []).some((n) => n.id === id && n.bookmarkId)) await refreshNoteList();
     if (ticket !== openTicket) return; // another note was asked for meanwhile
     const listed = (ui.notes || []).find((n) => n.id === id && n.bookmarkId);
-    if (listed) { await openBookmark(listed.bookmarkId); return; }
+    if (listed) { await openBookmark(listed.bookmarkId, null, { reveal }); return; }
   }
   markActiveCard(id); // ahead of renderCurrentEditor, which is the slow part here
   ui.current = backup.current;
@@ -2308,7 +2323,7 @@ async function openLocalNote(id) {
   ui.activeLocalId = id;
   ui.activeLocalFolderId = backup.folderId ?? null;
   ui.isNew = false;
-  renderCurrentEditor();
+  renderCurrentEditor({ reveal });
   await refreshNoteList();
 }
 
@@ -2353,7 +2368,7 @@ function markActiveCard(handle) {
 }
 
 // known: the note itself, when the caller already has it rather than a list entry.
-async function openBookmark(bookmarkId, known = null) {
+async function openBookmark(bookmarkId, known = null, { reveal } = {}) {
   let found = known || (ui.notes || []).find((n) => n.bookmarkId === bookmarkId);
   if (!found) return;
   markActiveCard(bookmarkId); // before the await, so the click feels answered
@@ -2365,7 +2380,7 @@ async function openBookmark(bookmarkId, known = null) {
     // notebook selected meanwhile, may no longer even show). A note that outgrew
     // bookmarks during it lives on as a device-local copy.
     const { stored } = settled;
-    if (stored?.localId) { await openLocalNote(stored.localId); return; }
+    if (stored?.localId) { await openLocalNote(stored.localId, { reveal }); return; }
     if (stored?.note && stored.bookmarkId) {
       // Its content from the save; where it lives from the list, which follows a move
       // (a drag onto another notebook) made while the save ran.
@@ -2388,7 +2403,7 @@ async function openBookmark(bookmarkId, known = null) {
   ui.activeBookmarkId = bookmarkId;
   ui.activeLocalId = null;
   ui.isNew = false;
-  renderCurrentEditor();
+  renderCurrentEditor({ reveal });
   await refreshNoteList();
 }
 

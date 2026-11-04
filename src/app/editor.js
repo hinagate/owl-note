@@ -5,7 +5,8 @@ import { extractImages, inlineImages, pruneAttachments, attachFile, listFileRefs
 import { rememberCopiedAttachments, addCopiedBytes } from '../lib/copied-attachments.js';
 import { getBytes } from '../lib/attachment-store.js';
 import { relativeTime } from '../lib/relative-time.js';
-import { blockRanges, locateSelection, blockIndexOf } from '../lib/source-map.js';
+import { blockRanges, locateSelection, blockIndexOf, keywordRange } from '../lib/source-map.js';
+import { findKeyword } from '../lib/search.js';
 import * as panes from './panes.js';
 import { renderFormatBar, formatActions } from './format-bar.js';
 import { nextTableRow, nextListItem, renumberOrderedList } from '../lib/format.js';
@@ -975,7 +976,9 @@ export function renderEditor(
   // note, so every selection anywhere would re-lex the note once per editor ever
   // created. mouseup is where a drag-select finishes anyway.
   content.addEventListener('mouseup', () => {
-    if (destroyed || readOnly) return;
+    if (destroyed) return;
+    clearRevealed();
+    if (readOnly) return;
     const sel = window.getSelection?.();
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) { clearLinked(); return; }
     const bodyEl = content.querySelector('.preview-body');
@@ -994,6 +997,67 @@ export function renderEditor(
     renderHighlights();
     if (!scrollMarkIntoView('mark.note-linked-hit')) scrollOffsetIntoView(spot.start);
   });
+
+  // A note opened from a search result lands on the keyword, the same way a preview
+  // selection is mirrored into the source: painted and scrolled to in both panes, with
+  // keyboard focus left alone. Focusing the textarea with the word selected would let
+  // the next key typed replace it.
+  //
+  // Remembered rather than done once, because the note keeps moving after it opens.
+  // Images and diagrams arrive late and push the keyword down, and a Drive image rebuilds
+  // the preview outright. Until the reader touches the panes (`follow`), each of those
+  // brings the keyword back.
+  const KEYWORD_HIGHLIGHT = 'owl-note-keyword';
+  let revealed = null; // { query, block, follow }
+
+  function revealKeyword(query) {
+    clearRevealed();
+    const spot = findKeyword(ta.value, query);
+    if (!spot) return; // matched on the title alone: nothing in the body to jump to
+    const block = blockRanges(ta.value).findIndex((b) => spot.start >= b.start && spot.start < b.end);
+    revealed = { query, block, follow: true };
+    linkedRange = spot;
+    ta.setSelectionRange(spot.start, spot.start); // Tab into the editor lands here too
+    renderHighlights();
+    showRevealed();
+  }
+
+  function clearRevealed() {
+    if (!revealed) return;
+    revealed = null;
+    globalThis.CSS?.highlights?.delete(KEYWORD_HIGHLIGHT);
+    clearLinked();
+  }
+
+  function showRevealed() {
+    if (!revealed) return;
+    const bodyEl = content.querySelector('.preview-body');
+    const blockEl = bodyEl?.children[revealed.block];
+    // Its own block first, so both panes show the same occurrence. The first match in the
+    // source may not be visible at all (a link's URL), so then any place it does read.
+    const range = keywordRange(blockEl, revealed.query) || keywordRange(bodyEl, revealed.query);
+    if (range && typeof Highlight === 'function') globalThis.CSS?.highlights?.set(KEYWORD_HIGHLIGHT, new Highlight(range));
+    else globalThis.CSS?.highlights?.delete(KEYWORD_HIGHLIGHT);
+    if (!revealed.follow) return;
+    if (!scrollMarkIntoView('mark.note-linked-hit')) scrollOffsetIntoView(linkedRange.start);
+    // A range with no box is text hidden in a collapsed section: its block is the nearest
+    // thing to show. So is a keyword that only exists in the source, like an image's alt.
+    const box = [range, blockEl].map((t) => t?.getBoundingClientRect?.()).find((r) => r && (r.width || r.height));
+    if (!box) return;
+    preview.scrollTop += box.top - preview.getBoundingClientRect().top - preview.clientHeight / 3;
+    // A wide table or a long code line scrolls within itself; the word can be off to the side.
+    for (let el = range?.startContainer.parentElement; el && el !== preview; el = el.parentElement) {
+      if (el.scrollWidth > el.clientWidth) el.scrollLeft += box.left - el.getBoundingClientRect().left - el.clientWidth / 3;
+    }
+  }
+
+  for (const type of ['wheel', 'pointerdown', 'keydown']) {
+    split.addEventListener(type, () => { if (revealed) revealed.follow = false; }, { passive: true });
+  }
+  const revealRO = typeof ResizeObserver === 'function'
+    ? new ResizeObserver(() => { if (revealed?.follow) showRevealed(); })
+    : null;
+  revealRO?.observe(content);
 
   lightboxClose.addEventListener('click', closeLightbox);
   lightbox.addEventListener('click', (e) => { if (e.target === lightbox) closeLightbox(); });
@@ -1380,6 +1444,7 @@ export function renderEditor(
     if (segment) annotateRuby(content, segment);
     renderChips();
     updateNoteSearch();
+    showRevealed(); // the rebuild just dropped its highlight
     resolveDriveImages();
     updateSize();
   };
@@ -1458,6 +1523,7 @@ export function renderEditor(
     // rerender a large preview dozens of times for one keystroke.
     if (aligningTable) return;
     linkedRange = null; // offsets are stale the moment the text moves under them
+    clearRevealed();
     alignTable();
     renumberList(event && event.inputType);
     if (!destroyed) refresh(); // a replaced editor's preview is not on screen
@@ -1890,6 +1956,8 @@ export function renderEditor(
     replaceBody, // [Task E10] undo-preserving whole-body replace (Format's Apply path)
     refresh, // repaint the preview in place — lets a late-arriving reading table show up
              // without rebuilding the editor and taking the caret with it
+    revealKeyword,
+    clearRevealed,
     setShareActionVisible: (id, visible) => { const item = shareItems.get(id); if (item) item.hidden = !visible; },
     // The live content, attachments pruned to what the body still references. The
     // toolbar's per-note export needs the same view the Share menu used to build.
@@ -1926,6 +1994,8 @@ export function renderEditor(
     // the version from another device), so nothing still pending here may save it.
     destroy: ({ discard = false } = {}) => {
       destroyed = true;
+      clearRevealed();
+      revealRO?.disconnect();
       clearTimeout(editHintTimer);
       document.removeEventListener('pointerdown', onHintPointerDown, true);
       document.removeEventListener('focusin', onHintFocusIn, true);
