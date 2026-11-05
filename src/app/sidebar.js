@@ -1,6 +1,8 @@
 // src/app/sidebar.js
 import { buildNotebookTree } from '../lib/notebook-tree.js';
 
+export const FEEDBACK_URL = 'https://github.com/hinagate/owl-note/issues/new';
+
 export function renderSidebar(
   container,
   {
@@ -128,4 +130,12 @@ export function renderSidebar(
   trash.innerHTML = `<span class="nb-label">🗑 Trash</span><span class="trash-count">${trashCount || ''}</span>`;
   trash.addEventListener('click', () => onOpenTrash());
   container.appendChild(trash);
+
+  const feedback = document.createElement('a');
+  feedback.className = 'feedback-link';
+  feedback.href = FEEDBACK_URL;
+  feedback.target = '_blank';
+  feedback.rel = 'noopener';
+  feedback.textContent = 'Send feedback';
+  container.appendChild(feedback);
 }

@@ -1425,7 +1425,14 @@ export function renderEditor(
       ? { ...att, dataUri: loadedImageData.get(att.id) }
       : att);
     const previewBody = withImagePlaceholders(inlineImages(ta.value, previewAttachments));
-    bodyEl.innerHTML = renderMarkdown(linkifyFileRefs(previewBody)); // local images inline; remote images show progress until hydrated
+    // This runs on every edit, ahead of the autosave, so a note the parser cannot take must
+    // lose only its preview. Throwing here would stop the note from saving at all.
+    try {
+      bodyEl.innerHTML = renderMarkdown(linkifyFileRefs(previewBody)); // local images inline; remote images show progress until hydrated
+    } catch (error) {
+      console.warn('Could not render the preview:', error);
+      bodyEl.textContent = 'This note is too large to preview. You can still edit and save it.';
+    }
     content.appendChild(bodyEl);
     // Before the code-block decorators: a diagram replaces its code block. Not awaited —
     // a diagram seen before appears at once, a new one fills in when it is ready.
@@ -1513,6 +1520,19 @@ export function renderEditor(
     }, 0);
   };
 
+  // Each refresh takes the note's photos through the preview and the size meter's encode,
+  // which for a long capture is seconds of work. While such a note is being typed in, the
+  // refresh waits for a pause; an edit made by the app, like a photo put back, shows at once.
+  const LARGE_PHOTOS_CHARS = 2 * 1024 * 1024;
+  const TYPING_PAUSE_MS = 400;
+  let refreshTimer = null;
+  const refreshAfterEdit = () => {
+    clearTimeout(refreshTimer);
+    const photoChars = atts.reduce((sum, a) => sum + (loadedImageData.get(a.id) || a.dataUri || '').length, 0);
+    if (insertingText || photoChars < LARGE_PHOTOS_CHARS) { refresh(); return; }
+    refreshTimer = setTimeout(() => { if (!destroyed) refresh(); }, TYPING_PAUSE_MS);
+  };
+
   const fireChange = (event) => {
     // One insertion arriving as many nested events (see execInsertAsOneEdit): note it,
     // and let the insertion handle it once, when it has finished.
@@ -1526,7 +1546,7 @@ export function renderEditor(
     clearRevealed();
     alignTable();
     renumberList(event && event.inputType);
-    if (!destroyed) refresh(); // a replaced editor's preview is not on screen
+    if (!destroyed) refreshAfterEdit(); // a replaced editor's preview is not on screen
     onChange({ title: titleInput.value, body: ta.value, attachments: atts });
     scheduleAutoSave();
   };
@@ -1732,7 +1752,11 @@ export function renderEditor(
     if (!photoSrc || destroyed) return false;
     showDrawPanel({
       photo: { src: photoSrc, name: att.name, mime: att.mime },
-      onSave: (file) => replaceImage(id, nth, file, photoSrc),
+      // The panel has closed by now, so this status line is the only place left to say so.
+      onSave: (file) => replaceImage(id, nth, file, photoSrc).catch((error) => {
+        console.warn('Could not put the edited photo back:', error);
+        setStatus('Could not save the photo');
+      }),
     });
     return true;
   }
@@ -1762,7 +1786,17 @@ export function renderEditor(
         return;
       }
       const end = at.index + at[0].length - 1; // the closing parenthesis
-      insertText(ref.slice(ref.lastIndexOf(':') + 1, -1), end - id.length, end);
+      const idStart = end - id.length;
+      const newId = ref.slice(ref.lastIndexOf(':') + 1, -1);
+      // Leave the caret where the reader had it. insertText would leave it inside the new
+      // reference, where the next key typed breaks the id, and with it the photo.
+      const place = (at_) => {
+        if (at_ <= idStart) return at_;
+        return at_ >= end ? at_ + newId.length - id.length : idStart + newId.length + 1;
+      };
+      const selection = [place(ta.selectionStart), place(ta.selectionEnd)];
+      insertText(newId, idStart, end);
+      ta.setSelectionRange(selection[0], selection[1]);
     } finally {
       insertsInFlight -= 1;
     }
@@ -1994,6 +2028,7 @@ export function renderEditor(
     // the version from another device), so nothing still pending here may save it.
     destroy: ({ discard = false } = {}) => {
       destroyed = true;
+      clearTimeout(refreshTimer);
       clearRevealed();
       revealRO?.disconnect();
       clearTimeout(editHintTimer);

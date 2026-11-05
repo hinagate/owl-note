@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "OWL-Note",
-  "version": "2.3.47",
-  "description": "Markdown notes that live in your browser bookmarks. Photos, attachments, built-in RAG. Free, private. Syncs via Google/Microsoft.",
+  "name": "OWL-Note: Markdown Notebook, Save AI Chats & Tab Transcriber",
+  "short_name": "OWL-Note",
+  "version": "2.3.48",
+  "description": "Free Markdown notebook for your browser. Save & rebuild AI chats, transcribe tab audio, and search with local RAG. Auto-syncs free.",
   "permissions": ["bookmarks", "storage", "unlimitedStorage", "contextMenus", "activeTab", "scripting", "identity", "offscreen", "tabCapture"],
   "content_security_policy": { "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'" },
   "optional_host_permissions": ["https://www.googleapis.com/*", "https://oauth2.googleapis.com/*"],

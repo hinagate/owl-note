@@ -48,7 +48,7 @@ export function captureSelectionMarkdown(mode = false) {
     if (node.hasAttribute('hidden') || node.getAttribute('aria-hidden') === 'true'
       || /(?:display\s*:\s*none|visibility\s*:\s*hidden)/i.test(node.getAttribute('style') || '')) return true;
     if (!semanticCapture) return false;
-    if (/(?:^|\s)(?:sr-only|visually-hidden|screen-reader-text)(?:\s|$)/i.test(node.className || '')) return true;
+    if (/(?:^|\s)(?:sr-only|visually-hidden|cdk-visually-hidden|screen-reader-text)(?:\s|$)/i.test(node.className || '')) return true;
     try {
       const style = getComputedStyle(node);
       return style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse';
@@ -87,14 +87,17 @@ export function captureSelectionMarkdown(mode = false) {
   }
 
   function assistantName() {
-    const identity = `${document.title || ''} ${globalThis.location?.hostname || ''}`;
-    if (/claude/i.test(identity)) return 'Claude';
-    if (/gemini/i.test(identity)) return 'Gemini';
-    if (/copilot/i.test(identity)) return 'Copilot';
-    if (/chatgpt|openai/i.test(identity)) return 'ChatGPT';
-    // data-message-author-role is the stable marker used by ChatGPT. Keep that
-    // established label when the page does not expose a more specific provider.
-    return 'ChatGPT';
+    const provider = (identity) => {
+      if (/claude/i.test(identity)) return 'Claude';
+      if (/gemini/i.test(identity)) return 'Gemini';
+      if (/copilot/i.test(identity)) return 'Copilot';
+      if (/chatgpt|openai/i.test(identity)) return 'ChatGPT';
+      return '';
+    };
+    // The host decides first: a ChatGPT chat can easily be titled "Add overlay next to
+    // Gemini". data-message-author-role began as ChatGPT's marker, so keep that label
+    // when the page does not expose a more specific provider.
+    return provider(globalThis.location?.hostname || '') || provider(document.title || '') || 'ChatGPT';
   }
 
   function messageLabel(node) {
@@ -103,6 +106,23 @@ export function captureSelectionMarkdown(mode = false) {
     if (role === 'assistant') return assistantName();
     if (role === 'tool') return 'Tool';
     if (!semanticCapture) return '';
+
+    // Gemini's turns are custom elements. A reply is <model-response> in the app and a
+    // bare <response-container> on a share page; the first contains the second, so only
+    // one of them may label.
+    const tag = String(node.tagName || '').toUpperCase();
+    if (tag === 'USER-QUERY') return 'You';
+    if (tag === 'MODEL-RESPONSE') return 'Gemini';
+    if (tag === 'RESPONSE-CONTAINER' && !node.closest?.('model-response')) return 'Gemini';
+
+    // ChatGPT's signed-in app moved the role onto a screen-reader heading inside each
+    // turn. Anonymous visitors still get the older markup, which the checks above label.
+    const roleHeading = Array.from(node.children || []).find((child) => child.hasAttribute?.('data-conversation-role'));
+    if (roleHeading && !node.querySelector('[data-message-author-role]')) {
+      const conversationRole = roleHeading.getAttribute('data-conversation-role');
+      if (conversationRole === 'user') return 'You';
+      if (conversationRole === 'assistant') return assistantName();
+    }
 
     // Claude's shared-chat DOM does not expose data-message-author-role. Instead, each
     // message owns a direct screen-reader heading such as "You said" or "Claude
@@ -158,6 +178,20 @@ export function captureSelectionMarkdown(mode = false) {
     return Array.from(node.childNodes || []).map(render).join('');
   }
 
+  function codeFence(value, language = '') {
+    const code = String(value || '').replace(/^\n|\n$/g, '');
+    const longest = Math.max(0, ...Array.from(code.matchAll(/`+/g), (m) => m[0].length));
+    const fence = '`'.repeat(Math.max(3, longest + 1));
+    return block(`${fence}${language}\n${code}\n${fence}`);
+  }
+
+  // Code block headers name the language for people ("JavaScript", "Plain text"). A fence
+  // takes a single word, so anything else is left out.
+  function fenceLanguage(label) {
+    const name = compact(label).toLowerCase();
+    return /^[\w+#.-]+$/.test(name) && name !== 'code' ? name : '';
+  }
+
   function inlineCode(value) {
     const code = String(value || '').replace(/\s+/g, ' ').trim();
     if (!code) return '';
@@ -211,6 +245,20 @@ export function captureSelectionMarkdown(mode = false) {
     if (invisible(node)) return '';
     if (wholePage && (/^(NAV|ASIDE|FOOTER)$/.test(tag)
       || /^(navigation|complementary|dialog|toolbar)$/.test(node.getAttribute('role') || ''))) return '';
+
+    // ChatGPT's signed-in app renders code without <pre> or <code> around it, and marks
+    // up what its own Copy button should do instead.
+    const markdownCopy = node.getAttribute('data-markdown-copy');
+    if (markdownCopy === 'exclude') return '';
+    if (markdownCopy === 'inline-code') return inlineCode(node.textContent);
+    if (markdownCopy === 'code-block') {
+      const source = node.querySelector('[data-code-block-source], code');
+      return codeFence((source || node).textContent, fenceLanguage(node.querySelector('[data-markdown-copy="exclude"]')?.textContent));
+    }
+    // Gemini names the language in a header above the <pre>, which has no class saying so.
+    if (tag === 'CODE-BLOCK' && node.querySelector('pre')) {
+      return codeFence(node.querySelector('pre').textContent, fenceLanguage(node.querySelector('.code-block-decoration > span')?.textContent));
+    }
     if (semanticCapture && (tag === 'BUTTON' || node.getAttribute('role') === 'button')) {
       return meaningfulButton(node) ? children(node) : '';
     }
@@ -246,8 +294,8 @@ export function captureSelectionMarkdown(mode = false) {
 
     if (/^H[1-6]$/.test(tag)) {
       if (semanticCapture && /^(?:you|chatgpt) said:?$/i.test(compact(node.textContent))) return '';
-      const level = Number(tag[1]);
-      return block(`${'#'.repeat(level)} ${clean(children(node))}`);
+      const heading = clean(children(node));
+      return heading ? block(`${'#'.repeat(Number(tag[1]))} ${heading}`) : '';
     }
     if (tag === 'P') return block(children(node));
     if (/^(DIV|SECTION|ARTICLE|MAIN|HEADER|FOOTER|ASIDE|FIGURE|ADDRESS)$/.test(tag)) return block(children(node));
@@ -268,11 +316,8 @@ export function captureSelectionMarkdown(mode = false) {
     if (tag === 'CODE' && node.parentElement?.tagName !== 'PRE') return inlineCode(node.textContent);
     if (tag === 'PRE') {
       const codeEl = node.querySelector('code');
-      const code = String((codeEl || node).textContent || '').replace(/^\n|\n$/g, '');
       const language = ((codeEl?.className || '').match(/(?:language|lang)-([\w+-]+)/i) || [])[1] || '';
-      const longest = Math.max(0, ...Array.from(code.matchAll(/`+/g), (m) => m[0].length));
-      const fence = '`'.repeat(Math.max(3, longest + 1));
-      return block(`${fence}${language}\n${code}\n${fence}`);
+      return codeFence((codeEl || node).textContent, language);
     }
     if (tag === 'A') {
       const label = clean(children(node));
@@ -322,6 +367,12 @@ export function captureSelectionMarkdown(mode = false) {
   }
 
   function pageRoot() {
+    // A chat app's sidebar is not part of the conversation, but it can outweigh a short
+    // one in the scoring below. The turns themselves say where the conversation is.
+    const turn = document.querySelector('[data-message-author-role], [data-conversation-role], [data-testid="user-message"], user-query');
+    const conversation = turn?.closest('main, [role="main"]');
+    if (conversation) return conversation;
+
     const candidates = [...new Set([
       ...document.querySelectorAll('main, [role="main"], article'),
       document.body,

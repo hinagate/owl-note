@@ -502,6 +502,57 @@ describe('draw panel over a photo (Edit photo)', () => {
     expect(document.querySelector('.draw-photo').getAttribute('src')).toBe(tall.src);
   });
 
+  // A full-page capture opens here by itself, so Save is often the first thing clicked.
+  it('Save with no marks closes the panel and leaves the photo alone', async () => {
+    const onSave = vi.fn();
+    const exportBlob = vi.fn(okExport);
+    const { ready, saveButton } = showDrawPanel({ photo: tall, loadImage: photoOf(1280, 12000), onSave, exportBlob });
+    await ready;
+    expect(saveButton.disabled).toBe(false);
+    click(saveButton);
+    expect(document.querySelector('.draw-dialog')).toBeNull();
+    expect(exportBlob).not.toHaveBeenCalled();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('Save waits while the photo is still opening', () => {
+    const { saveButton } = showDrawPanel({ photo: tall, loadImage: () => new Promise(() => {}) });
+    expect(saveButton.disabled).toBe(true);
+    expect(document.querySelector('.draw-status').textContent).toMatch(/opening the photo/i);
+  });
+
+  it('a mark that was undone leaves nothing to save, and Save still closes', async () => {
+    const onSave = vi.fn();
+    const exportBlob = vi.fn(okExport);
+    const { ready, canvas, saveButton } = showDrawPanel({ photo: tall, loadImage: photoOf(1280, 12000), onSave, exportBlob });
+    await ready;
+    draw(canvas, [[10, 10], [40, 40]]);
+    click(document.querySelector('.draw-undo'));
+    expect(saveButton.disabled).toBe(false);
+    click(saveButton);
+    expect(document.querySelector('.draw-dialog')).toBeNull();
+    expect(exportBlob).not.toHaveBeenCalled();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('a mark is still saved onto the photo', async () => {
+    const onSave = vi.fn();
+    const exportBlob = vi.fn(async () => new Blob(['jpeg'], { type: 'image/jpeg' }));
+    const { ready, canvas, saveButton } = showDrawPanel({ photo: tall, loadImage: photoOf(1280, 12000), onSave, exportBlob });
+    await ready;
+    draw(canvas, [[10, 10], [40, 40]]);
+    click(saveButton);
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(exportBlob).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][0].type).toBe('image/jpeg');
+  });
+
+  it('a Save that cannot act looks like it, so it never reads as a dead button', () => {
+    const css = readFileSync('src/app/app.css', 'utf8');
+    expect(css).toMatch(/\.share-link-done:disabled\s*\{[^}]*opacity:\s*0\.5[^}]*cursor:\s*default/);
+    expect(css).toMatch(/\.share-link-done:hover:not\(:disabled\)/);
+  });
+
   it('a blank drawing has neither the photo layer nor the zoom bar', () => {
     showDrawPanel({});
     expect(document.querySelector('.draw-photo')).toBeNull();

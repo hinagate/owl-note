@@ -753,7 +753,8 @@ body.resizing { user-select: none; cursor: col-resize; }
 }
 .share-link-copy:hover { background: #f4f8ff; }
 .share-link-copy.copied, .share-link-done { background: #1a73e8; color: #fff; }
-.share-link-done:hover { background: #1765cc; }
+.share-link-done:hover:not(:disabled) { background: #1765cc; }
+.share-link-done:disabled { opacity: 0.5; cursor: default; }
 .share-link-dialog footer {
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
   margin-top: 22px; padding-top: 16px; border-top: 1px solid #e8eaed;
@@ -1110,6 +1111,10 @@ body.resizing { user-select: none; cursor: col-resize; }
   background: none; border: 0; color: var(--muted); font-size: 13px; line-height: 1; cursor: pointer; padding: 2px;
 }
 #review-banner .review-close:hover { color: var(--text); }
+#review-banner .review-problem { font-size: 12px; color: var(--muted); }
+#review-banner .review-problem:hover { color: var(--text); }
+#sidebar .feedback-link { display: block; padding: 4px 10px; font-size: 12px; color: var(--muted); text-decoration: none; }
+#sidebar .feedback-link:hover { color: var(--accent-dark); text-decoration: underline; }
 
 
 /* Attachments (future) */

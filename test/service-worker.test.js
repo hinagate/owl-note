@@ -65,9 +65,11 @@ describe('service worker handlers', () => {
     expect(children.some((c) => c.title === '📓 Notes')).toBe(true);
     expect(menus).toEqual([
       { id: 'owl-save-selection', title: 'Save selection to OWL-Note', contexts: ['selection'] },
-      { id: 'owl-capture-smart-page', title: 'Rebuild LLM chat to OWL-Note', contexts: ['page'] },
-      { id: 'owl-capture-full-page', title: 'Capture entire page to OWL-Note', contexts: ['page'] },
-      { id: 'owl-transcribe-video', title: 'Live Transcription save to OWL-Note', contexts: ['page', 'video'] },
+      { id: 'owl-page-menu', title: 'OWL-Note', contexts: ['page'] },
+      { id: 'owl-capture-smart-page', parentId: 'owl-page-menu', title: 'Rebuild LLM chat to OWL-Note', contexts: ['page'] },
+      { id: 'owl-capture-full-page', parentId: 'owl-page-menu', title: 'Capture entire page to OWL-Note', contexts: ['page'] },
+      { id: 'owl-transcribe-page', parentId: 'owl-page-menu', title: 'Live Transcription save to OWL-Note', contexts: ['page'] },
+      { id: 'owl-transcribe-video', title: 'Live Transcription save to OWL-Note', contexts: ['video'] },
     ]);
   });
 

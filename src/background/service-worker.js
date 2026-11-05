@@ -26,6 +26,8 @@ const SAVE_SELECTION_ID = 'owl-save-selection';
 const CAPTURE_FULL_PAGE_ID = 'owl-capture-full-page';
 const CAPTURE_SMART_PAGE_ID = 'owl-capture-smart-page';
 const TRANSCRIBE_ID = 'owl-transcribe-video';
+const TRANSCRIBE_PAGE_ID = 'owl-transcribe-page';
+const PAGE_MENU_ID = 'owl-page-menu';
 const TRANSCRIPTS_NOTEBOOK = 'Transcripts';
 const TRANSCRIBE_ARM_KEY = 'owl:transcribeArm';
 const TRANSCRIBE_ARM_TTL_MS = 30 * 60 * 1000;
@@ -55,11 +57,20 @@ const QUICK_CAPTURE_KEY = 'owl:quickCapture';
 
 export async function handleInstalled() {
   await ensureRoot();
-  // Both commands are explicit gestures and therefore grant temporary activeTab.
+  // create() refuses an id that already exists, which could leave an update with the
+  // previous version's menu.
+  await chrome.contextMenus?.removeAll?.();
+  // These commands are explicit gestures and therefore grant temporary activeTab.
   chrome.contextMenus?.create({ id: SAVE_SELECTION_ID, title: 'Save selection to OWL-Note', contexts: ['selection'] });
-  chrome.contextMenus?.create({ id: CAPTURE_SMART_PAGE_ID, title: 'Rebuild LLM chat to OWL-Note', contexts: ['page'] });
-  chrome.contextMenus?.create({ id: CAPTURE_FULL_PAGE_ID, title: 'Capture entire page to OWL-Note', contexts: ['page'] });
-  chrome.contextMenus?.create({ id: TRANSCRIBE_ID, title: 'Live Transcription save to OWL-Note', contexts: ['page', 'video'] });
+  // When several of an extension's items apply, Chrome files them under a submenu titled
+  // with the full store name, which is too long for a right-click menu. Our own single
+  // parent keeps that label short. Transcribe is the only item that applies on a video,
+  // so it stays one click away there.
+  chrome.contextMenus?.create({ id: PAGE_MENU_ID, title: 'OWL-Note', contexts: ['page'] });
+  chrome.contextMenus?.create({ id: CAPTURE_SMART_PAGE_ID, parentId: PAGE_MENU_ID, title: 'Rebuild LLM chat to OWL-Note', contexts: ['page'] });
+  chrome.contextMenus?.create({ id: CAPTURE_FULL_PAGE_ID, parentId: PAGE_MENU_ID, title: 'Capture entire page to OWL-Note', contexts: ['page'] });
+  chrome.contextMenus?.create({ id: TRANSCRIBE_PAGE_ID, parentId: PAGE_MENU_ID, title: 'Live Transcription save to OWL-Note', contexts: ['page'] });
+  chrome.contextMenus?.create({ id: TRANSCRIBE_ID, title: 'Live Transcription save to OWL-Note', contexts: ['video'] });
 }
 
 export async function handleActionClick(tab) {
@@ -448,7 +459,7 @@ async function preferredSpeechLanguage() {
 }
 
 export async function handleTranscribe(info, tab) {
-  if (info.menuItemId !== TRANSCRIBE_ID) return null;
+  if (info.menuItemId !== TRANSCRIBE_ID && info.menuItemId !== TRANSCRIBE_PAGE_ID) return null;
   const tabId = tab?.id;
   if (!Number.isInteger(tabId)) return null;
   // A language the reader already got working beats guessing from the browser UI
@@ -959,7 +970,7 @@ export function handleCaptureMessage(message) {
 }
 
 export function handleContextMenuClick(info, tab) {
-  if (info?.menuItemId === TRANSCRIBE_ID) return handleTranscribe(info, tab);
+  if (info?.menuItemId === TRANSCRIBE_ID || info?.menuItemId === TRANSCRIBE_PAGE_ID) return handleTranscribe(info, tab);
   if (info?.menuItemId === SAVE_SELECTION_ID) return handleSaveSelection(info, tab);
   if (info?.menuItemId === CAPTURE_FULL_PAGE_ID) return handleCaptureFullPage(info, tab);
   if (info?.menuItemId === CAPTURE_SMART_PAGE_ID) return handleCaptureSmartPage(info, tab);

@@ -165,3 +165,52 @@ describe('scheme-less link normalization', () => {
     expect(html).toContain('target="_blank"');
   });
 });
+
+// A long full-page capture is a single data URI of many megabytes. marked's block regexes
+// overflow the stack on a word that long, so rendering must not hand it the bytes.
+describe('long image data URIs', () => {
+  const uri = (chars, type = 'jpeg') => `data:image/${type};base64,${'QUJD'.repeat(Math.ceil(chars / 4))}`;
+  const srcs = (html) => [...new DOMParser().parseFromString(html, 'text/html').querySelectorAll('img')].map((img) => img.getAttribute('src'));
+
+  it('renders a photo far past the size that overflows the parser, bytes intact', () => {
+    const photo = uri(12_000_000);
+    expect(srcs(renderMarkdown(`# Page\n\n![Long page](${photo})\n`))).toEqual([photo]);
+  });
+
+  it('gives each of several photos back its own bytes', () => {
+    const first = uri(9_000_000);
+    const second = uri(10_000_000, 'png');
+    expect(srcs(renderMarkdown(`![a](${first})\n\ntext\n\n![b](${second})\n\n![a again](${first})`))).toEqual([first, second, first]);
+  });
+
+  it('renders one inside a table cell', () => {
+    const photo = uri(9_000_000);
+    expect(srcs(renderMarkdown(`| Shot |\n| --- |\n| ![x](${photo}) |`))).toEqual([photo]);
+  });
+
+  it('leaves a short data URI exactly as it was', () => {
+    const small = 'data:image/png;base64,QUFB';
+    expect(srcs(renderMarkdown(`![tiny](${small})`))).toEqual([small]);
+  });
+
+  it('still refuses a data URI as a link, whatever its length', () => {
+    for (const chars of [100, 9_000_000]) {
+      const html = renderMarkdown(`[click](${uri(chars)})`);
+      expect(html).not.toContain('data:image');
+      expect(html).toContain('click');
+    }
+  });
+
+  it('cannot be used to smuggle markup into the page', () => {
+    const photo = uri(5_000);
+    const html = renderMarkdown(`![x](${photo}" onerror="alert(1))\n\n<img src="${photo}" onerror="alert(1)">`);
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    expect(doc.querySelectorAll('[onerror]')).toHaveLength(0);
+    expect(doc.querySelectorAll('img')).toHaveLength(1); // the raw tag, with only its src left
+    expect(doc.querySelector('img').getAttribute('src')).toBe(photo);
+  });
+
+  it('leaves text that merely looks like its stand-in alone', () => {
+    expect(renderMarkdown('data:image/gif;base64,owlBytes0x')).toContain('owlBytes0x');
+  });
+});

@@ -4,7 +4,7 @@ import { encode, decode, selfTest } from '../lib/codec.js';
 import { bookmarkedNoteIds, liveFolderOr } from '../lib/stranded.js';
 import { isMissingKeyError, reconcileKeyring, watchKeyChanges, importKeyring, exportKeyring } from '../lib/note-key.js';
 import { createNote, withUpdatedContent, contentHash, extractTitle, withPinned, orderNotes } from '../lib/note.js';
-import { renderSidebar } from './sidebar.js';
+import { FEEDBACK_URL, renderSidebar } from './sidebar.js';
 import { renderNoteList } from './note-list.js';
 import { renderEditor } from './editor.js';
 import { initPanes } from './panes.js';
@@ -937,12 +937,13 @@ function removeSemantic(id) {
 
 // --- [Task E16] Gentle one-time review ask [growth flywheel] ---------------------
 // One respectful, policy-safe prompt shown at a VALUE moment, at most ONCE per install
-// EVER: the 100th successful save. Any dismissal (Rate it / No thanks / ✕) — or the
+// EVER: the 100th successful save, or sooner for someone who mostly captures. Any dismissal (Rate it / No thanks / ✕) — or the
 // mere act of showing it — persists owl:reviewAsked, so it can never reappear. It is a
 // SEPARATE persistent card, never the transient #toast.
 const REVIEW_ASKED_KEY = 'owl:reviewAsked';    // once-ever latch (persisted)
 const REVIEW_SAVE_COUNT_KEY = 'owl:saveCount';  // successful-save tally toward the threshold
 const REVIEW_SAVE_THRESHOLD = 100;              // the 100th save is the value moment
+const REVIEW_CAPTURE_POINTS = 20;               // ...and so is the 5th capture or transcript
 // The Chrome Web Store review page for OWL-Note. (A future Edge Add-ons store would
 // need its own URL + a store-detect — deliberately out of scope here.)
 const REVIEW_STORE_URL = 'https://chromewebstore.google.com/detail/hjkbpgkmiaeojfhkpnhmokgjipenhcfl/reviews';
@@ -1204,7 +1205,14 @@ function showReviewBanner() {
   actions.className = 'review-actions';
   actions.append(rate, no);
 
-  card.append(close, msg, actions);
+  const problem = document.createElement('a');
+  problem.className = 'review-problem';
+  problem.href = FEEDBACK_URL;
+  problem.target = '_blank';
+  problem.rel = 'noopener';
+  problem.textContent = 'Something wrong? Report a problem';
+
+  card.append(close, msg, actions, problem);
   document.body.append(card);
 }
 
@@ -1212,10 +1220,12 @@ function showReviewBanner() {
 // been shown/dismissed we stop counting, so there's no unbounded storage growth. The
 // whole body is try/caught so, called fire-and-forget, it can never break a save or leak
 // an unhandled rejection. Both manual and auto saves count — either is a real value moment.
-async function countSaveTowardReview() {
+// Captures and transcripts are saved by the service worker, and a typed save is worth far
+// less than one of those, so they arrive here with REVIEW_CAPTURE_POINTS.
+async function countSaveTowardReview(points = 1) {
   if (reviewAsked) return; // already asked once, ever
   try {
-    const n = (((await chrome.storage.local.get(REVIEW_SAVE_COUNT_KEY))[REVIEW_SAVE_COUNT_KEY]) || 0) + 1;
+    const n = (((await chrome.storage.local.get(REVIEW_SAVE_COUNT_KEY))[REVIEW_SAVE_COUNT_KEY]) || 0) + points;
     await chrome.storage.local.set({ [REVIEW_SAVE_COUNT_KEY]: n });
     if (n >= REVIEW_SAVE_THRESHOLD) showReviewBanner();
   } catch { /* best-effort — never block a save */ }
@@ -1794,6 +1804,7 @@ async function consumeQuickCapture(capture) {
     if (lastQuickCaptureToken === token) lastQuickCaptureToken = null;
     throw error;
   }
+  countSaveTowardReview(REVIEW_CAPTURE_POINTS);
   // Consume only the value we handled. A newer capture may arrive while the editor
   // is saving, and this older handler must never remove the newer signal.
   try {

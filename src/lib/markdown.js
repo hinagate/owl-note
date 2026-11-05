@@ -96,15 +96,32 @@ export function lexBlocks(body) {
   return marked.lexer(String(body ?? ''));
 }
 
+// A photo's data URI is one unbroken word, and marked's block regexes step through it a
+// character at a time: from about 8 MB they overflow the stack and the render throws. A
+// long full-page capture is well past that. The bytes mean nothing to the parser, so it
+// sees a short stand-in, and they go back once the HTML is sanitized. The stand-in is an
+// image data URI itself, so the sanitizer treats it as it would the real one: kept on an
+// <img>, stripped from a link. What goes back is base64, which cannot break out of an
+// attribute.
+const DATA_IMAGE_URI = /data:image\/[\w.+-]+;base64,[A-Za-z0-9+/=]+/g;
+const STAND_IN = /data:image\/gif;base64,owlBytes(\d+)x/g;
+const LONG_DATA_URI = 4096;
+
 export function renderMarkdown(body) {
+  const uris = [];
+  const text = String(body ?? '').replace(DATA_IMAGE_URI, (uri) => {
+    if (uri.length < LONG_DATA_URI) return uri;
+    uris.push(uri);
+    return `data:image/gif;base64,owlBytes${uris.length - 1}x`;
+  });
   // Render forgivingly: a table whose rows disagree on cell count does not parse
   // as a table AT ALL in GFM — adding one header cell by hand silently demotes
   // the whole block to a paragraph of pipes. normalizeTables widens the rows for
   // RENDERING only; the note's own text is never rewritten, so nothing fights
   // the user mid-keystroke. See src/lib/table.js.
-  const source = normalizeTables(String(body ?? ''));
-  const clean = DOMPurify.sanitize(marked.parse(source), SANITIZE_OPTS);
-  return softenKatexErrors(clean);
+  const source = normalizeTables(text);
+  const clean = softenKatexErrors(DOMPurify.sanitize(marked.parse(source), SANITIZE_OPTS));
+  return uris.length ? clean.replace(STAND_IN, (standIn, index) => uris[index] ?? standIn) : clean;
 }
 
 // KaTeX (throwOnError:false) emits `<span class="katex-error" style="color:#cc0000">`

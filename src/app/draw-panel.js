@@ -836,7 +836,10 @@ export function showDrawPanel({
   }
 
   function syncControls() {
-    saveButton.disabled = isEmpty(state);
+    // An open photo can always be saved: a full-page capture opens here on its own, and
+    // someone who only wanted to look at it needs Save to do something. A blank sketch, or
+    // a photo that has not opened, has nothing to save.
+    saveButton.disabled = photo ? !background : isEmpty(state);
     undoButton.disabled = !canUndo(state);
     redoButton.disabled = !canRedo(state);
     clearButton.disabled = isEmpty(state);
@@ -1393,7 +1396,12 @@ export function showDrawPanel({
 
   saveButton.addEventListener('click', async () => {
     commitTextBox(); // never export a half-typed box
-    if (isEmpty(state)) return;
+    if (isEmpty(state)) {
+      // No marks, so the photo is already right. Re-encoding it would only make it larger
+      // and softer, so it is left alone, byte for byte.
+      if (photo) close();
+      return;
+    }
     saveButton.disabled = true;
     saveButton.textContent = 'Saving…';
     status.textContent = '';

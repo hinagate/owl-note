@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { captureSelectionMarkdown } from '../src/lib/selection-capture.js';
 
 function selectContents(el) {
@@ -134,6 +134,125 @@ describe('captureSelectionMarkdown', () => {
       width: 640,
       height: 360,
     })]);
+  });
+
+  it('labels Gemini share-page turns and drops its hidden prompt heading', () => {
+    document.title = 'Gemini';
+    document.body.innerHTML = `
+      <main>
+        <h1>Vanilla JS audio</h1>
+        <share-turn-viewer>
+          <user-query>
+            <h5 class="cdk-visually-hidden screen-reader-user-query-label">You said Read this post…</h5>
+            <p>Read this post and show me the code.</p>
+          </user-query>
+          <response-container><message-content><p>Here is the code.</p></message-content></response-container>
+        </share-turn-viewer>
+      </main>`;
+
+    const { markdown } = captureSelectionMarkdown(true);
+    expect(markdown).toBe('# Vanilla JS audio\n\n## You\n\nRead this post and show me the code.\n\n## Gemini\n\nHere is the code.');
+  });
+
+  it('labels a Gemini app reply once, though its container is nested in the reply', () => {
+    document.body.innerHTML = `
+      <main>
+        <user-query><p>Hello</p></user-query>
+        <model-response><response-container><p>Hi there.</p></response-container></model-response>
+      </main>`;
+
+    const { markdown } = captureSelectionMarkdown(true);
+    expect(markdown.match(/^## Gemini$/gm)).toHaveLength(1);
+    expect(markdown).toBe('## You\n\nHello\n\n## Gemini\n\nHi there.');
+  });
+
+  it('roots a chat at the main element holding its turns, however much surrounds it', () => {
+    const sidebar = '<p>Another conversation</p>'.repeat(50);
+    document.body.innerHTML = `
+      <a href="#main">Skip to content</a>
+      <div><h2>Chat history</h2>${sidebar}</div>
+      <main id="main"><div data-message-author-role="user"><p>A short question</p></div></main>`;
+
+    const { markdown } = captureSelectionMarkdown(true);
+    expect(markdown).toBe('## You\n\nA short question');
+  });
+
+  it('rebuilds a signed-in ChatGPT chat, which has no role markers, <pre>, or <code> wrappers', () => {
+    const sidebar = '<p>Another conversation</p>'.repeat(50);
+    document.body.innerHTML = `
+      <div>${sidebar}</div>
+      <main>
+        <div role="separator" data-markdown-copy="exclude"><time>Sat, Oct 10</time></div>
+        <div>
+          <h4 data-conversation-role="user" class="sr-only m-0"><span>You said:</span><span aria-hidden="true">You</span></h4>
+          <div><p>Sort this</p></div>
+        </div>
+        <div>
+          <h4 data-conversation-role="assistant" class="sr-only m-0"><span>ChatGPT said:</span><span aria-hidden="true">ChatGPT</span></h4>
+          <div>
+            <p>Use <span data-markdown-copy="inline-code">sorted()</span>:</p>
+            <div data-code-block="true" data-markdown-copy="code-block">
+              <div data-markdown-copy="exclude" contenteditable="false"><div>Python</div></div>
+              <div data-code-block-source="true"><div><code class="whitespace-pre! block"><span>a = [2, 1]
+print(sorted(a))</span></code></div></div>
+            </div>
+            <div data-code-block="true" data-markdown-copy="code-block">
+              <div data-markdown-copy="exclude" contenteditable="false"></div>
+              <div data-code-block-source="true"><code>no language</code></div>
+            </div>
+          </div>
+        </div>
+      </main>`;
+
+    expect(captureSelectionMarkdown(true).markdown).toBe([
+      '## You', 'Sort this',
+      '## ChatGPT', 'Use `sorted()`:',
+      '```python\na = [2, 1]\nprint(sorted(a))\n```',
+      '```\nno language\n```',
+    ].join('\n\n'));
+  });
+
+  it('labels a turn once when both ChatGPT markups are present', () => {
+    document.body.innerHTML = `
+      <main><div>
+        <h4 data-conversation-role="user" class="sr-only">You said:</h4>
+        <div data-message-author-role="user"><p>Hello</p></div>
+      </div></main>`;
+    expect(captureSelectionMarkdown(true).markdown).toBe('## You\n\nHello');
+  });
+
+  it('names the assistant by the site, not by words in the chat title', () => {
+    vi.stubGlobal('location', { hostname: 'chatgpt.com', href: 'https://chatgpt.com/c/1' });
+    try {
+      document.title = 'Add Overlay Next To Gemini';
+      document.body.innerHTML = '<main><div data-message-author-role="assistant"><p>Done.</p></div></main>';
+      expect(captureSelectionMarkdown(true).markdown).toBe('## ChatGPT\n\nDone.');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('fences a Gemini code block with its language and without the header label', () => {
+    document.body.innerHTML = `
+      <main><response-container>
+        <code-block><div class="code-block">
+          <div class="code-block-decoration"><span>HTML</span><div class="buttons"><button aria-label="Copy code">content_copy</button></div></div>
+          <div><pre><code class="code-container">&lt;p&gt;Hi&lt;/p&gt;</code></pre></div>
+        </div></code-block>
+      </response-container></main>`;
+    expect(captureSelectionMarkdown(true).markdown).toBe('## Gemini\n\n```html\n<p>Hi</p>\n```');
+  });
+
+  it('drops a heading with nothing left in it instead of leaving a bare marker', () => {
+    document.body.innerHTML = '<main><h4><span class="sr-only">You said:</span></h4><p>The question</p></main>';
+    expect(captureSelectionMarkdown(true).markdown).toBe('The question');
+  });
+
+  it('still scores the page when nothing on it is a chat turn', () => {
+    const article = '<p>A long paragraph of the real article.</p>'.repeat(50);
+    document.body.innerHTML = `<main><p>Short teaser</p></main><section>${article}</section>`;
+
+    expect(captureSelectionMarkdown(true).markdown).toContain('A long paragraph of the real article.');
   });
 
   it('keeps whole-page conversion self-contained for chrome.scripting.executeScript', () => {

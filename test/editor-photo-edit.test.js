@@ -156,3 +156,141 @@ describe('editImage (a fresh capture lands here)', () => {
     expect(showDrawPanel).not.toHaveBeenCalled();
   });
 });
+
+describe('the caret after a photo is put back', () => {
+  const textarea = () => document.querySelector('textarea.note-body');
+  const save = async (editor) => {
+    await editor.editImage('bbb222');
+    await showDrawPanel.mock.calls[0][0].onSave(new File(['edited photo'], 'map.jpg', { type: 'image/jpeg' }));
+  };
+  const typeAtCaret = (text) => {
+    const ta = textarea();
+    const at = ta.selectionStart;
+    ta.value = ta.value.slice(0, at) + text + ta.value.slice(ta.selectionEnd);
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  const placeCaret = (at) => textarea().setSelectionRange(at, at);
+
+  it('stays before the photo if it was before it', async () => {
+    const editor = open();
+    placeCaret(0);
+    await save(editor);
+    expect(textarea().selectionStart).toBe(0);
+  });
+
+  it('stays after the photo if it was after it, though the id changed length', async () => {
+    const editor = open();
+    placeCaret(textarea().value.length);
+    await save(editor);
+    expect(textarea().selectionStart).toBe(textarea().value.length);
+  });
+
+  it('never ends up inside the reference, so typing cannot break the photo', async () => {
+    const editor = open();
+    placeCaret(textarea().value.indexOf('bbb222') + 3);
+    await save(editor);
+    typeAtCaret('note');
+    expect(textarea().value).toMatch(/!\[map\]\(owl-img:[A-Za-z0-9]+\)note/);
+    expect(previewImages()[2].getAttribute('src')).toMatch(/^data:image\/jpeg/);
+  });
+});
+
+// A full-page capture of a long page. The panel re-encodes it on Save, which can carry a
+// photo that opened fine past what the Markdown parser takes: the panel closed, the photo
+// disappeared from the preview, and the note was never saved.
+describe('a photo too long for the Markdown parser', () => {
+  const bigFile = () => new File([new Uint8Array(9_000_000)], 'map.jpg', { type: 'image/jpeg' });
+
+  it('opens: the preview shows it', () => {
+    const big = { id: 'big1', name: 'long.jpg', mime: 'image/jpeg', dataUri: `data:image/jpeg;base64,${'QUJD'.repeat(3_000_000)}` };
+    renderEditor(document.getElementById('root'), { body: '![long](owl-img:big1)', attachments: [big] });
+    expect(document.querySelector('.preview-body img').getAttribute('src')).toBe(big.dataUri);
+  });
+
+  it('comes back from Save: it shows, and the note is saved', async () => {
+    const onSave = vi.fn();
+    const editor = open({ onSave });
+    await editor.editImage('bbb222');
+    await showDrawPanel.mock.calls[0][0].onSave(bigFile());
+
+    const shown = previewImages()[2].getAttribute('src');
+    expect(shown.startsWith('data:image/jpeg;base64,')).toBe(true);
+    expect(shown.length).toBeGreaterThan(12_000_000);
+    await editor.flush();
+    expect(onSave).toHaveBeenCalled();
+    const saved = onSave.mock.calls.at(-1)[0];
+    expect(saved.attachments.some((a) => a.dataUri === shown)).toBe(true);
+  });
+
+  it('says so if the edited photo cannot be put back, instead of nothing happening', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const editor = open();
+    await editor.editImage('bbb222');
+    await showDrawPanel.mock.calls[0][0].onSave('not a file'); // the read fails
+    expect(document.getElementById('root').textContent).toContain('Could not save the photo');
+    warn.mockRestore();
+  });
+});
+
+describe('typing in a note holding a very large photo', () => {
+  const wait = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+  const big = { id: 'big1', name: 'long.jpg', mime: 'image/jpeg', dataUri: `data:image/jpeg;base64,${'QUJD'.repeat(1_000_000)}` };
+  const type = (text) => {
+    const ta = document.querySelector('textarea.note-body');
+    ta.value += text;
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  const preview = () => document.querySelector('.preview-body');
+
+  it('refreshes the preview after a pause, not on every key', async () => {
+    renderEditor(document.getElementById('root'), { body: '![long](owl-img:big1)\n\n', attachments: [big] });
+    const before = preview();
+    type('a');
+    type('b');
+    expect(preview()).toBe(before);
+    await wait(500);
+    expect(preview()).not.toBe(before);
+    expect(preview().textContent).toContain('ab');
+  });
+
+  it('still saves what was typed if the note is saved before that pause', async () => {
+    const onSave = vi.fn();
+    const editor = renderEditor(document.getElementById('root'), { body: '![long](owl-img:big1)\n\n', attachments: [big], onSave });
+    type('kept');
+    await editor.flush();
+    expect(onSave.mock.calls.at(-1)[0].body).toContain('kept');
+  });
+
+  it('does not refresh once the editor is gone', async () => {
+    const editor = renderEditor(document.getElementById('root'), { body: '![long](owl-img:big1)\n\n', attachments: [big] });
+    const before = preview();
+    type('a');
+    editor.destroy();
+    await wait(500);
+    expect(preview()).toBe(before);
+  });
+
+  it('keeps an ordinary note refreshing on every key', () => {
+    open();
+    const before = preview();
+    type('a');
+    expect(preview()).not.toBe(before);
+  });
+});
+
+describe('a note the Markdown parser cannot render at all', () => {
+  const unbroken = 'x'.repeat(12_000_000); // one word, past what its regexes can step through
+
+  it('still opens, says why there is no preview, and can be saved', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const onSave = vi.fn();
+    const editor = renderEditor(document.getElementById('root'), { body: unbroken, onSave });
+    expect(document.querySelector('.preview-body').textContent).toContain('too large to preview');
+    const ta = document.querySelector('textarea.note-body');
+    ta.value = `${unbroken} more`;
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    await editor.flush();
+    expect(onSave).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});

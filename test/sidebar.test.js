@@ -135,6 +135,17 @@ describe('sidebar', () => {
   });
 });
 
+describe('feedback', () => {
+  it('always offers a way to send feedback, in a new tab', () => {
+    const el = document.getElementById('sidebar');
+    renderSidebar(el, { rootId: 'r', activeId: 'r', notebooks: [], onSelect: vi.fn(), onNewNotebook: vi.fn() });
+    const link = el.querySelector('a.feedback-link');
+    expect(link.href).toBe('https://github.com/hinagate/owl-note/issues/new');
+    expect(link.target).toBe('_blank');
+    expect(link.rel).toBe('noopener');
+  });
+});
+
 describe('nested notebooks', () => {
   const make = (extra) => {
     const el = document.getElementById('sidebar');

@@ -64,6 +64,12 @@ describe('transcription flow', () => {
     expect(injected[0]).toMatchObject({ target: { tabId: 42 }, files: ['overlay.js'] });
   });
 
+  it('starts from the page menu as well as from a video', async () => {
+    const { injected } = stubTranscribeApis();
+    await sw.handleContextMenuClick({ menuItemId: 'owl-transcribe-page', pageUrl: TAB.url }, TAB);
+    expect(injected[0]).toMatchObject({ target: { tabId: 42 }, files: ['overlay.js'] });
+  });
+
   it('ignores a context-menu click that belongs to another feature', async () => {
     stubTranscribeApis();
     expect(await sw.handleTranscribe({ menuItemId: 'owl-capture-full-page' }, TAB)).toBe(null);

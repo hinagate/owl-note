@@ -174,3 +174,52 @@ describe('review ask — Ask success no longer triggers it', () => {
     expect((await chrome.storage.local.get('owl:reviewAsked'))['owl:reviewAsked']).toBeFalsy(); // and the flag stays unset
   });
 });
+
+describe('review ask — captures and transcripts', () => {
+  // What the service worker leaves behind once it has saved a capture or a transcript.
+  async function signalCapture(root, n) {
+    await seedNote(root, { id: `c${n}`, title: `Capture ${n}`, body: 'captured' });
+    await chrome.storage.local.set({ 'owl:quickCapture': { id: `c${n}`, at: n, openNote: true } });
+    await settle();
+  }
+  const saveCount = async () => (await chrome.storage.local.get('owl:saveCount'))['owl:saveCount'];
+
+  it('asks on the fifth capture', async () => {
+    const root = await bm.ensureRoot();
+    await app.initUI(root);
+    for (let n = 1; n <= 4; n += 1) await signalCapture(root, n);
+    expect(await saveCount()).toBe(80);
+    expect(document.getElementById('review-banner')).toBeNull();
+
+    await signalCapture(root, 5);
+    expect(document.getElementById('review-banner')).not.toBeNull();
+  });
+
+  it('counts a capture once, even if its signal is seen again', async () => {
+    const root = await bm.ensureRoot();
+    await app.initUI(root);
+    await signalCapture(root, 1);
+    await chrome.storage.local.set({ 'owl:quickCapture': { id: 'c1', at: 1, openNote: true } });
+    await settle();
+    expect(await saveCount()).toBe(20);
+  });
+
+  it('adds up with typed saves, so a mix of both reaches the ask', async () => {
+    const root = await bm.ensureRoot();
+    await chrome.storage.local.set({ 'owl:saveCount': THRESHOLD - 20 });
+    await app.initUI(root);
+    await signalCapture(root, 1);
+    expect(document.getElementById('review-banner')).not.toBeNull();
+  });
+
+  it('offers a way to report a problem beside the rating, which stays available', async () => {
+    const root = await bm.ensureRoot();
+    await chrome.storage.local.set({ 'owl:saveCount': THRESHOLD - 1 });
+    await app.initUI(root);
+    saveNewNote({ title: 'Hundred', body: 'x' });
+    await settle();
+    const banner = document.getElementById('review-banner');
+    expect(banner.querySelector('a.review-problem').href).toBe('https://github.com/hinagate/owl-note/issues/new');
+    expect(banner.querySelector('.review-rate')).not.toBeNull();
+  });
+});
