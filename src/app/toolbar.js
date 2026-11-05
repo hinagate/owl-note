@@ -114,7 +114,7 @@ export function renderToolbar(container, { query = '', onSearch, onExportNote, o
 
   const notesItem = document.createElement('button');
   notesItem.className = 'menu-item';
-  notesItem.textContent = 'Notes (.zip, .md, .owl-note, .json…)';
+  notesItem.textContent = 'Notes (Evernote, Word, Markdown, .zip, .owl-note, .json)';
   notesItem.addEventListener('click', () => { importMenu.hidden = true; importInput.click(); });
   const keyItemIn = document.createElement('button');
   keyItemIn.className = 'menu-item';

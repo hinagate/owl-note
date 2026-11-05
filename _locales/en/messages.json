@@ -1,0 +1,14 @@
+{
+  "appName": {
+    "message": "OWL-Note: Markdown Notebook, Save AI Chats & Tab Transcriber",
+    "description": "The extension name in the browser and the store listing title. 75 characters at most."
+  },
+  "appShortName": {
+    "message": "OWL-Note",
+    "description": "Where the full name does not fit. 12 characters at most."
+  },
+  "appDescription": {
+    "message": "Free Markdown notebook for your browser. Save & rebuild AI chats, transcribe tab audio, and search with local RAG. Auto-syncs free.",
+    "description": "The store listing summary. 132 characters at most."
+  }
+}

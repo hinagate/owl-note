@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "OWL-Note: Markdown Notebook, Save AI Chats & Tab Transcriber",
-  "short_name": "OWL-Note",
+  "name": "__MSG_appName__",
+  "short_name": "__MSG_appShortName__",
+  "default_locale": "en",
   "version": "2.3.48",
-  "description": "Free Markdown notebook for your browser. Save & rebuild AI chats, transcribe tab audio, and search with local RAG. Auto-syncs free.",
+  "description": "__MSG_appDescription__",
   "permissions": ["bookmarks", "storage", "unlimitedStorage", "contextMenus", "activeTab", "scripting", "identity", "offscreen", "tabCapture"],
   "content_security_policy": { "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'" },
   "optional_host_permissions": ["https://www.googleapis.com/*", "https://oauth2.googleapis.com/*"],

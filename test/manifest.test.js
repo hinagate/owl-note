@@ -1,11 +1,32 @@
 import { describe, it, expect } from 'vitest';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import manifest from '../manifest.json';
 
+const localesOf = () => readdirSync('_locales');
+const messagesOf = (locale) => JSON.parse(readFileSync(`_locales/${locale}/messages.json`, 'utf8'));
+const keyOf = (value) => value.match(/^__MSG_(\w+)__$/)?.[1];
+
 describe('manifest', () => {
-  it('keeps the listing text inside the limits Chrome enforces', () => {
-    expect(manifest.name.length).toBeLessThanOrEqual(75);
-    expect(manifest.short_name.length).toBeLessThanOrEqual(12);
-    expect(manifest.description.length).toBeLessThanOrEqual(132);
+  describe.each(localesOf())('listing text in %s', (locale) => {
+    const text = (field) => messagesOf(locale)[keyOf(manifest[field])]?.message;
+
+    it('has every message the manifest asks for', () => {
+      for (const field of ['name', 'short_name', 'description']) {
+        expect(keyOf(manifest[field])).toBeTruthy();
+        expect(text(field)).toBeTruthy();
+      }
+    });
+
+    it('stays inside the limits Chrome enforces', () => {
+      expect([...text('name')].length).toBeLessThanOrEqual(75);
+      expect([...text('short_name')].length).toBeLessThanOrEqual(12);
+      expect([...text('description')].length).toBeLessThanOrEqual(132);
+    });
+  });
+
+  it('declares a default locale that exists, and offers a listing in Traditional Chinese', () => {
+    expect(existsSync(`_locales/${manifest.default_locale}/messages.json`)).toBe(true);
+    expect(localesOf()).toContain('zh_TW');
   });
 
   it('adds identity but keeps Google APIs as an OPTIONAL host permission', () => {

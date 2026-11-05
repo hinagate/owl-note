@@ -108,6 +108,9 @@ cpSync('src/app/app.css', 'dist/app.css');
 cpSync('src/offscreen/offscreen.html', 'dist/offscreen.html');
 cpSync('src/permission/enable.html', 'dist/enable.html');
 cpSync('manifest.json', 'dist/manifest.json');
+// The manifest's name and description are messages. Each folder here is also what lets the
+// Web Store take a listing in that language.
+cpSync('_locales', 'dist/_locales', { recursive: true });
 const theme = 'node_modules/highlight.js/styles/github.css';
 if (existsSync(theme)) cpSync(theme, 'dist/github.css');
 

@@ -129,7 +129,7 @@ describe('toolbar', () => {
     const importBtn = [...el.querySelectorAll('button')].find((b) => b.textContent.includes('Import'));
     importBtn.click();
     expect([...el.querySelectorAll('.import-menu .menu-item')].map((b) => b.textContent))
-      .toEqual(['Notes (.zip, .md, .owl-note, .json…)', 'Recovery key (.json)']);
+      .toEqual(['Notes (Evernote, Word, Markdown, .zip, .owl-note, .json)', 'Recovery key (.json)']);
   });
 
   it('the key entry opens a file picker limited to .json', () => {

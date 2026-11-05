@@ -2,9 +2,9 @@
 
 # 🦉 OWL-Note
 
-### Your notes are browser bookmarks. Your AI runs on your device.
+### Save AI chats, transcribe videos and keep Markdown notes, free, in your browser.
 
-Free, private Markdown notes — with code and math — synced by your own browser account. No server, no account, no subscription. A lightweight alternative to Evernote.
+Your notes are encrypted bookmarks, synced by the Chrome or Edge account you already use. No OWL-Note account, server or subscription.
 
 [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/hjkbpgkmiaeojfhkpnhmokgjipenhcfl?label=Chrome%20Web%20Store&logo=googlechrome&logoColor=white&color=2dbe60)](https://chromewebstore.google.com/detail/hjkbpgkmiaeojfhkpnhmokgjipenhcfl)
 [![Users](https://img.shields.io/chrome-web-store/users/hjkbpgkmiaeojfhkpnhmokgjipenhcfl?color=2dbe60)](https://chromewebstore.google.com/detail/hjkbpgkmiaeojfhkpnhmokgjipenhcfl)
@@ -13,11 +13,102 @@ Free, private Markdown notes — with code and math — synced by your own brows
 
 #### [➜ Add to Chrome / Edge — free](https://chromewebstore.google.com/detail/hjkbpgkmiaeojfhkpnhmokgjipenhcfl)
 
-<img src="assets/ask-owl.gif" alt="Ask Owl demo: asking a question in the Ask Owl panel — the on-device semantic index searches every note and answers from the right recipe note, with a citation that jumps to it" width="820">
-
-<img src="assets/screenshot.png" alt="OWL-Note editor showing the welcome note in Markdown beside its live rendered preview, with notebooks and note tools" width="820">
+<img src="assets/screenshot.png" alt="OWL-Note showing notebooks, a list of notes, and a note in Markdown beside its live preview with math, a table and highlighted code" width="820">
 
 </div>
+
+---
+
+### ✨ Features
+
+**Save AI chats as real Markdown**
+
+Right‑click a chat → **OWL‑Note** → **Rebuild LLM chat to OWL‑Note**
+
+Turns a ChatGPT, Claude or Gemini conversation into an editable note, not a screenshot:
+
+- **Each message labelled** with who said it
+- **Headings, paragraphs, lists, links and tables**
+- **Code blocks** that keep their language
+- **Math** as LaTeX, rendered with KaTeX
+- **Supported images** as attachments, and a link back to the source
+
+It runs on your device, with no API key and no tokens. On other sites it rebuilds the page's readable content, without speaker labels. Sites change their pages, so if a chat comes out wrong, please [report it](https://github.com/hinagate/owl-note/issues/new).
+
+<img src="assets/chat-rebuild.png" alt="A ChatGPT conversation rebuilt as a note: Markdown on the left, and on the right the rendered answer with a formula and a table" width="820">
+
+**Turn a playing video into a transcript**
+
+Right‑click a page → **OWL‑Note** → **Live Transcription save to OWL‑Note** (Chrome 139+)
+
+- On YouTube, a video with subtitles is saved at once as a timestamped note, in the creator's own words.
+- Otherwise Chrome's on‑device speech recognition transcribes it live, with a caption overlay you can drag.
+- The audio is never stored or uploaded.
+
+<img src="assets/transcript.png" alt="A lecture saved as a transcript note with timestamped headings, and the live caption overlay with Save note and Discard buttons" width="820">
+
+**Ask Owl: find notes by what they mean**
+
+Ask in plain words and get the passages that answer, with citations that jump to the note.
+
+- **Keyword search** works straight away. **Semantic search** is optional, after a one‑time download of about 130 MB. Ask *"How many cores does my Apple have?"* and it picks the laptop note over the apple crisp recipe.
+- **With your browser's on‑device AI** (Gemini Nano in Chrome, Phi in Edge) it writes the answer too. The browser downloads the model once, about 2–4 GB, if you choose to enable it. Without it, you get the matching excerpts.
+- **Summarize** a note, **Tidy** its Markdown without rewriting your words, or get a suggested title.
+- Works in Chinese, Japanese and Korean.
+
+<img src="assets/ask-owl.gif" alt="Ask Owl demo: asking a question in the Ask Owl panel, which answers from the right recipe note with a citation that jumps to it" width="820">
+
+**Capture from any page**
+
+- **Capture entire page to OWL‑Note** scrolls and stitches the whole page into one long image, opened ready to mark up.
+- **Save selection to OWL‑Note** keeps the selected text as Markdown, with its headings, lists, links, code blocks and tables.
+
+All of it is processed on your device.
+
+**A full Markdown notebook**
+
+- Live preview and automatic saving
+- Syntax‑highlighted code, KaTeX math, and Mermaid diagrams
+- Nested notebooks, pinning, and multi‑select
+- Search from the top bar or the browser address bar, and find text inside a note
+- Photos and file attachments, a sketchpad, and marking up photos
+- **Phonetic Assistance** shows pronunciation above the words: IPA for English, hiragana for Japanese, Jyutping for Cantonese
+- Trash you can restore from
+
+---
+
+### 🔒 Privacy and Sync
+
+- **Notes are stored as bookmarks**, encrypted with AES‑256‑GCM so other extensions can't read them. Titles stay plain text, so they come up in the address bar.
+- **They sync through your Chrome or Edge account**, under that provider's terms. The key travels the same way, so this protects notes from other software, not from your browser vendor. Set a sync passphrase if that matters to you.
+- **No OWL‑Note account, backend, telemetry or ads.** Capture, transcription, search and AI all run on your device.
+- **A bookmark holds about 8 KB per note.** Larger notes, photos and files stay on that device unless you turn on the optional Google Drive sync, which stores them in your own Drive. A transcript passes 8 KB after roughly 15–20 minutes.
+- **Back up your encryption key.** Without it, your notes can't be opened after a reinstall. Drive sync does this for you, or use **Export → Recovery key**.
+- Install OWL‑Note on each device to read your notes there.
+
+Read the full [privacy policy](PRIVACY.md).
+
+---
+
+### 📦 Installation, Import, Export
+
+**Install**
+
+- From the [Chrome Web Store](https://chromewebstore.google.com/detail/hjkbpgkmiaeojfhkpnhmokgjipenhcfl), for Chrome, Edge and other Chromium browsers.
+- From source: run `npm install` and `npm run build`, then load the `dist/` folder as an unpacked extension. Google Drive sync stays off in your own builds unless you add your own OAuth credentials.
+
+**Import**
+
+- Evernote ENEX
+- Word DOCX
+- Markdown and Markdown ZIP
+- JSON backups
+- .owl‑note packages
+
+**Export**
+
+- Every note as Markdown in a ZIP
+- A note as PDF, or as a portable .owl‑note package
 
 ---
 
@@ -37,112 +128,10 @@ Every constraint made OWL‑Note lighter and more personal. It isn’t a cloud p
 
 ---
 
-### 🦉 Overview
+### 🤝 Feedback
 
-**OWL‑Note** is a local‑first Markdown notebook. Notes are stored in your browser bookmarks and sync across devices via Chrome or Edge. It supports photos, attachments, semantic search, on‑device AI, and full LLM chat reconstruction.
-
----
-
-### ✨ Features
-
-**Rebuild LLM Chats as Markdown**
-
-Right‑click → **Rebuild LLM chat to OWL‑Note**
-
-Convert ChatGPT, Claude, Gemini and similar conversations into clean, editable Markdown (not screenshots). Preserves:
-
-- **User and assistant messages**
-- **Headings, paragraphs, lists, links**
-- **Tables**
-- **Syntax‑highlighted code blocks**
-- **KaTeX math**
-- **Supported images as attachments**
-- **Original source URL**
-
-**Deterministic. Local‑only.** No API key, no tokens, no cloud conversion.
-
-**Capture Entire Page**
-
-Right‑click → **Capture entire page to OWL‑Note**
-
-Scrolls and stitches the full page (including below the fold) into a single long image. Ideal for long articles, docs, receipts, dashboards, and complex layouts. All processing happens locally.
-
-**Live Transcription save to OWL‑Note**
-
-Right-click → **Live Transcription save to OWL‑Note**
-
-Turn a playing tab's speech into a Markdown note with a draggable live-caption overlay. Right-click **Live Transcription save to OWL‑Note** to start — one right-click, first session included. On a YouTube video that has subtitles, OWL‑Note saves the whole video from them straight away instead — the creator's own words, timed to the video, with nothing listened to; a video without subtitles asks before transcribing live. Chrome 139+ uses its native on-device speech engine; the first session in a language pauses for a one-click confirmation while Chrome downloads that language's local model, then resumes on its own. The overlay's language button switches language mid-video and keeps what was already transcribed. Chinese is transcribed as Mandarin in Traditional characters. Audio is never uploaded or stored, and OWL‑Note never falls back to cloud transcription.
-
-**Smart Selection Capture**
-
-Right‑click → **Save selection to OWL‑Note**
-
-Save a selected region as structured Markdown while preserving headings, emphasis, lists, links, code blocks, tables, and supported visuals. The new note opens immediately for editing.
-
-**Markdown Notebook**
-
-- Live Markdown preview
-- Automatic saving
-- Code syntax highlighting
-- KaTeX math
-- Mermaid diagrams in the preview and PDFs (click to enlarge)
-- Photos and file attachments
-- Draggable image preview
-- Nested notebooks and multi‑select organization
-- Trash and permanent deletion
-- Search (including from the browser address bar)
-- Import: Word / Evernote / Markdown
-- Export: Markdown / PDF / portable .owl‑note package
-
-**Ask Owl Local Retrieval and AI**
-
-Ask natural‑language questions and get answers grounded in your notes, with citations.
-
-- Conversational Q&A and follow‑ups
-- Keyword and optional semantic search
-- One‑click summarization
-- Deterministic Markdown tidying (no rewriting)
-- AI title suggestions
-- Chinese / Japanese / Korean support
-
-Uses the browser’s built‑in on‑device model where available; retrieval still works without a local model.
-
----
-
-### 🔒 Privacy and Sync
-
-- **Notes stored in browser bookmarks** for privacy and portability.
-- **Synced across devices** via your Chrome or Edge account — no new account required.
-- **No OWL‑Note account, no backend, no telemetry, no ads.**
-- All AI, capture, and semantic search operations run locally.
-- Manifest V3 extension.
-- Optional Google Drive support (off by default) for large notes and attachments.
-- Open source under **GPL‑3.0**.
-
----
-
-### 📦 Installation Import Export
-
-**Installation**
-
-Works with Chrome, Edge, and other Chromium‑based browsers. See Releases or the extension store listing for installation.
-
-**Import**
-
-- Markdown
-- Markdown ZIP
-- JSON backups
-- Evernote ENEX
-- Word DOCX
-- .owl‑note packages
-
-**Export**
-
-- Plain Markdown
-- Markdown ZIP
-- JSON backups
-- PDF
-- .owl‑note portable packages
+- Found a problem? [Open an issue](https://github.com/hinagate/owl-note/issues/new).
+- If OWL‑Note is useful to you, a ⭐ here or a [review on the Chrome Web Store](https://chromewebstore.google.com/detail/hjkbpgkmiaeojfhkpnhmokgjipenhcfl) helps others find it.
 
 ---
 

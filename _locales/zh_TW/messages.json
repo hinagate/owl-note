@@ -1,0 +1,14 @@
+{
+  "appName": {
+    "message": "OWL-Note：Markdown 筆記本、儲存 AI 對話、分頁語音轉文字",
+    "description": "The extension name in the browser and the store listing title. 75 characters at most."
+  },
+  "appShortName": {
+    "message": "OWL-Note",
+    "description": "Where the full name does not fit. 12 characters at most."
+  },
+  "appDescription": {
+    "message": "免費的瀏覽器 Markdown 筆記本。儲存並重建 AI 對話、把分頁語音轉成文字、用裝置端 RAG 搜尋筆記。透過瀏覽器帳號免費自動同步。",
+    "description": "The store listing summary. 132 characters at most."
+  }
+}
