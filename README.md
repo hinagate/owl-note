@@ -2,6 +2,8 @@
 
 # 🦉 OWL-Note
 
+**English** · [繁體中文](README.zh-HK.md)
+
 ### Save AI chats, transcribe videos and keep Markdown notes, free, in your browser.
 
 Your notes are encrypted bookmarks, synced by the Chrome or Edge account you already use. No OWL-Note account, server or subscription.
