@@ -74,7 +74,7 @@ All of it is processed on your device.
 - Nested notebooks, pinning, and multi‑select
 - Search from the top bar or the browser address bar, and find text inside a note
 - Photos and file attachments, a sketchpad, and marking up photos
-- **Phonetic Assistance** shows pronunciation above the words: IPA for English, hiragana for Japanese, Jyutping for Cantonese
+- **Phonetic Assistance** shows pronunciation above the words: IPA for English, hiragana for Japanese, Jyutping for Cantonese. Select a word to hear it, at normal or slow speed
 - Trash you can restore from
 
 ---
@@ -86,6 +86,7 @@ All of it is processed on your device.
 - **No OWL‑Note account, backend, telemetry or ads.** Capture, transcription, search and AI all run on your device.
 - **A bookmark holds about 8 KB per note.** Larger notes, photos and files stay on that device unless you turn on the optional Google Drive sync, which stores them in your own Drive. A transcript passes 8 KB after roughly 15–20 minutes.
 - **Back up your encryption key.** Without it, your notes can't be opened after a reinstall. Drive sync does this for you, or use **Export → Recovery key**.
+- **Hearing a word** uses a voice on your computer. If it has none for that language, OWL‑Note asks before using your browser's online voice, which sends what you selected to Google or Microsoft.
 - Install OWL‑Note on each device to read your notes there.
 
 Read the full [privacy policy](PRIVACY.md).

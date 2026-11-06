@@ -1,6 +1,6 @@
 # OWL-Note privacy policy
 
-_Last updated: 2026-08-11_
+_Last updated: 2026-11-06_
 
 OWL-Note stores your notes **as bookmarks in your own browser**. A note's text is
 compressed, **encrypted**, and only then placed inside the bookmark's URL. A local
@@ -56,7 +56,8 @@ handles only:
   own Drive's hidden app-data folder (see above). Never sent to us.
 
 We collect **no** analytics, telemetry, usage data, browsing history, or personal
-identifiers of any kind, and we transfer your data to no one.
+identifiers of any kind, and we transfer your data to no one. The one thing you can
+choose to send elsewhere is described under "Hearing a selected word".
 
 ## "Ask Owl" — asking your notes
 
@@ -122,6 +123,19 @@ key file.
 OWL-Note's use of information received from Google APIs adheres to the
 [Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy),
 including the Limited Use requirements.
+
+## Hearing a selected word
+
+With pronunciation readings on, you can select a word in the preview and click 🔊 to
+hear it. OWL-Note uses a voice installed on your computer whenever there is one, and
+then nothing leaves your device.
+
+If your computer has no voice for that language, which is common for Cantonese and
+Japanese, OWL-Note asks first. If you allow it, your browser's online voice reads the
+words: the browser sends the text you selected to its voice service (Google in Chrome,
+Microsoft in Edge), under that provider's terms. Only the selection you clicked to hear
+is sent, never the rest of the note, and OWL-Note itself receives nothing. Your choice is
+remembered in that browser until you turn it off with **Online voice ✕** in the same bar.
 
 ## Explicit export and sharing
 

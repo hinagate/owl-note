@@ -16,6 +16,7 @@ import { annotateRuby } from '../lib/ruby-annotate.js';
 import { decorateMermaid, diagramImageUrl } from '../lib/mermaid-render.js';
 import { officeClipboardMarkdown } from '../lib/office-clipboard.js';
 import { createZoomBar } from './preview-zoom.js';
+import { createPronounceBar } from './pronounce-bar.js';
 
 // Re-exported: the viewer's fit rule lives with the other image sizing, where the photo
 // editor shares it.
@@ -251,7 +252,7 @@ export function renderEditor(
     phoneticsBtn.title = phonetics.busy
       ? 'Loading the pronunciation dictionary…'
       : `${phonetics.enabled ? 'Hide' : 'Show'} pronunciation above each word in the preview`
-        + ' — English (IPA), Japanese (hiragana) and Cantonese (Jyutping) only';
+        + ' — English (IPA), Japanese (hiragana) and Cantonese (Jyutping) only. Select a word to hear it.';
     phoneticsBtn.addEventListener('click', () => {
       Promise.resolve(phonetics.onToggle?.()).catch((err) => console.warn('phonetics toggle failed', err));
     });
@@ -649,6 +650,8 @@ export function renderEditor(
   }
   const content = document.createElement('div');
   content.className = 'preview-content';
+  // Selecting a word offers to read it aloud, while readings are showing.
+  const pronounce = createPronounceBar({ root: content, isActive: () => content.classList.contains('phonetics') });
   preview.appendChild(content);
 
   // Zoom bar, pinned to the foot of the preview. Appended after the content so it is the
@@ -1448,7 +1451,12 @@ export function renderEditor(
     // the time the reader's next keystroke repaints the preview.
     const segment = phonetics?.enabled ? phonetics.segmenter?.() : null;
     content.classList.toggle('phonetics', !!segment);
-    if (segment) annotateRuby(content, segment);
+    if (segment) {
+      annotateRuby(content, segment);
+      pronounce.prime(); // the voice list takes a moment to fill, so have it ready by the first click
+    } else {
+      pronounce.hide();
+    }
     renderChips();
     updateNoteSearch();
     showRevealed(); // the rebuild just dropped its highlight
@@ -2028,6 +2036,7 @@ export function renderEditor(
     // the version from another device), so nothing still pending here may save it.
     destroy: ({ discard = false } = {}) => {
       destroyed = true;
+      pronounce.destroy();
       clearTimeout(refreshTimer);
       clearRevealed();
       revealRO?.disconnect();
