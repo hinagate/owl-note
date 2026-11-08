@@ -27,7 +27,7 @@ Your notes are encrypted bookmarks, synced by the Chrome or Edge account you alr
 
 Right‑click a chat → **OWL‑Note** → **Rebuild LLM chat to OWL‑Note**
 
-Turns a ChatGPT, Claude or Gemini conversation into an editable note, not a screenshot:
+Turns a ChatGPT, Claude, Gemini or Google AI Studio conversation into an editable note, not a screenshot:
 
 - **Each message labelled** with who said it
 - **Headings, paragraphs, lists, links and tables**

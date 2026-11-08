@@ -243,6 +243,86 @@ print(sorted(a))</span></code></div></div>
     expect(captureSelectionMarkdown(true).markdown).toBe('## Gemini\n\n```html\n<p>Hi</p>\n```');
   });
 
+  describe('Google AI Studio', () => {
+    // Markup as AI Studio served it on 2026-11-08. A turn keeps its frame but is filled in
+    // only while it is near the screen, and empties again once scrolled away.
+    const label = (role, time) => `<div class="author-label" role="heading">${role}<span class="timestamp">${time}</span></div>`;
+    const prompt = (html) => `<ms-prompt-chunk class="text-chunk"><ms-text-chunk><div><ms-cmark-node class="cmark-node">${html}</ms-cmark-node></div></ms-text-chunk></ms-prompt-chunk>`;
+    const cell = (text) => `<ms-cmark-node><td><ms-cmark-node><span>${text}</span></ms-cmark-node></td></ms-cmark-node>`;
+    const fillings = [
+      ['User', label('User', '10:41 PM') + prompt('<p><ms-cmark-node>How do I sort a list?</ms-cmark-node></p>')],
+      ['Model', label('Model', '10:41 PM') + `<ms-prompt-chunk class="text-chunk"><ms-thought-chunk><mat-accordion>
+        <mat-expansion-panel class="thought-panel"><mat-expansion-panel-header role="button" aria-expanded="false">Thoughts</mat-expansion-panel-header>
+        <div class="mat-expansion-panel-content-wrapper">Private reasoning that is not part of the chat.</div></mat-expansion-panel>
+      </mat-accordion></ms-thought-chunk></ms-prompt-chunk>`],
+      ['Model', prompt(`<p>Use <strong>sorted</strong>:</p>
+        <ms-code-block><div class="container"><mat-expansion-panel>
+          <mat-expansion-panel-header role="button" aria-expanded="true"><span class="mat-content"><mat-panel-title>
+            <div class="header-content"><span class="title-icon">code</span><span class="title-text">Python</span></div>
+            <div class="actions-container"><button aria-label="Copy to clipboard"><span>content_copy</span></button></div>
+          </mat-panel-title></span></mat-expansion-panel-header>
+          <div class="mat-expansion-panel-content-wrapper"><div class="mat-expansion-panel-body"><pre><code><span class="hljs-built_in">sorted</span>(items)</code></pre></div></div>
+        </mat-expansion-panel></div></ms-code-block>
+        <div class="table-container"><table><ms-cmark-node>
+          <tr class="table-header"><ms-cmark-node>${cell('Call')}${cell('Returns')}</ms-cmark-node></tr>
+          <tr><ms-cmark-node>${cell('sorted(items)')}${cell('a new list')}</ms-cmark-node></tr>
+        </ms-cmark-node></table></div>`)],
+      ['User', label('User', '10:42 PM') + prompt('<p><ms-cmark-node>Thanks</ms-cmark-node></p>')],
+    ];
+
+    function studioPage() {
+      document.title = 'Sorting help | Google AI Studio';
+      document.body.innerHTML = `<h1 class="mode-title">Sorting help</h1><ms-autoscroll-container>${fillings.map(([role]) => `
+        <ms-chat-turn><div class="chat-turn-container ${role.toLowerCase()}">
+          <div class="actions-container"><button aria-label="Edit"><span>edit</span></button><ms-chat-turn-options><button aria-label="Open options"><span>more_vert</span></button></ms-chat-turn-options></div>
+          <div class="virtual-scroll-container" data-turn-role="${role}"><div></div><div class="turn-content"></div></div>
+        </div></ms-chat-turn>`).join('')}</ms-autoscroll-container>`;
+      const turns = [...document.querySelectorAll('ms-chat-turn')];
+      const show = (index) => turns.forEach((turn, i) => {
+        turn.querySelector('.turn-content').innerHTML = i === index ? fillings[i][1] : '';
+      });
+      turns.forEach((turn, i) => { turn.scrollIntoView = () => setTimeout(() => show(i), 10); });
+      show(turns.length - 1);
+
+      let top = 300;
+      const scroller = document.querySelector('ms-autoscroll-container');
+      Object.defineProperty(scroller, 'scrollTop', { get: () => top, set: (value) => { top = value; } });
+      Object.defineProperty(scroller, 'scrollHeight', { value: 2000 });
+      Object.defineProperty(scroller, 'clientHeight', { value: 700 });
+      return scroller;
+    }
+
+    it('reads every turn, though only the one on screen is filled in', async () => {
+      const scroller = studioPage();
+      // As Chrome injects it: the function's own source, with nothing from this module.
+      const injected = (0, eval)(`(${captureSelectionMarkdown.toString()})`);
+
+      const captured = await injected(true);
+      expect(captured).toEqual({
+        title: 'Sorting help',
+        images: [],
+        markdown: [
+          '## You', 'How do I sort a list?',
+          '## Gemini', 'Use **sorted**:', '```python\nsorted(items)\n```',
+          '| Call | Returns |\n| --- | --- |\n| sorted(items) | a new list |',
+          '## You', 'Thanks',
+        ].join('\n\n'),
+      });
+      expect(scroller.scrollTop).toBe(300);
+    });
+
+    it('labels the turns in a selection, without their thinking or times', () => {
+      document.body.innerHTML = `<div id="selection">
+        <div data-turn-role="User"><div class="turn-content">${fillings[0][1]}</div></div>
+        <div data-turn-role="Model"><div class="turn-content">${fillings[1][1]}<p>Use sorted.</p></div></div>
+      </div>`;
+      selectContents(document.getElementById('selection'));
+
+      expect(captureSelectionMarkdown('smart-selection').markdown)
+        .toBe('## You\n\nHow do I sort a list?\n\n## Gemini\n\nUse sorted.');
+    });
+  });
+
   it('drops a heading with nothing left in it instead of leaving a bare marker', () => {
     document.body.innerHTML = '<main><h4><span class="sr-only">You said:</span></h4><p>The question</p></main>';
     expect(captureSelectionMarkdown(true).markdown).toBe('The question');

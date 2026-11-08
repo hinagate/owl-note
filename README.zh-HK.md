@@ -29,7 +29,7 @@
 
 在對話頁按右鍵 → **OWL-Note** → **Rebuild LLM chat to OWL-Note**
 
-把 ChatGPT、Claude 或 Gemini 的對話變成可編輯的筆記，而不是截圖：
+把 ChatGPT、Claude、Gemini 或 Google AI Studio 的對話變成可編輯的筆記，而不是截圖：
 
 - **每則訊息都標明是誰說的**
 - **標題、段落、清單、連結和表格**

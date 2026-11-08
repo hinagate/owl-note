@@ -73,7 +73,7 @@ export const WELCOME_NOTE_BODY = [
   '| Choose | To get |',
   '| --- | --- |',
   '| **Save selection to OWL-Note** | The selected text, as editable Markdown |',
-  '| **Rebuild LLM chat to OWL-Note** | A ChatGPT, Claude or Gemini chat — code, tables, math and images — as Markdown, not screenshots |',
+  '| **Rebuild LLM chat to OWL-Note** | A ChatGPT, Claude, Gemini or AI Studio chat — code, tables, math and images — as Markdown, not screenshots |',
   '| **Capture entire page to OWL-Note** | The whole page, below the fold too, as one long image — opened ready to mark up |',
   '| **Live Transcription save to OWL-Note** | A playing video\'s speech as a timestamped transcript, taken from the video\'s own subtitles on YouTube when it has them (Chrome 139+; audio is never stored) |',
   '',

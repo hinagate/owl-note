@@ -7,6 +7,8 @@ export function captureSelectionMarkdown(mode = false) {
   const semanticCapture = wholePage || smartSelection;
   const selectionMarker = 'data-owl-note-smart-selection';
   const pageImages = [];
+  // Google AI Studio. Its turns are custom elements that only fill in near the screen.
+  const studioChat = wholePage && Boolean(document.querySelector('ms-chat-turn'));
   function compact(value) {
     return String(value || '').replace(/\u00a0/g, ' ').replace(/[ \t]+/g, ' ').trim();
   }
@@ -68,6 +70,9 @@ export function captureSelectionMarkdown(mode = false) {
     // Ignore avatars, favicons, reaction glyphs, and other UI chrome. Meaningful chat
     // uploads and generated images are comfortably larger than this threshold.
     if (width < 48 || height < 48) return null;
+    // AI Studio's page grows as its turns fill in, so a screenshot taken afterwards would
+    // not line up with what was measured here. Say so rather than crop the wrong place.
+    if (studioChat) return `*Image could not be copied: ${escapeText(alt || 'Image')}*`;
 
     const state = globalThis.__owlNoteFullPageCaptureV1;
     let x;
@@ -114,6 +119,10 @@ export function captureSelectionMarkdown(mode = false) {
     if (tag === 'USER-QUERY') return 'You';
     if (tag === 'MODEL-RESPONSE') return 'Gemini';
     if (tag === 'RESPONSE-CONTAINER' && !node.closest?.('model-response')) return 'Gemini';
+    // AI Studio names the speaker of each turn's content.
+    const turnRole = node.getAttribute('data-turn-role');
+    if (turnRole === 'User') return 'You';
+    if (turnRole === 'Model') return 'Gemini';
 
     // ChatGPT's signed-in app moved the role onto a screen-reader heading inside each
     // turn. Anonymous visitors still get the older markup, which the checks above label.
@@ -224,9 +233,11 @@ export function captureSelectionMarkdown(mode = false) {
   }
 
   function table(node) {
-    const rows = Array.from(node.querySelectorAll('tr')).map((row) =>
-      Array.from(row.children)
-        .filter((cell) => /^(TH|TD)$/.test(cell.tagName))
+    // A row's cells, though AI Studio wraps each one in an element of its own, and none
+    // from a table nested inside a cell.
+    const rows = Array.from(node.querySelectorAll('tr')).filter((row) => row.closest('table') === node).map((row) =>
+      Array.from(row.querySelectorAll('th, td'))
+        .filter((cell) => cell.closest('tr') === row)
         .map((cell) => clean(children(cell)).replace(/\n+/g, '<br>').replace(/\|/g, '\\|')));
     const width = Math.max(0, ...rows.map((row) => row.length));
     if (!width || !rows.length) return '';
@@ -259,6 +270,14 @@ export function captureSelectionMarkdown(mode = false) {
     if (tag === 'CODE-BLOCK' && node.querySelector('pre')) {
       return codeFence(node.querySelector('pre').textContent, fenceLanguage(node.querySelector('.code-block-decoration > span')?.textContent));
     }
+    // AI Studio does the same in a panel title.
+    if (tag === 'MS-CODE-BLOCK' && node.querySelector('pre')) {
+      return codeFence(node.querySelector('pre').textContent, fenceLanguage(node.querySelector('.title-text')?.textContent));
+    }
+    // AI Studio keeps a reply's thinking in the page even while it is folded away, and
+    // labels each turn with its time. Neither is part of what was said.
+    if (semanticCapture && (tag === 'MS-THOUGHT-CHUNK'
+      || (node.classList?.contains('author-label') && node.querySelector?.('.timestamp')))) return '';
     if (semanticCapture && (tag === 'BUTTON' || node.getAttribute('role') === 'button')) {
       return meaningfulButton(node) ? children(node) : '';
     }
@@ -359,10 +378,10 @@ export function captureSelectionMarkdown(mode = false) {
     let documentTitle = compact(document.title);
     if (semanticCapture) {
       documentTitle = documentTitle
-        .replace(/^(?:ChatGPT|Claude|Gemini|Microsoft Copilot)\s*[-|:]\s*/i, '')
-        .replace(/\s*[-|:]\s*(?:ChatGPT|Claude|Gemini|Microsoft Copilot)$/i, '');
+        .replace(/^(?:ChatGPT|Claude|Gemini|Microsoft Copilot|Google AI Studio)\s*[-|:]\s*/i, '')
+        .replace(/\s*[-|:]\s*(?:ChatGPT|Claude|Gemini|Microsoft Copilot|Google AI Studio)$/i, '');
     }
-    const genericHeading = /^(?:ChatGPT|Claude|Gemini|Microsoft Copilot)$/i.test(headingText);
+    const genericHeading = /^(?:ChatGPT|Claude|Gemini|Microsoft Copilot|Google AI Studio)$/i.test(headingText);
     return compact((wholePage && genericHeading ? documentTitle : headingText) || documentTitle).slice(0, 300);
   }
 
@@ -389,6 +408,57 @@ export function captureSelectionMarkdown(mode = false) {
     };
     return candidates.sort((a, b) => score(b) - score(a))[0] || document.body;
   }
+
+  // AI Studio keeps every turn in the page but fills in only those near the screen, so one
+  // read finds one message. Bring each turn into view, read it once it has filled in and
+  // stopped changing, then put the reader back where they were.
+  async function captureStudioChat() {
+    const turnWaitMs = 2000;
+    const pollMs = 40;
+    const turns = () => document.querySelectorAll('ms-chat-turn');
+    const content = (turn) => turn.querySelector('.turn-content') || turn.querySelector('[data-turn-role]') || turn;
+    const filled = (turn) => Array.from(content(turn).children).some((child) => !child.classList.contains('author-label'));
+    const scroller = document.querySelector('ms-autoscroll-container');
+    const startTop = scroller ? scroller.scrollTop : 0;
+    const atBottom = scroller ? scroller.scrollHeight - scroller.clientHeight - startTop < 4 : false;
+    const parts = [];
+    let previous = '';
+    try {
+      const total = turns().length;
+      for (let index = 0; index < total; index++) {
+        const turn = turns()[index];
+        if (!turn) break;
+        turn.scrollIntoView?.({ block: 'start', behavior: 'instant' });
+        let size = -1;
+        for (let waited = 0; waited < turnWaitMs; waited += pollMs) {
+          const now = filled(turn) ? content(turn).textContent.length : -1;
+          if (now >= 0 && now === size) break;
+          size = now;
+          await new Promise((resolve) => setTimeout(resolve, pollMs));
+        }
+        const role = turn.querySelector('[data-turn-role]')?.getAttribute('data-turn-role');
+        const speaker = role === 'User' ? 'You' : role === 'Model' ? 'Gemini' : '';
+        const value = clean(children(content(turn)));
+        if (!value) continue;
+        // A reply can span several turns, such as its thinking and then its answer.
+        parts.push(speaker && speaker !== previous ? `## ${speaker}\n\n${value}` : value);
+        if (speaker) previous = speaker;
+      }
+    } finally {
+      if (scroller) {
+        scroller.scrollTop = atBottom ? scroller.scrollHeight : startTop;
+        // The last turns fill in again and grow, which leaves someone who was reading the
+        // end of the chat above it. Take them to the end once more after that.
+        if (atBottom) {
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          scroller.scrollTop = scroller.scrollHeight;
+        }
+      }
+    }
+    return { markdown: clean(parts.join('\n\n')), title: pageTitle(), images: pageImages };
+  }
+
+  if (studioChat) return captureStudioChat();
 
   if (wholePage) {
     const root = pageRoot();
