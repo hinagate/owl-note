@@ -243,6 +243,125 @@ print(sorted(a))</span></code></div></div>
     expect(captureSelectionMarkdown(true).markdown).toBe('## Gemini\n\n```html\n<p>Hi</p>\n```');
   });
 
+  describe('ChatGPT shared pages, as served on 2026-11-08', () => {
+    it('reads only the turns on the full page, labels them, and fences a labelled code block with its language', () => {
+      vi.stubGlobal('location', { hostname: 'chatgpt.com', href: 'https://chatgpt.com/share/1' });
+      try {
+        document.body.innerHTML = `<main><div class="thread">
+          <p class="text-center text-xs">This is a copy of a shared ChatGPT chat.</p>
+          <div><button>Report conversation</button></div>
+          <div class="turns">
+            <div data-turn-id-container="a"><section data-turn-id-container="a"><h4 class="sr-only">You said:</h4>
+              <div data-message-author-role="user"><div>Draw the plan as a Mermaid flowchart.</div></div></section></div>
+            <div data-turn-id-container="b"><section data-turn-id-container="b"><h4 class="sr-only">ChatGPT said:</h4>
+              <div data-message-author-role="assistant"><div class="markdown">
+                <div class="code-box"><div class="header"><span>Mermaid</span><button aria-label="Copy">Copy</button></div>
+                  <div class="viewer"><div class="cm-editor"><div class="cm-scroller"><pre class="cm-content">flowchart TD\n  A --> B</pre></div></div></div></div>
+                <p>Daily routine: revise, then code.</p>
+              </div></div></section></div>
+          </div>
+        </div></main>`;
+        expect(captureSelectionMarkdown(true).markdown).toBe([
+          '## You', 'Draw the plan as a Mermaid flowchart.',
+          '## ChatGPT', '```mermaid\nflowchart TD\n  A --> B\n```', 'Daily routine: revise, then code.',
+        ].join('\n\n'));
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('keeps the speaker of a turn whose whole answer is one labelled code block', () => {
+      vi.stubGlobal('location', { hostname: 'chatgpt.com', href: 'https://chatgpt.com/share/1' });
+      try {
+        const turn = (id, role, said, body) => `<div data-turn-id-container="${id}"><section data-turn-id-container="${id}">
+          <h4 class="sr-only">${said}</h4><div data-message-author-role="${role}">${body}</div></section></div>`;
+        document.body.innerHTML = `<main><div class="turns">
+          ${turn('a', 'user', 'You said:', '<div>Draw it.</div>')}
+          ${turn('b', 'assistant', 'ChatGPT said:', '<div class="box"><div class="header"><span>Mermaid</span></div><pre>flowchart TD\n  A --> B</pre></div>')}
+        </div></main>`;
+        expect(captureSelectionMarkdown(true).markdown)
+          .toBe('## You\n\nDraw it.\n\n## ChatGPT\n\n```mermaid\nflowchart TD\n  A --> B\n```');
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('labels the lighter page, whose turns are the items of a list, without numbering them', () => {
+      vi.stubGlobal('location', { hostname: 'chatgpt.com', href: 'https://chatgpt.com/share/1' });
+      try {
+        document.body.innerHTML = `<main>
+          <aside data-shared-content-notice><p>This is a copy of a shared ChatGPT chat.</p></aside>
+          <ol aria-label="Conversation" data-conversation-transcript>
+            <li data-message-role="user"><h4 aria-label="You said:"></h4><div><p data-user-message-copy>Give me an exercise.</p></div>
+              <div role="group"><button aria-label="Copy message"></button></div></li>
+            <li data-message-role="assistant"><h4 aria-label="ChatGPT said:"></h4><div data-assistant-markdown><section>
+              <p>Solution:</p>
+              <div class="box"><span data-message-content-controls><button aria-label="Copy"></button></span><div><span>python</span></div><pre>print("hi")</pre></div>
+            </section></div></li>
+          </ol>
+          <div data-privacy-notice><p>ChatGPT is AI and can make mistakes.</p></div>
+        </main>`;
+        expect(captureSelectionMarkdown(true).markdown).toBe([
+          '## You', 'Give me an exercise.',
+          '## ChatGPT', 'Solution:', '```python\nprint("hi")\n```',
+        ].join('\n\n'));
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('turns a drawn shopping checklist into a to-do list', () => {
+      const item = (name, amount, checked = false) => `<div data-has-label><button type="button" role="checkbox" aria-checked="${checked}"></button>
+        <label><span><div><p>${name}</p><p>${amount}</p></div></span></label></div>`;
+      document.body.innerHTML = `<main><div data-message-author-role="assistant"><div class="widget">
+        <p><span>Meat</span></p>${item('Beef chuck', '1.6 kg')}${item('Bacon', '300 g', true)}
+        <p><span>Vegetables</span></p>${item('Carrots', '4 medium')}
+      </div></div></main>`;
+      expect(captureSelectionMarkdown(true).markdown).toBe(
+        '## ChatGPT\n\nMeat\n\n- [ ] Beef chuck – 1.6 kg\n- [x] Bacon – 300 g\n\nVegetables\n\n- [ ] Carrots – 4 medium',
+      );
+    });
+
+    it('turns the lighter page\'s checklist, with wrapped boxes and side-by-side words, into a to-do list', () => {
+      const row = (...words) => `<div data-d-component="row">${words.map((w) => `<span data-d-component="text">${w}</span>`).join('')}</div>`;
+      const item = (name, amount) => `<div><span><input type="checkbox" data-d-component="checkbox"></span><label><span>${row(name, amount)}</span></label></div>`;
+      vi.stubGlobal('location', { hostname: 'chatgpt.com', href: 'https://chatgpt.com/share/1' });
+      try {
+        // That page keeps each turn as an item of a list, so the to-do items sit inside one.
+        document.body.innerHTML = `<main><ol data-conversation-transcript>
+          <li data-message-role="user"><p>Make it a shopping list.</p></li>
+          <li data-message-role="assistant"><section>
+            <div data-d-component="row"><p><span>Shopping progress</span></p><p>0 / 18 items</p></div>
+            <p><span>Meat</span></p>${item('Beef chuck', '1.6 kg')}${item('Bacon', '300 g')}
+          </section></li>
+        </ol></main>`;
+        expect(captureSelectionMarkdown(true).markdown).toBe([
+          '## You', 'Make it a shopping list.',
+          '## ChatGPT', 'Shopping progress – 0 / 18 items', 'Meat', '- [ ] Beef chuck – 1.6 kg\n- [ ] Bacon – 300 g',
+        ].join('\n\n'));
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('names the language of a signed-in code block without its Run button', () => {
+      document.body.innerHTML = `<main><div data-message-author-role="assistant">
+        <div data-markdown-copy="code-block"><div data-markdown-copy="exclude"><svg></svg><div>Python</div>
+          <div><div role="presentation"><button aria-label="Copy code"></button><button aria-label="Run code">Run</button></div></div></div>
+          <div data-code-block-source><code>print(1)</code></div></div>
+      </div></main>`;
+      expect(captureSelectionMarkdown(true).markdown).toBe('## ChatGPT\n\n```python\nprint(1)\n```');
+    });
+
+    it('keeps the boxes of a to-do list that is a real list', () => {
+      document.body.innerHTML = `<main><article><ul>
+        <li><input type="checkbox" checked disabled> Buy flour</li>
+        <li><input type="checkbox" disabled> Bake</li>
+      </ul></article></main>`;
+      expect(captureSelectionMarkdown(true).markdown).toBe('- [x] Buy flour\n- [ ] Bake');
+    });
+  });
+
   describe('Google AI Studio', () => {
     // Markup as AI Studio served it on 2026-11-08. A turn keeps its frame but is filled in
     // only while it is near the screen, and empties again once scrolled away.

@@ -123,6 +123,10 @@ export function captureSelectionMarkdown(mode = false) {
     const turnRole = node.getAttribute('data-turn-role');
     if (turnRole === 'User') return 'You';
     if (turnRole === 'Model') return 'Gemini';
+    // So does ChatGPT's lighter shared page, which it serves to some visitors.
+    const messageRole = node.getAttribute('data-message-role');
+    if (messageRole === 'user') return 'You';
+    if (messageRole === 'assistant') return assistantName();
 
     // ChatGPT's signed-in app moved the role onto a screen-reader heading inside each
     // turn. Anonymous visitors still get the older markup, which the checks above label.
@@ -201,6 +205,58 @@ export function captureSelectionMarkdown(mode = false) {
     return /^[\w+#.-]+$/.test(name) && name !== 'code' ? name : '';
   }
 
+  // The words in part of the page, leaving out its controls: a code block's language without
+  // the Copy and Run buttons beside it, for instance.
+  function plainText(root, skip) {
+    let text = '';
+    const walk = (node) => {
+      if (node === skip || text.length > 80) return;
+      if (node.nodeType === 3) { text += `${node.nodeValue} `; return; }
+      if (node.nodeType !== 1) return;
+      const name = String(node.tagName || '').toUpperCase();
+      if (/^(BUTTON|SVG|SCRIPT|STYLE|TEMPLATE)$/.test(name) || node.getAttribute('role') === 'button' || invisible(node)) return;
+      Array.from(node.childNodes || []).forEach(walk);
+    };
+    if (root) walk(root);
+    return compact(text);
+  }
+
+  // Shared chat pages draw a code block as a box with its language in an element of its own,
+  // apart from the code. Read the box as one fenced block, so the language labels the fence
+  // (and a Mermaid diagram gets drawn) instead of standing alone as a paragraph.
+  function labelledCodeBlock(node) {
+    const pres = node.querySelectorAll?.('pre') || [];
+    if (pres.length !== 1) return '';
+    // A whole turn whose answer is only a code block looks the same from outside, since its
+    // "ChatGPT said:" heading is hidden. Reading it here would lose who spoke.
+    if (node.querySelector('[data-message-author-role], [data-message-role], [data-conversation-role], [data-turn-role], [data-turn-id-container], user-query, model-response, response-container')) return '';
+    const label = plainText(node, pres[0]);
+    const language = label.length <= 20 ? fenceLanguage(label) : '';
+    if (!language) return '';
+    const code = pres[0].querySelector('code');
+    return codeFence((code || pres[0]).textContent, language);
+  }
+
+  function isCheckbox(node) {
+    return node?.getAttribute?.('role') === 'checkbox'
+      || (String(node?.tagName || '').toUpperCase() === 'INPUT' && String(node.getAttribute('type')).toLowerCase() === 'checkbox');
+  }
+
+  // A checkbox among an element's own children, bare or wrapped alone in one of them.
+  function ownCheckbox(node) {
+    for (const child of Array.from(node.children || [])) {
+      if (isCheckbox(child)) return { box: child, holder: child };
+      const only = child.children?.length === 1 ? child.children[0] : null;
+      if (only && isCheckbox(only) && !compact(child.textContent)) return { box: only, holder: child };
+    }
+    return null;
+  }
+
+  function taskMarker(box) {
+    const done = box.getAttribute('aria-checked') === 'true' || box.checked === true || box.hasAttribute('checked');
+    return done ? '[x] ' : '[ ] ';
+  }
+
   function inlineCode(value) {
     const code = String(value || '').replace(/\s+/g, ' ').trim();
     if (!code) return '';
@@ -224,11 +280,14 @@ export function captureSelectionMarkdown(mode = false) {
         }
       }
       const marker = ordered ? `${number++}. ` : '- ';
+      // A to-do item keeps its box. Its continuation lines indent to the list marker only:
+      // any further and Markdown would read them as code.
+      const box = item.querySelector(':scope > input[type="checkbox"], :scope > [role="checkbox"], :scope > p > input[type="checkbox"], :scope > label > input[type="checkbox"]');
       const indent = '  '.repeat(depth);
       const lines = clean(main).split('\n');
       const first = lines.shift() || '';
       const continuation = lines.map((line) => `${indent}${' '.repeat(marker.length)}${line}`);
-      return [`${indent}${marker}${first}`, ...continuation, ...nested.filter(Boolean)].join('\n');
+      return [`${indent}${marker}${box ? taskMarker(box) : ''}${first}`, ...continuation, ...nested.filter(Boolean)].join('\n');
     }).join('\n');
   }
 
@@ -264,7 +323,7 @@ export function captureSelectionMarkdown(mode = false) {
     if (markdownCopy === 'inline-code') return inlineCode(node.textContent);
     if (markdownCopy === 'code-block') {
       const source = node.querySelector('[data-code-block-source], code');
-      return codeFence((source || node).textContent, fenceLanguage(node.querySelector('[data-markdown-copy="exclude"]')?.textContent));
+      return codeFence((source || node).textContent, fenceLanguage(plainText(node.querySelector('[data-markdown-copy="exclude"]'))));
     }
     // Gemini names the language in a header above the <pre>, which has no class saying so.
     if (tag === 'CODE-BLOCK' && node.querySelector('pre')) {
@@ -308,6 +367,32 @@ export function captureSelectionMarkdown(mode = false) {
         const value = clean(children(node));
         if (!value) return '';
         return block(`## ${speaker}\n\n${value}`);
+      }
+      // A to-do item drawn as a checkbox beside its words, as in ChatGPT's shopping lists.
+      // Inside a real list, list() gives the item its box instead. A turn kept as a list
+      // item is not one.
+      const checkbox = ownCheckbox(node);
+      const listItem = node.closest?.('li');
+      if (checkbox && (!listItem || listItem.hasAttribute('data-message-role'))) {
+        const words = clean(Array.from(node.childNodes || []).filter((child) => child !== checkbox.holder).map(render).join('\n'))
+          .split(/\n+/).map(compact).filter(Boolean).join(' – ');
+        if (words) return `- ${taskMarker(checkbox.box)}${words}\n`;
+      }
+      // ChatGPT lays out short facts side by side in a row, such as an item and its amount.
+      // Keep them on one line rather than run them together or stack them.
+      if (node.getAttribute('data-d-component') === 'row') {
+        const parts = Array.from(node.children || []).map((child) => clean(render(child)));
+        if (parts.length > 1 && parts.every((part) => !part.includes('\n') && part.length <= 120)) {
+          return block(parts.filter(Boolean).join(' – '));
+        }
+      }
+      if (tag === 'DIV' || tag === 'SECTION') {
+        const fenced = labelledCodeBlock(node);
+        if (fenced) return fenced;
+      }
+      // Turns kept as the items of a list are a conversation, not a numbered list.
+      if ((tag === 'OL' || tag === 'UL') && Array.from(node.children || []).some((child) => child.hasAttribute?.('data-message-role'))) {
+        return block(children(node));
       }
     }
 
@@ -386,6 +471,14 @@ export function captureSelectionMarkdown(mode = false) {
   }
 
   function pageRoot() {
+    // When a chat's turns sit side by side in one container, read just that. It leaves out
+    // what surrounds them, such as a shared copy's notice or the reminder that AI makes
+    // mistakes. Two or more, so that a lone widget on some other page decides nothing.
+    const turnBoxes = Array.from(document.querySelectorAll('[data-turn-id-container], [data-message-role]'))
+      .filter((el) => !el.parentElement?.closest('[data-turn-id-container], [data-message-role]'));
+    const holder = turnBoxes[0]?.parentElement;
+    if (turnBoxes.length > 1 && turnBoxes.every((el) => el.parentElement === holder)) return holder;
+
     // A chat app's sidebar is not part of the conversation, but it can outweigh a short
     // one in the scoring below. The turns themselves say where the conversation is.
     const turn = document.querySelector('[data-message-author-role], [data-conversation-role], [data-testid="user-message"], user-query');
