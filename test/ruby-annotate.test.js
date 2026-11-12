@@ -199,3 +199,97 @@ describe('annotateRuby', () => {
     expect(annotateRuby(html('<p>Phonics</p>'), null)).toBe(0);
   });
 });
+
+// Marks between two words: the segmenter says where, and the page gets an element to draw on.
+describe('annotateRuby — marks between words', () => {
+  const shape = (el) => [...el.childNodes].map((n) => (
+    n.nodeType === 3 ? JSON.stringify(n.nodeValue) : n.tagName.toLowerCase() + (n.className ? `.${n.className.replace(/ /g, '.')}` : '')
+  )).join(' ');
+  const plainText = (el) => {
+    const copy = el.cloneNode(true);
+    copy.querySelectorAll('rt').forEach((rt) => rt.remove());
+    return copy.textContent;
+  };
+
+  it('wraps the space between two words said as one, adding no text', () => {
+    annotateRuby(html('<p>pick it up</p>'), () => [
+      { text: 'pick', reading: 'pɪk' }, { text: ' ', reading: null, link: true }, { text: 'it', reading: 'ɪt' },
+      { text: ' ', reading: null, link: true }, { text: 'up', reading: 'ʌp' },
+    ]);
+    const p = root.querySelector('p');
+    expect(shape(p)).toBe('ruby span.word-link wbr ruby span.word-link wbr ruby');
+    expect([...p.querySelectorAll('.word-link')].map((el) => el.textContent)).toEqual([' ', ' ']);
+    expect(plainText(p)).toBe('pick it up');
+  });
+
+  it('puts a typed bar in an element of its own and keeps it in the text', () => {
+    annotateRuby(html('<p>on | four</p>'), () => [
+      { text: 'on', reading: 'ɑːn' }, { text: ' | ', reading: null, pause: true }, { text: 'four', reading: 'fɔːr' },
+    ]);
+    const p = root.querySelector('p');
+    expect(shape(p)).toBe('ruby " " span.pause-bar " " wbr ruby');
+    expect(p.querySelector('.pause-bar').textContent).toBe('|');
+    expect(plainText(p)).toBe('on | four');
+  });
+
+  it('copes with a typed bar that has no space on one side, or on either', () => {
+    annotateRuby(html('<p>on |four</p>'), () => [
+      { text: 'on', reading: 'ɑːn' }, { text: ' |', reading: null, pause: true }, { text: 'four', reading: 'fɔːr' },
+    ]);
+    expect(shape(root.querySelector('p'))).toBe('ruby " " span.pause-bar ruby');
+    expect(plainText(root.querySelector('p'))).toBe('on |four');
+
+    annotateRuby(html('<p>on|four</p>'), () => [
+      { text: 'on', reading: 'ɑːn' }, { text: '|', reading: null, pause: true }, { text: 'four', reading: 'fɔːr' },
+    ]);
+    expect(shape(root.querySelector('p'))).toBe('ruby span.pause-bar ruby');
+    expect(plainText(root.querySelector('p'))).toBe('on|four');
+  });
+
+  it('leaves a bar the segmenter did not mark as the character it is', () => {
+    annotateRuby(html('<p>on | four</p>'), () => [
+      { text: 'on', reading: 'ɑːn' }, { text: ' | ', reading: null }, { text: 'four', reading: 'fɔːr' },
+    ]);
+    expect(shape(root.querySelector('p'))).toBe('ruby " | " wbr ruby');
+  });
+
+  it('leaves an ordinary gap exactly as before', () => {
+    annotateRuby(html('<p>ask when</p>'), () => [
+      { text: 'ask', reading: 'æsk' }, { text: ' ', reading: null }, { text: 'when', reading: 'wɛn' },
+    ]);
+    expect(shape(root.querySelector('p'))).toBe('ruby " " wbr ruby');
+  });
+});
+
+// "Who is it for" ends differently from "for you", and only the page can see which it is.
+describe('annotateRuby — telling the segmenter where a paragraph ends', () => {
+  const endings = (markup) => {
+    const seen = [];
+    annotateRuby(html(markup), (text, context) => {
+      seen.push([text, context.endsBlock]);
+      return [{ text, reading: null }];
+    });
+    return seen;
+  };
+
+  it('says so for the last text of a paragraph, even inside bold', () => {
+    expect(endings('<p>Who is it <strong>for</strong></p>')).toEqual([['Who is it ', false], ['for', true]]);
+    expect(endings('<p>for <em>you</em> now</p>')).toEqual([['for ', false], ['you', false], [' now', true]]);
+  });
+
+  it('counts a line break and a nested list as the end of what came before', () => {
+    expect(endings('<p>to<br>go</p>')).toEqual([['to', true], ['go', true]]);
+    expect(endings('<ul><li>look at<ul><li>this</li></ul></li></ul>')).toEqual([['look at', true], ['this', true]]);
+  });
+
+  it('does not when code, a link or an image carries the sentence on', () => {
+    expect(endings('<p>press <code>x</code></p>')).toEqual([['press ', false]]);
+    expect(endings('<p>look at <a href="#">this</a></p>')).toEqual([['look at ', false], ['this', true]]);
+    expect(endings('<p>look at <img alt=""></p>')).toEqual([['look at ', false]]);
+  });
+
+  it('ignores empty space and empty elements after the text', () => {
+    expect(endings('<p>for <span></span> </p>')).toEqual([['for ', true]]);
+    expect(endings('<h2>What to look for</h2><p>next</p>')).toEqual([['What to look for', true], ['next', true]]);
+  });
+});

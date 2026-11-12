@@ -359,3 +359,177 @@ describe('mixed scripts', () => {
     expect(ja(null)).toEqual([]);
   });
 });
+
+// A bar typed between two words is a pause the writer marked, and the page draws it as one.
+describe('typed pause bars', () => {
+  const en = makeSegmenter({
+    ipa: parseTable([
+      'i\taɪ', "shouldn't\tˈʃʊd.ənt", 'caught\tkɑːt', 'on\tɑn', 'four\tfɔːr', 'and\tənd',
+      'five\tfaɪv', 'time\ttaɪm', 'a\tə', 'week\twiːk', 'was\twəz', 'waiting\tˈweɪ.tɪŋ',
+      'for\tfɚ', 'the\tðə', 'bus\tbʌs', 'when\twɛn', 'it\tɪt', 'started\tˈstɑːr.tɪd',
+      'to\ttə', 'rain\treɪn',
+    ].join('\n')),
+    jyutping: JYUTPING,
+  });
+  const reading = (text, word) => en(text).find((r) => r.text === word)?.reading;
+  const held = (text) => en(text).filter((r) => r.parts?.some((p) => p.held)).map((r) => r.text);
+
+  it('marks a bar typed between two words, and treats it as a pause', () => {
+    const text = "I shouldn't | caught on | four and five time | a week";
+    expect(en(text).filter((r) => r.pause).map((r) => r.text)).toEqual([' | ', ' | ', ' | ']);
+    expect(rebuilds(en, text)).toBe(true);
+    expect(held(text)).toEqual([]); // shouldn't | caught: nothing is held into the bar
+    expect(reading(text, 'on')).toBe('ɑːn');
+    // Without the bars the same words run on: the t is held, and "on" stays light.
+    expect(held("I shouldn't caught on four")).toEqual(["shouldn't"]);
+    expect(reading("I shouldn't caught on four", 'on')).toBe('ɑn');
+  });
+
+  it('takes a bar with a space on one side only, or on neither', () => {
+    expect(en('caught on |four').filter((r) => r.pause).map((r) => r.text)).toEqual([' |']);
+    expect(en('caught on|four').filter((r) => r.pause).map((r) => r.text)).toEqual(['|']);
+  });
+
+  it('marks no pause the writer did not type, however long the sentence', () => {
+    expect(en('I was waiting for the bus when it started to rain').some((r) => r.pause)).toBe(false);
+  });
+
+  it('leaves a bar alone when it does not stand between two words it can read', () => {
+    expect(en('| a week').some((r) => r.pause)).toBe(false);
+    expect(en('a week |').some((r) => r.pause)).toBe(false);
+    expect(en('a week | zork').some((r) => r.pause)).toBe(false);
+    expect(en('a week | 銀行').some((r) => r.pause)).toBe(false);
+    expect(en('a week || four').some((r) => r.pause)).toBe(false);
+  });
+});
+
+// What becomes of a word's last sound: held before a consonant, carried over to a vowel,
+// sounded before a pause.
+describe('the end of a word', () => {
+  const en = makeSegmenter({
+    ipa: parseTable([
+      'pick\tpɪk', 'it\tɪt', 'up\tʌp', 'take\tteɪk', 'a\tə', 'look\tlʊk', 'at\tət', 'the\tðə',
+      'pot\tpɑːt', 'pork\tpɔːrk', 'rib\trɪb', 'after\tˈæf.tɚ', 'all\tɔːl', 'go\tɡoʊ', 'on\tɑn',
+      'what\twʌt', 'is\tɪz', 'do\tdu', 'you\tjə', 'want\twɑːnt', 'hot\thɑːt',
+    ].join('\n')),
+    jyutping: JYUTPING,
+  });
+  /** The text with ‿ where two words are joined. */
+  const linked = (text, context) => en(text, context).map((r) => (r.link ? '‿' : r.text)).join('');
+  /** A word's reading with its (held) and {final} parts marked. */
+  const shown = (text, word, context) => {
+    const run = en(text, context).find((r) => r.text === word);
+    return (run.parts || [{ text: run.reading }])
+      .map((p) => (p.held ? '(' + p.text + ')' : p.cue === 'final' ? '{' + p.text + '}' : p.text)).join('');
+  };
+
+  it('joins a final consonant to the vowel that opens the next word', () => {
+    expect(linked('Pick it up')).toBe('Pick‿it‿up');
+    expect(linked('take a look at the pot')).toBe('take‿a look‿at the pot');
+    expect(en('Pick it up').filter((r) => r.link).map((r) => r.text)).toEqual([' ', ' ']);
+    expect(rebuilds(en, 'take a look at the pot')).toBe(true);
+  });
+
+  it('joins the r of an r-coloured vowel too, but not one vowel to another', () => {
+    expect(linked('after all')).toBe('after‿all');
+    expect(linked('go on')).toBe('go on');
+  });
+
+  it('joins nothing across punctuation, a typed bar, a word it cannot read or Chinese', () => {
+    expect(linked('Pick it, up')).toBe('Pick‿it, up');
+    expect(linked('take | a look')).toBe('take | a look');
+    expect(linked('take zork a look')).toBe('take zork a look');
+    expect(linked('take 銀行 a look')).toBe('take 銀行 a look');
+  });
+
+  it('holds a final stop before a consonant, and leaves it bare before a vowel', () => {
+    expect(shown('What do you want', 'What')).toBe('wʌ(t)');
+    expect(shown('What is it', 'What')).toBe('wʌt');
+    expect(linked('What is it')).toBe('What‿is‿it');
+  });
+
+  it('sounds a final p, t or k before a pause', () => {
+    expect(shown('Pick it up.', 'up')).toBe('ʌ{p}');
+    expect(shown('a hot pot, is it?', 'pot')).toBe('pɑː{t}');
+    expect(shown('a hot pot, is it?', 'it')).toBe('ɪ{t}');
+    expect(shown('a hot pot, is it?', 'hot')).toBe('hɑː(t)'); // still held: pot follows
+    expect(shown('the pot | is hot', 'pot')).toBe('pɑː{t}');
+  });
+
+  it('takes the end of a paragraph for a pause only when told the text ends one', () => {
+    expect(shown('a hot pot', 'pot')).toBe('pɑːt');
+    expect(shown('a hot pot', 'pot', { endsBlock: true })).toBe('pɑː{t}');
+  });
+
+  it('leaves a final that is cued already as it was', () => {
+    expect(shown('the pork.', 'pork')).toBe('pɔː{rk}');
+    expect(shown('the rib.', 'rib')).toBe('rɪ{b}');
+  });
+
+  it('keeps every reading whole', () => {
+    for (const text of ['Pick it up.', 'a hot pot, is it?', 'take a look at the pot']) {
+      for (const run of en(text, { endsBlock: true })) {
+        if (run.parts) expect(run.parts.map((p) => p.text).join('')).toBe(run.reading);
+      }
+    }
+  });
+});
+
+// "Yes, I can", "Who is it for?": before a pause a function word is said in full.
+describe('function words before a pause', () => {
+  const en = makeSegmenter({
+    ipa: parseTable([
+      'yes\tjɛs', 'i\taɪ', 'can\tkən', 'ask\tæsk', 'who\thu', 'is\tɪz', 'it\tɪt', 'for\tfɚ',
+      'the\tðə', 'bus\tbʌs', 'loop\tluːp', 'to\ttə', 'me\tmi', 'what\twʌt', 'you\tjə',
+    ].join('\n')),
+  });
+  const reading = (text, word, context) => en(text, context).find((r) => r.text === word)?.reading;
+
+  it('shows the full form before a full stop, a comma or a question mark', () => {
+    expect(reading('Yes, I can.', 'can')).toBe('kæn');
+    expect(reading('I can, yes', 'can')).toBe('kæn');
+    expect(reading('Who is it for?', 'for')).toBe('fɔːr');
+    expect(reading('I can ask', 'can')).toBe('kən');
+    expect(reading('for the bus', 'for')).toBe('fɚ');
+  });
+
+  it('gives the full form the stress and cues of an ordinary word', () => {
+    const can = en('Yes, I can.').find((r) => r.text === 'can');
+    expect(can.parts).toEqual([{ text: 'kæn', cue: null, stressed: true }]);
+    const weak = en('I can ask').find((r) => r.text === 'can');
+    expect('parts' in weak).toBe(false);
+  });
+
+  it('counts a dash, a typed bar and a closing quote, but not an opening one', () => {
+    expect(reading('what it is for — the bus', 'for')).toBe('fɔːr');
+    expect(reading('what it is for | the bus', 'for')).toBe('fɔːr');
+    expect(reading('the "for" loop', 'for')).toBe('fɔːr');
+    expect(reading('it is for "the bus"', 'for')).toBe('fɚ');
+  });
+
+  it('does not take the dot of a file name or a word it cannot read for a pause', () => {
+    expect(reading('the to.js file', 'to')).toBe('tə');
+    expect(reading('it is for Zorkify.', 'for')).toBe('fɚ');
+  });
+
+  it('takes the end of a paragraph for a pause only when told the text ends one', () => {
+    expect(reading('What is it for', 'for')).toBe('fɚ'); // may run on into the next element
+    expect(reading('What is it for', 'for', { endsBlock: true })).toBe('fɔːr');
+    expect(reading('What is it for \n', 'for', { endsBlock: true })).toBe('fɔːr');
+    expect(reading('for the bus', 'for', { endsBlock: true })).toBe('fɚ');
+  });
+
+  it('leaves the pronouns light: I saw her, for me', () => {
+    expect(reading('It is for me.', 'me')).toBe('mi');
+    expect(reading('It is for you.', 'you')).toBe('jə');
+  });
+
+  it('still rebuilds the text and the reading', () => {
+    for (const text of ['Yes, I can.', 'Who is it for?', 'the "for" loop']) {
+      expect(en(text).map((r) => r.text).join('')).toBe(text);
+      for (const run of en(text)) {
+        if (run.parts) expect(run.parts.map((p) => p.text).join('')).toBe(run.reading);
+      }
+    }
+  });
+});

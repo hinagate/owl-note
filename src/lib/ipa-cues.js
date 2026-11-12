@@ -61,6 +61,18 @@ export const WEAK_FORMS = {
   on: 'ɑn',
 };
 
+// What the same words show before a pause, where there is nothing left to lean on: "Yes, I
+// can", "Who is it for?". There the word is said in full, so the reading goes back to the
+// dictionary's own form and takes the cues of any other word (src/lib/segment.js decides
+// where). Not the pronouns: at the end of a sentence her, them and us stay as light as in
+// the middle of one — "I saw her."
+export const STRONG_FORMS = {
+  an: 'æn', but: 'bʌt', or: 'ɔːr', nor: 'nɔːr', as: 'æz', at: 'æt', for: 'fɔːr', from: 'frʌm',
+  of: 'ʌv', to: 'tuː', than: 'ðæn', am: 'æm', are: 'ɑːr', was: 'wɑːz', were: 'wɝː',
+  can: 'kæn', could: 'kʊd', would: 'wʊd', should: 'ʃʊd', shall: 'ʃæl', must: 'mʌst',
+  just: 'dʒʌst', some: 'sʌm', be: 'biː', do: 'duː', who: 'huː', whom: 'huːm', on: 'ɑːn',
+};
+
 // Readings CMUdict gives in a careful or dated form rather than as the word is said, baked
 // in by scripts/build-ipa-dict.mjs the same way. vehicle keeps an h natural speech drops,
 // camera a middle syllable it squeezes out; lead's first reading is the metal (lɛd), rarer
@@ -189,30 +201,50 @@ export function pronunciationCues(ipa, word = '') {
   return parts;
 }
 
-// A word-final p, t or k before another consonant is held: the mouth closes and the air
-// stops, but nothing is released — What do you want sounds like "Wha' do you want", with
-// the pause still there. Cantonese ends 入聲 syllables exactly this way, so it is the one
-// final a Cantonese reader already says right; the page brackets it, wʌ(t), to say "stop
-// here, silently" and to tell it apart from swallowing the sound altogether.
+// What becomes of a word's last sound depends on what follows the word (src/lib/segment.js
+// looks). A Cantonese reader ends all three cases the 入聲 way — mouth closed, nothing
+// released, the vowel cut short:
+//   - before a consonant that is right, for p, t and k: What do you want sounds like
+//     "Wha' do you want", with the stop still made. The page brackets it, wʌ(t), to say
+//     "stop here, silently" and to tell it apart from swallowing the sound altogether.
+//   - before a vowel it is wrong: the consonant is carried over and opens the next word,
+//     pick it up → "pi-ki-tup". The page joins the two words with an arc.
+//   - before a pause nothing follows to carry the word, and an unreleased stop after a
+//     clipped vowel leaves "pot" sounding like "po". There p, t and k are to be sounded,
+//     and take the cue of every other final not to drop.
 const HELD_STOPS = new Set(['p', 't', 'k']);
+// The r in these is a sound of its own before a vowel: after all → "af-te-rall".
+const R_COLOURED = new Set(['ɚ', 'ɝ', 'ɝː']);
+
+const firstSound = (ipa) => splitIpa(ipa)?.find((s) => s.kind !== 'mark');
 
 /** Whether a reading begins with a consonant sound (stress marks aside). */
 export function startsWithConsonant(ipa) {
-  const symbols = splitIpa(ipa);
-  const first = symbols?.find((s) => s.kind !== 'mark');
-  return first?.kind === 'consonant';
+  return firstSound(ipa)?.kind === 'consonant';
+}
+
+/** Whether a reading begins with a vowel sound (stress marks aside). */
+export function startsWithVowel(ipa) {
+  return firstSound(ipa)?.kind === 'vowel';
 }
 
 /**
- * Split a reading's final p, t or k into a part of its own, marked `held`, keeping every
- * other part — and that stop's own cue and stress — as they were.
- * @param {string} ipa the word's reading
- * @param {{ text: string, cue: string|null, stressed: boolean }[] | null} parts its parts
- *   from pronunciationCues, or null for a word that has none (a function word)
+ * Whether a reading ends in a sound that a following vowel picks up: any consonant, or
+ * the r of an r-coloured vowel.
+ */
+export function endsLinkable(ipa) {
+  const symbols = splitIpa(ipa);
+  const last = symbols?.[symbols.length - 1];
+  return Boolean(last) && (last.kind === 'consonant' || R_COLOURED.has(last.text));
+}
+
+/**
+ * Split a reading's final p, t or k into a part of its own carrying `mark`, keeping every
+ * other part — and that stop's own stress — as they were.
  * @returns {object[] | null} parts that still rebuild `ipa` exactly, or null when the
  *   reading does not end in a stop
  */
-export function holdFinalStop(ipa, parts) {
+function markFinalStop(ipa, parts, mark) {
   const symbols = splitIpa(ipa);
   const last = symbols?.[symbols.length - 1];
   if (!last || !HELD_STOPS.has(last.text)) return null;
@@ -224,6 +256,27 @@ export function holdFinalStop(ipa, parts) {
     ...base.slice(0, -1),
     ...(head ? [{ ...tail, text: head }] : []),
     // The ↘ belongs before the word, so it stays with whatever comes first.
-    { ...tail, text: last.text, held: true, fall: undefined },
+    { ...tail, text: last.text, ...mark, fall: undefined },
   ];
+}
+
+/**
+ * The final p, t or k of a word before a consonant, marked `held`: wʌ(t).
+ * @param {string} ipa the word's reading
+ * @param {{ text: string, cue: string|null, stressed: boolean }[] | null} parts its parts
+ *   from pronunciationCues, or null for a word that has none (a function word)
+ * @returns {object[] | null} the new parts, or null when the reading does not end in a stop
+ */
+export function holdFinalStop(ipa, parts) {
+  return markFinalStop(ipa, parts, { held: true });
+}
+
+/**
+ * The final p, t or k of a word before a pause, given the `final` cue: sound it. Takes
+ * and returns what holdFinalStop does; null as well when the stop is cued already, as the
+ * k of pork is.
+ */
+export function soundFinalStop(ipa, parts) {
+  if (parts?.length && parts[parts.length - 1].cue === 'final') return null;
+  return markFinalStop(ipa, parts, { cue: 'final' });
 }

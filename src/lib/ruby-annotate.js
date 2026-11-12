@@ -25,14 +25,66 @@ const SKIP = 'code, pre, kbd, samp, .katex, ruby, .mermaid-diagram';
 // An explicit <wbr> after each space, and between two rubies that touch, gives back every
 // break the plain text had. It adds no text, so copying the preview is unchanged.
 
+// Where a line of speech ends: at the end of one of these, or where one begins.
+const BLOCK = 'p, li, h1, h2, h3, h4, h5, h6, td, th, dt, dd, blockquote, div, section, article, summary, figcaption, caption, pre, ul, ol, dl, table, details, hr, br';
+
+/**
+ * Whether nothing more is said after this text in its paragraph: the last text of a
+ * heading, a list item or a table cell, or the text before a line break. The segmenter
+ * cannot see past its own text node, and "Who is it for" ends differently from "for you".
+ */
+function endsItsBlock(node, root) {
+  for (let at = node; at && at !== root; at = at.parentNode) {
+    for (let next = at.nextSibling; next; next = next.nextSibling) {
+      if (next.nodeType === Node.TEXT_NODE) {
+        if (next.nodeValue.trim()) return false;
+      } else if (next.nodeType === Node.ELEMENT_NODE) {
+        if (next.matches(BLOCK)) return true;
+        if (next.textContent.trim() || next.matches('img') || next.querySelector('img')) return false;
+      }
+    }
+    if (at.parentNode?.nodeType === Node.ELEMENT_NODE && at.parentNode.matches(BLOCK)) return true;
+  }
+  return true;
+}
+
+/**
+ * A gap's text. Two kinds stay in the text but go in an element of their own, so that the
+ * stylesheet can draw a mark there and what a reader copies is unchanged: the spaces
+ * between two words said as one (run.link), and a bar the writer typed to mark a pause
+ * (run.pause).
+ */
+function appendGap(fragment, run) {
+  if (run.link) {
+    // The spaces between two words said as one: the stylesheet draws an arc under them.
+    const link = document.createElement('span');
+    link.className = 'word-link';
+    link.textContent = run.text;
+    fragment.append(link);
+    return;
+  }
+  const at = run.pause ? run.text.indexOf('|') : -1;
+  if (at < 0) { fragment.append(run.text); return; }
+  const bar = document.createElement('span');
+  bar.className = 'pause-bar';
+  bar.textContent = '|';
+  if (at > 0) fragment.append(run.text.slice(0, at));
+  fragment.append(bar);
+  if (at < run.text.length - 1) fragment.append(run.text.slice(at + 1));
+}
+
 /**
  * @param {Element} root subtree to annotate, mutated in place
- * @param {(text: string) => { text: string, reading: string|null, lang?: string, parts?: { text: string, cue: string|null, stressed?: boolean, held?: boolean, fall?: boolean }[] }[]} segment
+ * @param {(text: string, context: { endsBlock: boolean }) => { text: string, reading: string|null, lang?: string, pause?: boolean, link?: boolean, parts?: { text: string, cue: string|null, stressed?: boolean, held?: boolean, fall?: boolean }[] }[]} segment
  *   splits text into runs, each carrying its reading or null and optionally the BCP-47
  *   language of that reading; the runs must rebuild the text exactly. A run may also
  *   split its reading into `parts`; each part with a `cue`, `stressed`, `held` or `fall`
  *   is wrapped in <span class="cue-… stressed held fall"> so the stylesheet can mark it. Parts that do not
- *   rebuild the reading are ignored rather than trusted.
+ *   rebuild the reading are ignored rather than trusted. A run without a reading may carry
+ *   `pause`: the writer typed a bar there, and <span class="pause-bar"> holds it. Or
+ *   `link`: the words either side are said as one, and <span class="word-link"> holds
+ *   the spaces between them.
+ *   `context.endsBlock` tells the segmenter that nothing follows the text in its paragraph.
  * @returns {number} how many runs were annotated
  */
 export function annotateRuby(root, segment) {
@@ -53,7 +105,7 @@ export function annotateRuby(root, segment) {
 
   let annotated = 0;
   for (const node of targets) {
-    const runs = segment(node.nodeValue);
+    const runs = segment(node.nodeValue, { endsBlock: endsItsBlock(node, root) });
     // Leaving an untouched node alone keeps the DOM (and the user's selection) stable
     // across the many re-renders that typing causes.
     if (!runs.some((run) => run.reading)) continue;
@@ -61,7 +113,7 @@ export function annotateRuby(root, segment) {
     const fragment = document.createDocumentFragment();
     runs.forEach((run, i) => {
       if (!run.reading) {
-        fragment.append(run.text);
+        appendGap(fragment, run);
         if (/\s$/.test(run.text)) fragment.append(document.createElement('wbr'));
         return;
       }

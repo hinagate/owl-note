@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  splitIpa, pronunciationCues, WEAK_FORMS, UNSTRESSED_WORDS, holdFinalStop, startsWithConsonant,
+  splitIpa, pronunciationCues, WEAK_FORMS, STRONG_FORMS, UNSTRESSED_WORDS, holdFinalStop, startsWithConsonant,
+  startsWithVowel, endsLinkable, soundFinalStop,
 } from '../src/lib/ipa-cues.js';
 import { arpabetToIpa } from '../src/lib/arpabet.js';
 
@@ -233,5 +234,74 @@ describe('pronunciationCues — what it leaves alone', () => {
       const parts = pronunciationCues(ipa, word);
       expect(parts.map((p) => p.text).join('')).toBe(ipa);
     }
+  });
+});
+
+// What a function word shows before a pause: "Yes, I can", "Who is it for?".
+describe('STRONG_FORMS', () => {
+  // The dictionary is the source: these are its own readings, before WEAK_FORMS replaced them.
+  it('holds exactly what the dictionary says for each word', async () => {
+    const { dictionary } = await import('cmu-pronouncing-dictionary');
+    for (const [word, form] of Object.entries(STRONG_FORMS)) {
+      expect(form, word).toBe(arpabetToIpa(dictionary[word]));
+    }
+  });
+
+  it('covers every weak form but the pronouns, which stay light at the end of a sentence', () => {
+    const pronouns = ['you', 'your', 'her', 'us', 'them', 'he', 'she', 'we', 'me'];
+    expect(Object.keys(STRONG_FORMS).sort())
+      .toEqual(Object.keys(WEAK_FORMS).filter((word) => !pronouns.includes(word)).sort());
+  });
+
+  it('gives each the stress and cues of an ordinary word once it is said in full', () => {
+    for (const [word, form] of Object.entries(STRONG_FORMS)) {
+      const parts = pronunciationCues(form);
+      expect(parts, word).not.toBeNull();
+      expect(parts.every((part) => part.stressed), word).toBe(true);
+      expect(parts.map((part) => part.text).join(''), word).toBe(form);
+    }
+    expect(show('fɔːr')).toBe('f[ɔː]{r}');
+    expect(show('ʌv')).toBe('[ʌ]{v}');
+  });
+});
+
+// What the sound after a word changes at its end: a vowel picks the last sound up, and a
+// pause leaves a final p, t or k to be sounded.
+describe('the end of a word', () => {
+  it('tells a reading that opens on a vowel from one that opens on a consonant', () => {
+    for (const reading of ['ɪt', 'əˈklɑːk', 'ˈaʊ.ɚ', 'ɔːl']) expect(startsWithVowel(reading), reading).toBe(true);
+    for (const reading of ['juːz', 'wʌn', 'ˈhæp.i', 'ðə']) expect(startsWithVowel(reading), reading).toBe(false);
+    // A reading it cannot parse opens on neither.
+    expect(startsWithVowel('x?')).toBe(false);
+    expect(startsWithConsonant('x?')).toBe(false);
+  });
+
+  it('counts a final consonant, and the r of an r-coloured vowel, as a sound to carry over', () => {
+    for (const reading of ['pɪk', 'faɪv', 'ənd', 'kɑːr', 'ˈæf.tɚ', 'fɚ', 'sɝː']) expect(endsLinkable(reading), reading).toBe(true);
+    for (const reading of ['ɡoʊ', 'ə', 'tuː', 'aɪ', '', 'x?']) expect(endsLinkable(reading), reading).toBe(false);
+  });
+
+  it('gives a final p, t or k the final cue and keeps the rest as it was', () => {
+    expect(soundFinalStop('pɑːt', pronunciationCues('pɑːt'))).toEqual([
+      { text: 'p', cue: null, stressed: true, fall: true },
+      { text: 'ɑː', cue: 'long', stressed: true },
+      { text: 't', cue: 'final', stressed: true },
+    ]);
+    expect(soundFinalStop('ʌp', pronunciationCues('ʌp'))).toEqual([
+      { text: 'ʌ', cue: null, stressed: true },
+      { text: 'p', cue: 'final', stressed: true },
+    ]);
+    // A function word has no parts of its own.
+    expect(soundFinalStop('ɪt', null)).toEqual([
+      { text: 'ɪ', cue: null, stressed: false },
+      { text: 't', cue: 'final', stressed: false },
+    ]);
+  });
+
+  it('adds nothing to a final that is cued already, or that is not a stop', () => {
+    expect(soundFinalStop('pɔːrk', pronunciationCues('pɔːrk'))).toBeNull();
+    expect(soundFinalStop('rɪb', pronunciationCues('rɪb'))).toBeNull();
+    expect(soundFinalStop('ɡoʊ', pronunciationCues('ɡoʊ'))).toBeNull();
+    expect(soundFinalStop('x?', null)).toBeNull();
   });
 });

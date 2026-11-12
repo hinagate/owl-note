@@ -82,6 +82,8 @@ describe('welcome note — fresh first run', () => {
       'opened ready to mark up',
       '**⧉ Open in new tab**',
       'Phonetic Assistance',
+      'an **arc** under two words joins them',
+      'a place to pause',
       'about 130 MB',
       'editable `.owl-note` package',
       'oversized notes stay safely on this device',

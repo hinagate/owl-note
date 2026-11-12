@@ -1425,6 +1425,29 @@ body.resizing { user-select: none; cursor: col-resize; }
   font-size: 1.15em; line-height: 1;
   color: var(--muted); font-weight: 400; text-decoration: none;
 }
+/* A bar typed between two words (I shouldn't | get caught) marks a pause. It is still the
+   note's own text: the character stays where it is, unseen, and a thin line is drawn
+   through it from the top of the reading to the foot of the word, so that it reads as a
+   mark and not as a letter. The line is out of flow, so the row keeps its height. Paler
+   than the readings: it separates, it is not read. */
+.preview-content.phonetics .pause-bar {
+  position: relative; display: inline-block; line-height: 1; color: transparent;
+}
+.preview-content.phonetics .pause-bar::before {
+  content: ''; position: absolute; left: 50%; top: -1.05em; bottom: -0.18em;
+  border-left: 1px solid #9aa1ab;
+}
+/* Two words said as one (pick it up → "pi-ki-tup"): an arc under the space between them,
+   the tie a teacher draws to join a last sound to the vowel after it. The span holds only
+   the note's own spaces; the arc is drawn out of flow below the letters, wide enough to
+   reach under the end of one word and the start of the next. */
+.preview-content.phonetics .word-link { position: relative; white-space: nowrap; }
+.preview-content.phonetics .word-link::after {
+  content: ''; position: absolute; left: 50%; top: 100%;
+  width: 1em; height: 0.26em; margin: -0.12em 0 0 -0.5em;
+  border-bottom: 1.5px solid #8a93a0; border-radius: 0 0 50% 50% / 0 0 100% 100%;
+  pointer-events: none;
+}
 .editor-bar .phonetics-toggle.on { background: rgba(45, 190, 96, 0.16); border-color: var(--accent); color: var(--accent-dark); font-weight: 600; }
 .editor-bar .phonetics-toggle[disabled] { opacity: 0.6; cursor: progress; }
 

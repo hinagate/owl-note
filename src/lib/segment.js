@@ -9,8 +9,10 @@
 // One pass handles mixed text. A note that quotes English inside Japanese gets IPA on the
 // English and kana on the kanji without either table knowing the other exists.
 
-import { tokenize } from './phonetics.js';
-import { pronunciationCues, holdFinalStop, startsWithConsonant } from './ipa-cues.js';
+import { tokenize, normalizeWord } from './phonetics.js';
+import {
+  pronunciationCues, holdFinalStop, soundFinalStop, startsWithConsonant, startsWithVowel, endsLinkable, STRONG_FORMS,
+} from './ipa-cues.js';
 import { readEnglish, readNumber, PREFIX_READINGS } from './english-forms.js';
 import { heteronymReading, isHeteronym, isSkipped } from './heteronyms.js';
 
@@ -128,14 +130,17 @@ function longestMatch(table, text, from, limit) {
  * @param {{ ipa?: Map|null, kana?: Map|null, jyutping?: Map|null, script?: 'ja'|'yue' }} tables
  *   `script` is the note-level reading, used as the default for blocks that hold no kana
  *   of their own; each block is still classified individually.
- * @returns {(text: string) => { text: string, reading: string|null, parts?: object[] }[]}
+ * @returns {(text: string, context?: { endsBlock?: boolean }) => { text: string, reading: string|null, parts?: object[], pause?: boolean, link?: boolean }[]}
  *   runs whose `text` concatenates back to the input exactly — the annotator relies on
  *   that to keep the rendered document byte-identical apart from the readings it adds.
  *   English runs may carry `parts`, the reading split into pronunciation cues
- *   (see ./ipa-cues.js).
+ *   (see ./ipa-cues.js). A run between two English words may carry `pause`: the writer
+ *   typed a bar there, to mark a pause of their own. Or `link`: the first word's last
+ *   sound is carried over to the second. `endsBlock` says the text is the last of its
+ *   paragraph, so a pause follows its final word even without a full stop.
  */
 export function makeSegmenter({ ipa = null, kana = null, jyutping = null, script = 'yue' } = {}) {
-  return function segment(input) {
+  return function segment(input, { endsBlock = false } = {}) {
     const text = String(input || '');
     // The annotator calls this once per text node, so "block" is a paragraph or smaller —
     // fine enough that a Cantonese line inside a Japanese note is judged on its own.
@@ -222,7 +227,7 @@ export function makeSegmenter({ ipa = null, kana = null, jyutping = null, script
     }
 
     flush();
-    return markHeldStops(applyHeteronyms(runs));
+    return markTypedBars(markWordEnds(applyStrongForms(applyHeteronyms(runs), endsBlock), endsBlock));
   };
 }
 
@@ -230,7 +235,7 @@ const isEnglishRun = (run) => Boolean(run?.reading) && !run.lang;
 
 /**
  * Give each heteronym (use, read, live …) the reading its neighbours call for — see
- * ./heteronyms.js. Runs before markHeldStops, which depends on how the word now ends.
+ * ./heteronyms.js. Runs before markWordEnds, which depends on how the word now ends.
  */
 function applyHeteronyms(runs) {
   runs.forEach((run, i) => {
@@ -241,6 +246,55 @@ function applyHeteronyms(runs) {
     const parts = pronunciationCues(reading, run.text);
     if (parts) run.parts = parts;
     else delete run.parts;
+  });
+  return runs;
+}
+
+// Punctuation straight after a word, or a dash or a typed bar after a space: the speaker
+// stops there. A quotation mark or a bracket counts only when it closes — the "for" loop,
+// (what it's for) — and a full stop only when it ends something: to.js is a file name.
+const PAUSE_AFTER = /^(?:[.,;:?!…]+(?=$|[\s"'”’)\]}])|["'”’)\]}]+(?=$|[\s.,;:?!…])|\s*[|—–]|\s+-\s)/;
+
+/** Whether the speaker stops after runs[i]. */
+function pauseFollows(runs, i, endsBlock) {
+  const next = runs[i + 1];
+  if (next && !next.reading && PAUSE_AFTER.test(next.text)) return true;
+  // The end of a heading or a list item is a pause too, with or without a full stop.
+  const last = runs.length - 1;
+  return endsBlock && (i === last || (i === last - 1 && !runs[last].reading && !runs[last].text.trim()));
+}
+
+/**
+ * Before a pause a function word is said in full: "Yes, I can", "Who is it for?". The
+ * baked table holds its weak form, which is right everywhere else (see ./ipa-cues.js).
+ */
+function applyStrongForms(runs, endsBlock) {
+  runs.forEach((run, i) => {
+    if (!isEnglishRun(run)) return;
+    const word = normalizeWord(run.text);
+    if (!Object.hasOwn(STRONG_FORMS, word)) return;
+    if (!pauseFollows(runs, i, endsBlock)) return;
+    run.reading = STRONG_FORMS[word];
+    // Cued as the content word it now is, not skipped as the function word it is spelled as.
+    const parts = pronunciationCues(run.reading);
+    if (parts) run.parts = parts;
+    else delete run.parts;
+  });
+  return runs;
+}
+
+// A bar the writer typed between two words: I shouldn't | get caught.
+const TYPED_BAR = /^[ \t\u00a0]*\|[ \t\u00a0]*$/;
+
+/**
+ * A bar typed between two English words is a pause the writer marked: the run gets
+ * `pause`, and the annotator draws the bar as a mark instead of a character. Nowhere else:
+ * a bar beside a word with no reading, or at the edge of the text, may be a table's or a
+ * command's.
+ */
+function markTypedBars(runs) {
+  runs.forEach((run, i) => {
+    if (TYPED_BAR.test(run.text) && isEnglishRun(runs[i - 1]) && isEnglishRun(runs[i + 1])) run.pause = true;
   });
   return runs;
 }
@@ -278,24 +332,39 @@ function neighbours(runs, i) {
 }
 
 /**
- * Mark the words whose final p, t or k is held — which depends on the word AFTER it. Only
- * a consonant takes the stop silently (what do → wʌ(t)); a vowel links to it instead
- * (what is → "wha-dis"), and before a pause it varies, so neither is marked. Nothing but
- * spaces may come between the two words: a comma is a pause.
+ * Mark what becomes of each English word's last sound, which depends on what comes AFTER
+ * the word (see ./ipa-cues.js):
+ *   - a consonant: a final p, t or k is held, what do → wʌ(t);
+ *   - a vowel: the last sound is carried over, pick it up → "pi-ki-tup", and the spaces
+ *     between the two words get `link`;
+ *   - a pause: a final p, t or k is sounded, and is cued like any final not to drop.
+ * Nothing but spaces may come between two words for the first two: a comma is a pause, and
+ * so is a typed bar.
  */
-function markHeldStops(runs) {
-  const isEnglish = isEnglishRun;
+function markWordEnds(runs, endsBlock) {
   runs.forEach((run, i) => {
-    if (!isEnglish(run)) return;
+    if (!isEnglishRun(run)) return;
+    const parts = run.parts ?? null;
+    if (pauseFollows(runs, i, endsBlock)) {
+      const sounded = soundFinalStop(run.reading, parts);
+      if (sounded) run.parts = sounded;
+      return;
+    }
+    let gap = null;
     let next = runs[i + 1];
     // A hyphenated part (high-) carries its hyphen, so the next part follows with no gap.
     if (!run.text.endsWith('-')) {
-      if (!next || next.reading || !/^[ \t\u00a0]+$/.test(next.text)) return;
+      if (!next || next.reading || !/^[ \t ]+$/.test(next.text)) return;
+      gap = next;
       next = runs[i + 2];
     }
-    if (!isEnglish(next) || !startsWithConsonant(next.reading)) return;
-    const parts = holdFinalStop(run.reading, run.parts ?? null);
-    if (parts) run.parts = parts;
+    if (!isEnglishRun(next)) return;
+    if (startsWithConsonant(next.reading)) {
+      const held = holdFinalStop(run.reading, parts);
+      if (held) run.parts = held;
+    } else if (gap && startsWithVowel(next.reading) && endsLinkable(run.reading)) {
+      gap.link = true;
+    }
   });
   return runs;
 }

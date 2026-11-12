@@ -88,6 +88,8 @@ export const WELCOME_NOTE_BODY = [
   '  - **blue** is the stressed syllable; an underlined vowel is one to hold (double line: hold it longer)',
   '  - **⬊** before a word: hold the vowel, but let the pitch fall. Rising, like the tone of 史, sounds like a question',
   '  - **orange** marks final sounds not to drop, and a bracketed **(t)** is a stop made silently: What do you want sounds like “Wha’ do you want”',
+  '  - an **arc** under two words joins them: carry the last sound over to the next word, so that Pick it up is said as one word',
+  '  - **|** typed between two words marks a place to pause, and is drawn as a thin grey bar',
   '  - **Select a word to hear it:** 🔊 reads it aloud, and **Slow** takes it slower',
   '- Deleted notes go to **Trash**, where they can be restored.',
   '',
