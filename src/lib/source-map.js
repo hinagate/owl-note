@@ -1,4 +1,5 @@
-// src/lib/source-map.js — find the exact source text behind a preview selection.
+// src/lib/source-map.js — find the exact source text behind a preview selection, and
+// the exact preview text behind a source selection.
 //
 // The preview is generated FROM the Markdown, so the text you select in it exists
 // verbatim in the source. That is the whole basis of this module: locate the
@@ -17,7 +18,7 @@
 //   2. A MINIMUM length. Two or three characters match everywhere and mean
 //      nothing. Below the threshold the answer is "not enough to go on" rather
 //      than a coin flip.
-import { lexBlocks } from './markdown.js';
+import { lexBlocks, renderMarkdown } from './markdown.js';
 import { findKeyword } from './search.js';
 
 // Below this, a selection is too common to place: "the", "普", "/s/" occur all
@@ -133,4 +134,121 @@ export function keywordRange(root, query) {
   range.setStart(startAt.node, spot.start - startAt.start);
   range.setEnd(endAt.node, spot.end - endAt.start);
   return range;
+}
+
+// ── A selection in the source, found in the preview ──────────────────────────────────
+//
+// The same promise the other way round: the characters selected in the Markdown, lit
+// where they read in the preview, or nothing. The block is known exactly from the
+// offsets, so only the place inside it has to be found.
+
+// Elements whose text stands apart from what came before: a new line or a new cell.
+const SEPARATE = 'p, div, li, tr, td, th, dt, dd, h1, h2, h3, h4, h5, h6, pre, blockquote, summary, caption, figcaption';
+
+// The note's own words under `root`, whitespace collapsed as `collapse` does it, with
+// where each character sits: spots[i] is [text node, offset].
+function renderedText(root) {
+  const chars = [];
+  const spots = [];
+  let gap = false;
+  let gapAt = null; // the gap's own first space, when it has one: a <br> has none
+  let home;
+  const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) => (node.nodeType === 1 && node.matches(NOT_NOTE_TEXT) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+  });
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node.nodeType === 1) {
+      if (node.localName === 'br') gap = chars.length > 0;
+      continue;
+    }
+    const within = node.parentElement?.closest(SEPARATE) ?? null;
+    if (within !== home) { home = within; gap = chars.length > 0; }
+    for (let i = 0; i < node.data.length; i += 1) {
+      if (/\s/.test(node.data[i])) {
+        if (chars.length && !gap) { gap = true; gapAt = [node, i]; }
+        continue;
+      }
+      if (gap) { chars.push(' '); spots.push(gapAt ?? [node, i]); gap = false; gapAt = null; }
+      chars.push(node.data[i]);
+      spots.push([node, i]);
+    }
+  }
+  return { text: chars.join(''), spots };
+}
+
+// What a piece of Markdown reads as once it is rendered.
+function visibleText(doc, markdown) {
+  const holder = doc.createElement('template');
+  try { holder.innerHTML = renderMarkdown(markdown); } catch { return ''; }
+  return renderedText(holder.content).text;
+}
+
+function occurrences(text, needle) {
+  const found = [];
+  for (let at = text.indexOf(needle); at >= 0; at = text.indexOf(needle, at + 1)) found.push(at);
+  return found;
+}
+
+// A table's pipes and its row of dashes are markup in the source; in the preview they
+// are the edges of cells. Blanked rather than removed, so every offset still holds.
+const TABLE_RULE = /^[ \t|:-]*-[ \t|:-]*$/gm;
+const withoutTableMarkup = (source) => source.replace(TABLE_RULE, (row) => ' '.repeat(row.length)).replace(/\|/g, ' ');
+
+// Where in `shown`, the block's rendered text, the source selection [start, end) reads:
+// { at, length }, or null when that is not certain.
+function placePart(shown, doc, type, blockSource, start, end) {
+  const source = type === 'table' ? withoutTableMarkup(blockSource) : blockSource;
+  const part = collapse(source.slice(start, end));
+  const needle = part.text;
+  if (needle.length >= MIN_SELECTION_CHARS) {
+    const found = occurrences(shown, needle);
+    if (found.length === 1) return { at: found[0], length: needle.length };
+    if (found.length > 1) {
+      // The same words several times in one block. Which of them is known only when the
+      // source and the preview hold them the same number of times, and so in the same order.
+      const all = collapse(source);
+      const inSource = occurrences(all.text, needle);
+      const nth = inSource.findIndex((at) => all.index[at] === start + part.index[0]);
+      return nth >= 0 && inSource.length === found.length ? { at: found[nth], length: needle.length } : null;
+    }
+  }
+  // Not there as typed, so the selection holds markup: **bold**, a link, a heading's #.
+  // What it reads as can still be placed when the block says it only once.
+  const read = visibleText(doc, source.slice(start, end));
+  if (read.length < MIN_SELECTION_CHARS || read === needle) return null;
+  const found = occurrences(shown, read);
+  return found.length === 1 ? { at: found[0], length: read.length } : null;
+}
+
+// Ranges over the same characters in `blockEl`, the rendered element of `block`, for the
+// part of `selection` ({ start, end } in `source`) that lies in that block. One Range per
+// text node, so whatever stands between two of them (a pronunciation reading) stays unlit.
+// Null is a real answer here too: this part cannot be placed, so nothing is lit for it.
+export function locateRendered(blockEl, source, block, selection) {
+  if (!blockEl || !block || !selection) return null;
+  const src = String(source ?? '');
+  const start = Math.max(selection.start, block.start);
+  const end = Math.min(selection.end, block.end);
+  if (!(end > start)) return null;
+  const shown = renderedText(blockEl);
+  if (!shown.text) return null;
+  // Everything the block says is selected, with or without its markup: all of it is lit.
+  const whole = !src.slice(block.start, start).trim() && !src.slice(end, block.end).trim();
+  const span = whole
+    ? { at: 0, length: shown.text.length }
+    : placePart(shown.text, blockEl.ownerDocument, block.type, src.slice(block.start, block.end), start - block.start, end - block.start);
+  if (!span) return null;
+  const runs = [];
+  for (let i = span.at; i < span.at + span.length; i += 1) {
+    const [node, offset] = shown.spots[i];
+    const last = runs[runs.length - 1];
+    if (last && last.node === node) last.end = offset + 1;
+    else runs.push({ node, start: offset, end: offset + 1 });
+  }
+  return runs.map((run) => {
+    const range = blockEl.ownerDocument.createRange();
+    range.setStart(run.node, run.start);
+    range.setEnd(run.node, run.end);
+    return range;
+  });
 }

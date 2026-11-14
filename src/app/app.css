@@ -1319,6 +1319,9 @@ body.resizing { user-select: none; cursor: col-resize; }
 /* The same keyword in the preview, when a search result is opened. Painted by the CSS
    Highlight API, so the preview's DOM (and so copying and exporting it) stays untouched. */
 ::highlight(owl-note-keyword) { background-color: rgba(90, 150, 245, 0.42); }
+/* What is selected in the source, shown where it reads in the preview: the same blue as
+   the mirror going the other way. */
+::highlight(owl-note-mirror) { background-color: rgba(90, 150, 245, 0.34); }
 .note-body-highlights mark.note-search-hit { background: rgba(255, 213, 79, 0.42); box-shadow: 0 0 0 1px rgba(226, 174, 0, 0.18); }
 .note-body-highlights mark.note-search-hit.active { background: rgba(255, 174, 0, 0.68); box-shadow: 0 0 0 1px rgba(190, 120, 0, 0.42); }
 /* Highlight (<mark>) in the rendered preview — generated palette classes keep

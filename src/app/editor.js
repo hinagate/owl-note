@@ -5,7 +5,7 @@ import { extractImages, inlineImages, pruneAttachments, attachFile, listFileRefs
 import { rememberCopiedAttachments, addCopiedBytes } from '../lib/copied-attachments.js';
 import { getBytes } from '../lib/attachment-store.js';
 import { relativeTime } from '../lib/relative-time.js';
-import { blockRanges, locateSelection, blockIndexOf, keywordRange } from '../lib/source-map.js';
+import { blockRanges, locateSelection, locateRendered, blockIndexOf, keywordRange } from '../lib/source-map.js';
 import { findKeyword } from '../lib/search.js';
 import * as panes from './panes.js';
 import { renderFormatBar, formatActions } from './format-bar.js';
@@ -1001,6 +1001,78 @@ export function renderEditor(
     if (!scrollMarkIntoView('mark.note-linked-hit')) scrollOffsetIntoView(spot.start);
   });
 
+  // And the other way round: a selection in the source lights up the same text in the
+  // preview and brings it into view. Painted by the CSS Highlight API, so the preview's
+  // DOM and the textarea's own selection are both left alone. Exact or nothing here too:
+  // a part of the selection that cannot be placed stays unlit.
+  const MIRROR_HIGHLIGHT = 'owl-note-mirror';
+  let mirrored = null; // { start, end }: the source selection now shown in the preview
+
+  function clearMirror() {
+    if (!mirrored) return;
+    mirrored = null;
+    globalThis.CSS?.highlights?.delete(MIRROR_HIGHLIGHT);
+  }
+
+  // Left where it is when the text is already in view, so that selecting in order to
+  // edit does not make the preview jump.
+  function bringIntoPreview(range) {
+    const box = range.getBoundingClientRect?.();
+    if (!box || !(box.width || box.height)) return; // inside a collapsed section
+    const pane = preview.getBoundingClientRect();
+    if (box.top < pane.top || box.bottom > pane.bottom) {
+      preview.scrollTop += box.top - pane.top - preview.clientHeight / 3;
+    }
+    // A wide table or a long code line scrolls within itself.
+    for (let el = range.startContainer.parentElement; el && el !== preview; el = el.parentElement) {
+      if (el.scrollWidth <= el.clientWidth) continue;
+      const inner = el.getBoundingClientRect();
+      if (box.left < inner.left || box.right > inner.right) el.scrollLeft += box.left - inner.left - el.clientWidth / 3;
+    }
+  }
+
+  function paintMirror({ scroll }) {
+    if (!mirrored) return;
+    const registry = globalThis.CSS?.highlights;
+    if (!registry || typeof Highlight !== 'function') return;
+    const bodyEl = content.querySelector('.preview-body');
+    const ranges = [];
+    blockRanges(ta.value).forEach((block, index) => {
+      if (block.end <= mirrored.start || block.start >= mirrored.end) return;
+      for (const range of locateRendered(bodyEl?.children[index], ta.value, block, mirrored) || []) ranges.push(range);
+    });
+    if (!ranges.length) { registry.delete(MIRROR_HIGHLIGHT); return; }
+    const mark = new Highlight();
+    for (const range of ranges) mark.add(range);
+    registry.set(MIRROR_HIGHLIGHT, mark);
+    if (scroll) bringIntoPreview(ranges[0]);
+  }
+
+  function mirrorSelection() {
+    if (destroyed) return;
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+    // Nothing to place: no selection, one the reader cannot see, or the whole note.
+    if (readOnly || document.activeElement !== ta || !(end > start)
+      || (!ta.value.slice(0, start).trim() && !ta.value.slice(end).trim())) { clearMirror(); return; }
+    if (mirrored && mirrored.start === start && mirrored.end === end) return; // the same one: a key let go
+    clearRevealed();
+    clearLinked(); // the preview's own selection ended when this one began
+    mirrored = { start, end };
+    paintMirror({ scroll: true });
+  }
+
+  // A drag can end outside the textarea, and a click inside an old selection collapses
+  // it only after mouseup: so the mouse is read wherever it is let go, a moment later.
+  ta.addEventListener('mousedown', () => {
+    document.addEventListener('mouseup', () => setTimeout(mirrorSelection, 0), { once: true });
+  });
+  ta.addEventListener('keyup', mirrorSelection);
+  // An unfocused textarea shows no selection, so the preview shows none for it either.
+  // Another window taking over is not that: the textarea is still the active element
+  // and still shows its selection, greyed.
+  ta.addEventListener('blur', () => { if (document.activeElement !== ta) clearMirror(); });
+
   // A note opened from a search result lands on the keyword, the same way a preview
   // selection is mirrored into the source: painted and scrolled to in both panes, with
   // keyboard focus left alone. Focusing the textarea with the word selected would let
@@ -1460,6 +1532,7 @@ export function renderEditor(
     renderChips();
     updateNoteSearch();
     showRevealed(); // the rebuild just dropped its highlight
+    paintMirror({ scroll: false }); // and the one a source selection put there
     resolveDriveImages();
     updateSize();
   };
@@ -1552,6 +1625,7 @@ export function renderEditor(
     if (aligningTable) return;
     linkedRange = null; // offsets are stale the moment the text moves under them
     clearRevealed();
+    clearMirror();
     alignTable();
     renumberList(event && event.inputType);
     if (!destroyed) refreshAfterEdit(); // a replaced editor's preview is not on screen
@@ -2039,6 +2113,7 @@ export function renderEditor(
       pronounce.destroy();
       clearTimeout(refreshTimer);
       clearRevealed();
+      clearMirror();
       revealRO?.disconnect();
       clearTimeout(editHintTimer);
       document.removeEventListener('pointerdown', onHintPointerDown, true);
