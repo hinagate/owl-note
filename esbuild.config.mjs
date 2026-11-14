@@ -4,6 +4,7 @@ import { thirdPartyNotices } from './scripts/third-party-notices.mjs';
 import { writeIpaTable } from './scripts/build-ipa-dict.mjs';
 import { writeKanaTable } from './scripts/build-kana-dict.mjs';
 import { writeJyutpingTable } from './scripts/build-jyutping-dict.mjs';
+import { darkCodeTheme } from './scripts/scope-css.mjs';
 
 // Clean dist first so stale files (e.g. dropped .ttf/.woff fonts) never linger.
 rmSync('dist', { recursive: true, force: true });
@@ -54,6 +55,9 @@ await build({
   // means no code-splitting, so each entry stays a single standalone file.
   entryPoints: {
     app: 'src/app/app.js',
+    // A few lines that run in the page's head, before the stylesheets, so a dark page
+    // never flashes white. An extension page cannot carry them inline.
+    'theme-boot': 'src/app/theme-boot.js',
     'service-worker': 'src/background/service-worker.js',
     'embed-worker': 'src/workers/embed-worker.js',
     // Transcription: Chrome's native on-device Web Speech engine runs in the
@@ -113,6 +117,11 @@ cpSync('manifest.json', 'dist/manifest.json');
 cpSync('_locales', 'dist/_locales', { recursive: true });
 const theme = 'node_modules/highlight.js/styles/github.css';
 if (existsSync(theme)) cpSync(theme, 'dist/github.css');
+// Code colours for the dark theme: highlight.js's own dark sheet, with every rule placed
+// under the dark root so it does nothing while the app is light.
+const darkTheme = 'node_modules/highlight.js/styles/github-dark.css';
+if (existsSync(darkTheme)) writeFileSync('dist/github-dark.css', darkCodeTheme(readFileSync(darkTheme, 'utf8')));
+else throw new Error(`Missing highlight.js dark theme: ${darkTheme}`);
 
 // KaTeX stylesheet + web fonts must ship locally — a Chrome extension can't pull
 // them from a CDN, and the math glyphs won't render without the bundled fonts.

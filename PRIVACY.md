@@ -127,14 +127,22 @@ including the Limited Use requirements.
 ## Hearing a selected word
 
 With pronunciation readings on, you can select a word in the preview and click 🔊 to
-hear it. OWL-Note uses a voice installed on your computer whenever there is one, and
-then nothing leaves your device.
+hear it. Unless you choose another voice, OWL-Note uses one installed on your computer
+whenever there is one, and then nothing leaves your device.
+
+**Settings → Voice** lets you choose which voice reads each language, from the voices your
+browser lists: the computer's own, the browser's online voices, and any installed by a
+voice add-on. The words you select are handed to the voice that reads them, so a voice
+from an add-on is given them too, under that add-on's own terms. The choice is kept in
+that browser only.
 
 If your computer has no voice for that language, which is common for Cantonese and
-Japanese, OWL-Note asks first. If you allow it, your browser's online voice reads the
+Japanese, or if you chose an online voice yourself, OWL-Note asks first. If you allow it,
+your browser's online voice reads the
 words: the browser sends the text you selected to its voice service (Google in Chrome,
 Microsoft in Edge), under that provider's terms. Only the selection you clicked to hear
-is sent, never the rest of the note, and OWL-Note itself receives nothing. Your choice is
+is sent, and at most 200 characters of it: a longer selection is read only by a voice on
+your device. The rest of the note is never sent, and OWL-Note itself receives nothing. Your choice is
 remembered in that browser until you turn it off with **Online voice ✕** in the same bar.
 
 ## Explicit export and sharing

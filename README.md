@@ -86,7 +86,7 @@ All of it is processed on your device.
 - **No OWL‑Note account, backend, telemetry or ads.** Capture, transcription, search and AI all run on your device.
 - **A bookmark holds about 8 KB per note.** Larger notes, photos and files stay on that device unless you turn on the optional Google Drive sync, which stores them in your own Drive. A transcript passes 8 KB after roughly 15–20 minutes.
 - **Back up your encryption key.** Without it, your notes can't be opened after a reinstall. Drive sync does this for you, or use **Export → Recovery key**.
-- **Hearing a word** uses a voice on your computer. If it has none for that language, OWL‑Note asks before using your browser's online voice, which sends what you selected to Google or Microsoft.
+- **Hearing a word** uses a voice on your computer. If it has none for that language, OWL‑Note asks before using your browser's online voice, which sends what you selected to Google or Microsoft. Settings lets you choose the voice for each language from the ones your browser lists, including any a voice add-on installed.
 - Install OWL‑Note on each device to read your notes there.
 
 Read the full [privacy policy](PRIVACY.md).

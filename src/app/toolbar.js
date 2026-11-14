@@ -3,7 +3,32 @@
 // Track the active outside-click closer so re-renders don't leak stale listeners.
 let _activeCloser = null;
 
-export function renderToolbar(container, { query = '', onSearch, onExportNote, onExportMarkdown, onExportKey, onImport, onImportKey, onKeyBackup = null, driveEnabled = false, onToggleDrive = null, onAsk = null }) {
+// Drawn, like the speaker in pronounce-bar.js: a ring of eight teeth around a ring.
+function gearIcon() {
+  const SVG = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(SVG, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', '18');
+  svg.setAttribute('height', '18');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('aria-hidden', 'true');
+  const teeth = document.createElementNS(SVG, 'circle');
+  teeth.setAttribute('cx', '12');
+  teeth.setAttribute('cy', '12');
+  teeth.setAttribute('r', '8.6');
+  teeth.setAttribute('stroke-width', '3');
+  teeth.setAttribute('stroke-dasharray', '3.38 3.38'); // the circle's length divided into 16
+  const body = document.createElementNS(SVG, 'circle');
+  body.setAttribute('cx', '12');
+  body.setAttribute('cy', '12');
+  body.setAttribute('r', '5.6');
+  body.setAttribute('stroke-width', '3.2');
+  svg.append(teeth, body);
+  return svg;
+}
+
+export function renderToolbar(container, { query = '', onSearch, onExportNote, onExportMarkdown, onExportKey, onImport, onImportKey, onKeyBackup = null, driveEnabled = false, onToggleDrive = null, onAsk = null, onSettings = null }) {
   // Clean up any stale document listener from a previous render.
   if (_activeCloser) {
     document.removeEventListener('click', _activeCloser);
@@ -194,6 +219,19 @@ export function renderToolbar(container, { query = '', onSearch, onExportNote, o
   }
 
   if (askBtn) container.append(askBtn);
+
+  // Settings: the gear that ends the toolbar, top right. Beside Ask Owl when that is
+  // there, and holding the right edge by itself when it is not.
+  if (onSettings) {
+    const settingsBtn = document.createElement('button');
+    settingsBtn.className = 'settings-button';
+    settingsBtn.classList.toggle('alone', !askBtn);
+    settingsBtn.title = 'Settings';
+    settingsBtn.setAttribute('aria-label', 'Settings');
+    settingsBtn.append(gearIcon());
+    settingsBtn.addEventListener('click', () => onSettings());
+    container.append(settingsBtn);
+  }
 
   return api;
 }

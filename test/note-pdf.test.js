@@ -77,6 +77,17 @@ describe('note PDF capture', () => {
     expect(HTMLCanvasElement.prototype.toDataURL).toHaveBeenCalledWith('image/jpeg', 0.9);
   });
 
+  // The capture is made from a copy of the document. In dark mode that copy would be
+  // dark too, and the PDF would come out as light text on a white page.
+  it('captures the note in the light theme whatever the app is showing', async () => {
+    const rasterize = vi.fn(async () => capturedCanvas(true));
+    await buildNotePdf({ title: 'T', body: 'Body', attachments: [] }, { rasterize });
+    const copy = document.implementation.createHTMLDocument('copy');
+    copy.documentElement.dataset.theme = 'dark';
+    rasterize.mock.calls[0][1].onclone(copy);
+    expect(copy.documentElement.dataset.theme).toBe('light');
+  });
+
   it('rejects an all-white capture instead of uploading an empty PDF', async () => {
     await expect(buildNotePdf(
       { title: 'Should render', body: 'Body', attachments: [] },

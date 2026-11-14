@@ -5,9 +5,13 @@
 // download. A voice on this computer keeps everything on the device. An online voice sends
 // the selected text to the browser's provider, so the reader is asked before the first one
 // is used, and can turn the permission off again from the same bar.
+//
+// Which voice reads is normally worked out here. A reader who chose one in Settings gets
+// that voice instead, for as long as the browser still lists it.
 
 import {
-  MAX_SPOKEN_CHARS, createVoiceSource, languageName, rateFor, selectionLanguage, spokenText, voiceProvider,
+  MAX_PASSAGE_CHARS, MAX_SPOKEN_CHARS, createVoiceSource, languageName, rateFor, readVoiceChoices, selectionLanguage, spokenText,
+  voiceProvider,
 } from '../lib/pronounce.js';
 
 const SLOW_KEY = 'owl:pronounceSlow';
@@ -35,8 +39,32 @@ function speakerIcon() {
   waves.setAttribute('stroke-width', '2');
   waves.setAttribute('stroke-linecap', 'round');
   svg.append(body, waves);
+  svg.classList.add('pronounce-icon-speaker');
   return svg;
 }
+
+// Shown in the speaker's place while a passage is being read: the same button stops it.
+function stopIcon() {
+  const SVG = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(SVG, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', '20');
+  svg.setAttribute('height', '20');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.classList.add('pronounce-icon-stop');
+  const square = document.createElementNS(SVG, 'rect');
+  square.setAttribute('x', '6.5');
+  square.setAttribute('y', '6.5');
+  square.setAttribute('width', '11');
+  square.setAttribute('height', '11');
+  square.setAttribute('rx', '2');
+  square.setAttribute('fill', 'currentColor');
+  svg.append(square);
+  return svg;
+}
+
+// More than a phrase. Only a voice on this device reads one, and it can be stopped.
+const isPassage = (text) => String(text || '').length > MAX_SPOKEN_CHARS;
 
 // The same regions annotateRuby leaves alone: no reading is shown there, so there is
 // nothing to practise.
@@ -114,6 +142,15 @@ export function createPronounceBar({
     place();
   };
 
+  // The part of the page the preview is seen through: the nearest box that scrolls.
+  const visibleArea = () => {
+    for (let el = root; el && el !== document.body; el = el.parentElement) {
+      const overflow = globalThis.getComputedStyle?.(el).overflowY;
+      if (overflow === 'auto' || overflow === 'scroll') return el.getBoundingClientRect();
+    }
+    return root.getBoundingClientRect();
+  };
+
   const place = () => {
     if (!bar) return;
     const range = liveRange();
@@ -125,19 +162,47 @@ export function createPronounceBar({
     const above = rect.top - height - GAP;
     const below = rect.bottom + GAP;
     const fitsBelow = below + height <= globalThis.innerHeight - GAP;
-    const top = above >= GAP || !fitsBelow ? Math.max(GAP, above) : below;
+    let top = above >= GAP || !fitsBelow ? Math.max(GAP, above) : below;
+    // A passage can begin above what is in view, once the reader scrolls to follow it.
+    // "Above the selection" is then somewhere over the toolbars, so the bar waits at the
+    // top of the preview instead, where Stop can still be reached.
+    const view = visibleArea();
+    if (rect.top < view.top) top = Math.max(GAP, view.top + GAP);
     const left = Math.max(GAP, Math.min(rect.left + rect.width / 2 - width / 2, globalThis.innerWidth - width - GAP));
     bar.style.top = `${top}px`;
     bar.style.left = `${left}px`;
   };
 
+  const labelPlay = (label) => {
+    els.play.title = label;
+    els.play.setAttribute('aria-label', label);
+  };
+
   const stopWatching = () => {
     clearTimeout(startTimer);
     startTimer = null;
-    els?.play.classList.remove('speaking');
+    if (!els) return;
+    els.play.classList.remove('speaking', 'stoppable');
+    labelPlay('Hear this');
   };
 
-  const speak = (voice) => {
+  const stopSpeaking = () => {
+    attempt += 1;
+    stopWatching();
+    if (current) {
+      current = null;
+      synth.cancel();
+    }
+  };
+
+  // The voice for a language, and whether it is one the reader chose in Settings.
+  const voiceFor = async (lang) => {
+    const preferred = (await readVoiceChoices(storage))[lang] || null;
+    const voice = await voices.voiceFor(lang, preferred);
+    return { voice, chosen: !!preferred && voice?.name === preferred };
+  };
+
+  const speak = (voice, chosen = false) => {
     const utterance = new Utterance(selection.text);
     utterance.voice = voice;
     utterance.lang = voice.lang;
@@ -146,15 +211,25 @@ export function createPronounceBar({
       stopWatching();
       if (current !== utterance) return;
       current = null;
-      if (bar) {
-        showNote(voice.localService
-          ? 'Could not read this aloud.'
-          : 'Could not read this aloud. The online voice needs an internet connection.');
+      if (!bar) return;
+      if (!voice.localService) {
+        showNote('Could not read this aloud. The online voice needs an internet connection.');
+      } else if (chosen) {
+        // A chosen voice is often an add-on with a part of its own that has to be running.
+        showNote(`"${voice.name}" could not read this aloud. Check that it is running, or choose another voice in Settings.`);
+      } else {
+        showNote('Could not read this aloud.');
       }
     };
     utterance.onstart = () => {
       clearTimeout(startTimer);
-      els?.play.classList.add('speaking');
+      if (!els) return;
+      els.play.classList.add('speaking');
+      // A word is over before anyone could stop it. A passage is not.
+      if (isPassage(utterance.text)) {
+        els.play.classList.add('stoppable');
+        labelPlay('Stop');
+      }
     };
     utterance.onend = () => {
       stopWatching();
@@ -174,11 +249,14 @@ export function createPronounceBar({
     }, START_TIMEOUT_MS);
   };
 
-  const askForOnline = (voice, turn) => {
+  const askForOnline = (voice, turn, chosen) => {
     const provider = voiceProvider(voice);
     const who = provider ? `${provider}'s online voice` : 'your browser\'s online voice';
     const sentTo = provider || 'that voice service';
-    showNote(`This computer has no ${languageName(selection.lang)} voice, so ${who} would read it. Whatever you select to hear goes to ${sentTo}.`, [
+    const why = chosen
+      ? `The ${languageName(selection.lang)} voice chosen in Settings is ${who}.`
+      : `This computer has no ${languageName(selection.lang)} voice, so ${who} would read it.`;
+    showNote(`${why} Whatever you select to hear goes to ${sentTo}.`, [
       {
         label: 'Allow',
         primary: true,
@@ -187,7 +265,7 @@ export function createPronounceBar({
           if (turn !== attempt) return;
           showNote('');
           els.online.hidden = false;
-          speak(voice);
+          speak(voice, chosen);
         },
       },
       { label: 'Not now', run: () => { attempt += 1; showNote(''); } },
@@ -195,29 +273,45 @@ export function createPronounceBar({
   };
 
   const play = async () => {
+    // While a passage is being read, the same button stops it.
+    if (current && isPassage(current.text) && els.play.classList.contains('speaking')) {
+      stopSpeaking();
+      return;
+    }
     attempt += 1;
     const turn = attempt;
     showNote('');
-    const { lang } = selection;
-    const voice = await voices.voiceFor(lang);
+    const { text, lang } = selection;
+    if (text.length > MAX_PASSAGE_CHARS) {
+      showNote(`This is too long to read in one go. Select up to ${MAX_PASSAGE_CHARS.toLocaleString('en-US')} characters.`);
+      return;
+    }
+    const { voice, chosen } = await voiceFor(lang);
     if (turn !== attempt) return;
     if (!voice) {
       showNote(`This computer has no ${languageName(lang)} voice.`);
       return;
     }
+    // Checked before anything is asked or sent: an online voice gets a phrase, never a passage.
+    if (!voice.localService && isPassage(text)) {
+      const sentTo = voiceProvider(voice) || 'its provider';
+      showNote(`An online voice reads up to ${MAX_SPOKEN_CHARS} characters at a time, because what it reads is sent to ${sentTo}. `
+        + 'Select less, or choose a voice on this computer in Settings.');
+      return;
+    }
     if (!voice.localService && !(await read(ONLINE_OK_KEY))) {
-      if (turn === attempt) askForOnline(voice, turn);
+      if (turn === attempt) askForOnline(voice, turn, chosen);
       return;
     }
     if (turn !== attempt) return;
-    speak(voice);
+    speak(voice, chosen);
   };
 
   // Shown only where it applies: the reader has allowed online voices and this selection
   // would use one. Turning it off here is why "ask once" is not "ask once, forever".
   const showOnlineSwitch = async () => {
     const shown = selection;
-    const [voice, allowed] = await Promise.all([voices.voiceFor(shown.lang), read(ONLINE_OK_KEY)]);
+    const [{ voice }, allowed] = await Promise.all([voiceFor(shown.lang), read(ONLINE_OK_KEY)]);
     if (!bar || shown !== selection) return;
     els.online.hidden = !(allowed && voice && !voice.localService);
     place();
@@ -234,7 +328,7 @@ export function createPronounceBar({
     const playButton = document.createElement('button');
     playButton.type = 'button';
     playButton.className = 'pronounce-play';
-    playButton.append(speakerIcon());
+    playButton.append(speakerIcon(), stopIcon());
     playButton.title = 'Hear this';
     playButton.setAttribute('aria-label', 'Hear this');
     playButton.addEventListener('click', play);
@@ -285,6 +379,11 @@ export function createPronounceBar({
     els = null;
     selection = null;
     clearTimeout(startTimer); // a word already speaking carries on to its end
+    // A passage does not: nobody is following it any more, and it could run for minutes.
+    if (current && isPassage(current.text)) {
+      current = null;
+      synth.cancel();
+    }
   }
 
   function onSelectionChange() {
@@ -305,7 +404,9 @@ export function createPronounceBar({
       const start = range?.startContainer;
       const element = start?.nodeType === 1 ? start : start?.parentElement;
       const text = range && !element?.closest(NO_READING) ? spokenText(range) : '';
-      const lang = text && text.length <= MAX_SPOKEN_CHARS ? selectionLanguage(range, text) : null;
+      // Any length gets the bar. What may be read is settled on the press, once the voice
+      // is known, so a selection that is too long is told why instead of getting nothing.
+      const lang = text ? selectionLanguage(range, text) : null;
       if (!lang) { hide(); return; }
       if (selection?.text === text && selection.lang === lang) return; // already showing it
       hide();

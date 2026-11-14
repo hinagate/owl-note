@@ -4,9 +4,13 @@
 
 import { detectHanScript } from './segment.js';
 
-// A word or a phrase. Past this it stops being pronunciation practice, and an online voice
-// would be sending a passage of the note rather than a few words.
+// What an online voice may be given: a word or a phrase. Past this it would be sending a
+// passage of the note to its provider rather than a few words.
 export const MAX_SPOKEN_CHARS = 200;
+
+// A voice on this device sends nothing anywhere, so it may read a passage: several
+// paragraphs, and well inside the 32,767 characters the browser takes in one request.
+export const MAX_PASSAGE_CHARS = 10000;
 
 // Chrome's first answer is an empty list. Its own voices and the computer's then arrive
 // separately, in either order: measured at about 100 ms, but on one load the computer's were
@@ -29,23 +33,50 @@ export const languageName = (lang) => LANGUAGE_NAMES[lang] || 'this language';
 
 const tagOf = (voice) => String(voice?.lang || '').toLowerCase().replace(/_/g, '-');
 
+// What the reader chose in Settings, per language: { en: 'A voice name', ... }. Kept on this
+// device only, because the voices are this device's.
+export const VOICE_CHOICE_KEY = 'owl:pronounceVoices';
+export const VOICE_LANGS = ['en', 'ja', 'yue'];
+
+export async function readVoiceChoices(storage) {
+  try {
+    const saved = (await storage?.get(VOICE_CHOICE_KEY))?.[VOICE_CHOICE_KEY];
+    return saved && typeof saved === 'object' ? saved : {};
+  } catch {
+    return {};
+  }
+}
+
 /**
- * The best voice for a reading's language: one on this computer before any online one, the
- * exact regional voice before a relative, and the browser's default among equals.
+ * Every voice that can read a language, best first: one on this computer before any online
+ * one, the exact regional voice before a relative, and the browser's default among equals.
  * @param {SpeechSynthesisVoice[]} voices
  * @param {'en'|'ja'|'yue'} lang
- * @returns {SpeechSynthesisVoice|null}
+ * @returns {SpeechSynthesisVoice[]}
  */
-export function pickVoice(voices, lang) {
+export function voicesFor(voices, lang) {
   const wanted = VOICE_TAGS[lang];
-  if (!wanted) return null;
+  if (!wanted) return [];
   const matches = (voices || []).filter((voice) => {
     const tag = tagOf(voice);
     return wanted.family.some((name) => tag === name || tag.startsWith(`${name}-`));
   });
   const score = (voice) => (voice.localService ? 4 : 0) + (tagOf(voice) === wanted.exact ? 2 : 0) + (voice.default ? 1 : 0);
   // Stable: among equals, the browser's own order stands.
-  return matches.reduce((best, voice) => (!best || score(voice) > score(best) ? voice : best), null);
+  return matches.sort((a, b) => score(b) - score(a));
+}
+
+/**
+ * The voice for a reading's language: the one the reader chose, while the browser still
+ * lists it for that language, and otherwise the best there is.
+ * @param {SpeechSynthesisVoice[]} voices
+ * @param {'en'|'ja'|'yue'} lang
+ * @param {string|null} [preferred] a voice's name
+ * @returns {SpeechSynthesisVoice|null}
+ */
+export function pickVoice(voices, lang, preferred = null) {
+  const list = voicesFor(voices, lang);
+  return (preferred && list.find((voice) => voice.name === preferred)) || list[0] || null;
 }
 
 // Measured against the same phrases: at 0.6 an online voice took about 60% longer, but a
@@ -56,11 +87,32 @@ export function rateFor(voice, slow) {
   return voice?.localService ? 0.5 : 0.6;
 }
 
-// The words alone. Readings sit in the same DOM as the words they annotate.
+// What a voice cannot read, or would read as noise: the readings, which sit in the same DOM
+// as the words they annotate, and code blocks, formulas and diagrams.
+const UNSPOKEN = 'rt, rp, pre, .katex, .mermaid-diagram';
+// Where one line of thought ends and the next begins without any punctuation to say so.
+const BLOCKS = 'p, li, h1, h2, h3, h4, h5, h6, blockquote, td, th, dt, dd, figcaption, br';
+const BREAK = '\u0001';
+const ENDS_ITSELF = /[.!?:;,…。！？：；、，]["'”’」』)\]]*$/;
+
+/**
+ * The words alone, as a voice should be given them. A selection inside one paragraph comes
+ * back as it is written. One that runs across headings, list items or paragraphs gets a
+ * full stop where a line ends without punctuation, so a heading is not read straight into
+ * the sentence under it.
+ */
 export function spokenText(range) {
   const fragment = range.cloneContents();
-  fragment.querySelectorAll('rt, rp').forEach((node) => node.remove());
-  return fragment.textContent.replace(/\s+/g, ' ').trim();
+  fragment.querySelectorAll(UNSPOKEN).forEach((node) => node.remove());
+  fragment.querySelectorAll(BLOCKS).forEach((block) => {
+    if (block.localName === 'br') block.replaceWith(BREAK); else block.append(BREAK);
+  });
+  const lines = fragment.textContent
+    .replace(/\s*[•◦▪●]\s*/g, BREAK) // a bullet typed into the text marks a new line too
+    .split(BREAK)
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  return lines.map((line, i) => (i < lines.length - 1 && !ENDS_ITSELF.test(line) ? `${line}.` : line)).join(' ');
 }
 
 // In order of what can read what: a Japanese or Cantonese voice can get through an English
@@ -96,15 +148,22 @@ export function createVoiceSource(synth, { settleMs = VOICES_SETTLE_MS, now = Da
     primedAt = now();
     synth.getVoices();
   };
-  const pick = (lang) => pickVoice(synth.getVoices(), lang);
+  const pick = (lang, preferred) => pickVoice(synth.getVoices(), lang, preferred);
+  // An on-device voice cannot be beaten by anything that arrives later. A chosen voice is
+  // different: it may come from an add-on that lists itself late, so it is worth the wait.
+  const settled = (voice, preferred) => (preferred ? voice?.name === preferred : !!voice?.localService);
 
   return {
     prime,
-    /** @returns {Promise<SpeechSynthesisVoice|null>} */
-    async voiceFor(lang) {
+    /**
+     * @param {'en'|'ja'|'yue'} lang
+     * @param {string|null} [preferred] the name of the voice chosen in Settings
+     * @returns {Promise<SpeechSynthesisVoice|null>}
+     */
+    async voiceFor(lang, preferred = null) {
       prime();
-      const found = pick(lang);
-      if (found?.localService) return found; // nothing that arrives later can beat this
+      const found = pick(lang, preferred);
+      if (settled(found, preferred)) return found;
       const left = settleMs - (now() - primedAt);
       if (left <= 0) return found;
       await new Promise((resolve) => {
@@ -113,11 +172,11 @@ export function createVoiceSource(synth, { settleMs = VOICES_SETTLE_MS, now = Da
           synth.removeEventListener?.('voiceschanged', onChange);
           resolve();
         };
-        const onChange = () => { if (pick(lang)?.localService) finish(); };
+        const onChange = () => { if (settled(pick(lang, preferred), preferred)) finish(); };
         const timer = setTimeout(finish, left);
         synth.addEventListener?.('voiceschanged', onChange);
       });
-      return pick(lang);
+      return pick(lang, preferred);
     },
   };
 }

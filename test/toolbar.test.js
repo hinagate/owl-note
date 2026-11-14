@@ -6,6 +6,32 @@ beforeEach(() => { document.body.innerHTML = '<div id="toolbar"></div>'; });
 const opts = (over) => ({ query: '', onSearch: vi.fn(), onExportMarkdown: vi.fn(), onExportKey: vi.fn(), onImport: vi.fn(), onImportKey: vi.fn(), ...over });
 
 describe('toolbar', () => {
+  it('ends with a Settings gear that opens Settings', () => {
+    const onSettings = vi.fn();
+    const el = document.getElementById('toolbar');
+    renderToolbar(el, opts({ onAsk: vi.fn(), onSettings }));
+    const gear = el.querySelector('.settings-button');
+    expect(el.lastElementChild).toBe(gear); // top right: after Ask Owl
+    expect(gear.getAttribute('aria-label')).toBe('Settings');
+    expect(gear.querySelector('svg')).toBeTruthy();
+    expect(gear.classList.contains('alone')).toBe(false);
+    gear.click();
+    expect(onSettings).toHaveBeenCalled();
+  });
+
+  // Ask Owl is what pushes the end of the toolbar to the right. Without it the gear does.
+  it('holds the right edge itself when Ask Owl is not there', () => {
+    const el = document.getElementById('toolbar');
+    renderToolbar(el, opts({ onSettings: vi.fn() }));
+    expect(el.querySelector('.settings-button').classList.contains('alone')).toBe(true);
+  });
+
+  it('has no gear when nothing would open', () => {
+    const el = document.getElementById('toolbar');
+    renderToolbar(el, opts({}));
+    expect(el.querySelector('.settings-button')).toBeNull();
+  });
+
   it('fires the search callback', () => {
     const onSearch = vi.fn();
     const el = document.getElementById('toolbar');

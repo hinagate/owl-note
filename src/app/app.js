@@ -48,6 +48,8 @@ import { makeSegmenter, detectHanScript, hasHan, hasLatin } from '../lib/segment
 import { normalizeZoom, DEFAULT_ZOOM } from './preview-zoom.js';
 import SparkMD5 from 'spark-md5';
 import { showShareLinkDialog } from './share-link-dialog.js';
+import { showSettings } from './settings-panel.js';
+import { watchTheme } from '../lib/theme.js';
 import { showPdfShareDialog } from './pdf-share-dialog.js';
 import { updatePdfProgress, hidePdfProgress } from './pdf-progress.js';
 // [Task E18] The first-run Welcome note content + its fixed id. Single source: this
@@ -1924,6 +1926,7 @@ async function refreshPanes() {
     // clicked toolbar Ask button) as the opener so the panel returns focus to it on
     // close (a11y — T10/M4.5). The panel falls back to document.activeElement anyway.
     onAsk: askPanel ? () => askPanel.open(document.activeElement) : null,
+    onSettings: () => showSettings(),
   });
   await refreshNoteList();
   // Editor is intentionally NOT re-rendered here. It is rendered only by
@@ -2972,6 +2975,8 @@ export async function boot() {
   });
   const root = await bm.ensureRoot();
   await initUI(root);
+  // theme-boot.js set the theme before the first paint; this keeps it right afterwards.
+  watchTheme();
   // After the first paint, and after the Ask index's own full read of storage, so the two
   // never hold every note in memory at once. It runs on every launch because a save can be
   // cut off at any time (a browser crash), and a marked copy only becomes recoverable 90

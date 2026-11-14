@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createPronounceBar } from '../src/app/pronounce-bar.js';
 import { renderEditor } from '../src/app/editor.js';
-import { createVoiceSource, MAX_SPOKEN_CHARS } from '../src/lib/pronounce.js';
+import { createVoiceSource, MAX_PASSAGE_CHARS, MAX_SPOKEN_CHARS, VOICE_CHOICE_KEY } from '../src/lib/pronounce.js';
 
 const voice = (name, lang, localService) => ({ name, lang, localService, default: false });
 const MARK = voice('Microsoft Mark', 'en-US', true);
@@ -120,13 +120,127 @@ describe('when the bar appears', () => {
     expect(shownBar()).toBeNull();
   });
 
-  it('will not offer to read out a passage', async () => {
+  // It used to stay away, which left a long selection with no speaker and no reason why.
+  it('shows beside a passage too', async () => {
     mount();
-    const long = document.getElementById('outside');
-    root.append(long);
-    long.textContent = 'word '.repeat(MAX_SPOKEN_CHARS);
-    await select(long);
+    await select(passage());
+    expect(shownBar()).toBeTruthy();
+  });
+});
+
+// More than a phrase: several sentences, as when a paragraph or two are selected.
+function passage(words = MAX_SPOKEN_CHARS) {
+  const long = document.getElementById('outside');
+  root.append(long);
+  long.textContent = 'word '.repeat(words);
+  return long;
+}
+
+describe('reading a passage', () => {
+  it('is read whole by a voice on this device', async () => {
+    const { synth } = mount();
+    await select(passage());
+    await click(playButton());
+    expect(synth.spoken).toHaveLength(1);
+    expect(synth.spoken[0].voice).toBe(MARK);
+    expect(synth.spoken[0].text).toHaveLength(MAX_SPOKEN_CHARS * 5 - 1);
+  });
+
+  // What an online voice reads is sent to its provider: a phrase, never a passage. The
+  // refusal comes before the question about online voices, so nothing is asked for nothing.
+  it('is not given to an online voice, and says why', async () => {
+    const GOOGLE_US = voice('Google US English', 'en-US', false);
+    const { synth } = mount({ voices: [GOOGLE_US], storage: fakeStorage({ 'owl:pronounceOnlineOk': true }) });
+    await select(passage());
+    await click(playButton());
+    expect(synth.spoken).toHaveLength(0);
+    expect(note().textContent).toBe(`An online voice reads up to ${MAX_SPOKEN_CHARS} characters at a time, because what it reads is sent to Google. `
+      + 'Select less, or choose a voice on this computer in Settings.');
+    expect(noteButton('Allow')).toBeUndefined();
+  });
+
+  it('still gives an online voice a phrase', async () => {
+    const GOOGLE_US = voice('Google US English', 'en-US', false);
+    const { synth } = mount({ voices: [GOOGLE_US], storage: fakeStorage({ 'owl:pronounceOnlineOk': true }) });
+    await select(passage(10));
+    await click(playButton());
+    expect(synth.spoken).toHaveLength(1);
+  });
+
+  it('says so when even a voice on this device is asked for too much', async () => {
+    const { synth } = mount();
+    await select(passage(MAX_PASSAGE_CHARS / 5 + 1));
+    await click(playButton());
+    expect(synth.spoken).toHaveLength(0);
+    expect(note().textContent).toBe('This is too long to read in one go. Select up to 10,000 characters.');
+  });
+
+  it('turns the speaker into Stop while it reads, and stops on a press', async () => {
+    const { synth } = mount();
+    await select(passage());
+    await click(playButton());
+    synth.spoken[0].onstart();
+    expect(playButton().getAttribute('aria-label')).toBe('Stop');
+    expect(playButton().classList.contains('stoppable')).toBe(true);
+    const before = synth.cancelled;
+    await click(playButton());
+    expect(synth.cancelled).toBe(before + 1);
+    expect(synth.spoken).toHaveLength(1); // stopped, not started again
+    expect(playButton().getAttribute('aria-label')).toBe('Hear this');
+    expect(playButton().classList.contains('speaking')).toBe(false);
+  });
+
+  it('can be played again after it was stopped', async () => {
+    const { synth } = mount();
+    await select(passage());
+    await click(playButton());
+    synth.spoken[0].onstart();
+    await click(playButton());
+    await click(playButton());
+    expect(synth.spoken).toHaveLength(2);
+  });
+
+  it('goes back to the speaker when the passage ends', async () => {
+    const { synth } = mount();
+    await select(passage());
+    await click(playButton());
+    synth.spoken[0].onstart();
+    synth.spoken[0].onend();
+    expect(playButton().getAttribute('aria-label')).toBe('Hear this');
+    expect(playButton().classList.contains('stoppable')).toBe(false);
+  });
+
+  // A word is over in a moment, so pressing again says it again, as it always did.
+  it('leaves a word as it was: no Stop, and a second press repeats it', async () => {
+    const { synth } = mount();
+    await select(document.getElementById('en'));
+    await click(playButton());
+    synth.spoken[0].onstart();
+    expect(playButton().getAttribute('aria-label')).toBe('Hear this');
+    await click(playButton());
+    expect(synth.spoken).toHaveLength(2);
+  });
+
+  // Nobody is following it any more, and it could run for minutes.
+  it('stops when the bar goes away', async () => {
+    const { synth } = mount();
+    await select(passage());
+    await click(playButton());
+    synth.spoken[0].onstart();
+    const before = synth.cancelled;
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     expect(shownBar()).toBeNull();
+    expect(synth.cancelled).toBe(before + 1);
+  });
+
+  it('lets a word finish when the bar goes away', async () => {
+    const { synth } = mount();
+    await select(document.getElementById('en'));
+    await click(playButton());
+    synth.spoken[0].onstart();
+    const before = synth.cancelled;
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(synth.cancelled).toBe(before);
   });
 });
 
@@ -339,6 +453,65 @@ describe('asking before an online voice', () => {
     allow.click();
     await settle();
     expect(synth.spoken).toHaveLength(0);
+  });
+});
+
+describe('a voice chosen in Settings', () => {
+  const ADDON = voice('Clara (add-on)', 'en-US', true);
+  const GOOGLE_US = voice('Google US English', 'en-US', false);
+  const chosen = (name) => fakeStorage({ [VOICE_CHOICE_KEY]: { en: name } });
+
+  it('reads the selection instead of the automatic voice', async () => {
+    const { synth } = mount({ voices: [MARK, ADDON], storage: chosen('Clara (add-on)') });
+    await select(document.getElementById('en'));
+    await click(playButton());
+    expect(synth.spoken).toHaveLength(1);
+    expect(synth.spoken[0].voice).toBe(ADDON);
+    expect(synth.spoken[0].text).toBe('apple');
+  });
+
+  it('is left alone for a language it was not chosen for', async () => {
+    const tracy = voice('Microsoft Tracy', 'zh-HK', true);
+    const { synth } = mount({ voices: [MARK, ADDON, tracy], storage: chosen('Clara (add-on)') });
+    await select(document.getElementById('yue'));
+    await click(playButton());
+    expect(synth.spoken[0].voice).toBe(tracy);
+  });
+
+  it('gives way to the automatic voice while it is not installed', async () => {
+    const { synth } = mount({ voices: [MARK], storage: chosen('Clara (add-on)') });
+    await select(document.getElementById('en'));
+    await click(playButton());
+    expect(synth.spoken[0].voice).toBe(MARK);
+  });
+
+  // An add-on voice usually has a part of its own that must be running.
+  it('names the voice when it fails, and points to Settings', async () => {
+    const { synth } = mount({ voices: [MARK, ADDON], storage: chosen('Clara (add-on)') });
+    await select(document.getElementById('en'));
+    await click(playButton());
+    synth.spoken[0].onerror({ error: 'synthesis-failed' });
+    expect(note().textContent).toBe('"Clara (add-on)" could not read this aloud. Check that it is running, or choose another voice in Settings.');
+  });
+
+  it('keeps the plain message for a voice nobody chose', async () => {
+    const { synth } = mount({ voices: [MARK, ADDON] });
+    await select(document.getElementById('en'));
+    await click(playButton());
+    synth.spoken[0].onerror({ error: 'synthesis-failed' });
+    expect(note().textContent).toBe('Could not read this aloud.');
+  });
+
+  // Choosing an online voice is not the same as agreeing to send text with it.
+  it('still asks before a chosen online voice sends anything, and says why it is online', async () => {
+    const { synth } = mount({ voices: [MARK, GOOGLE_US], storage: chosen('Google US English') });
+    await select(document.getElementById('en'));
+    await click(playButton());
+    expect(synth.spoken).toHaveLength(0);
+    expect(note().textContent).toContain('The English voice chosen in Settings is Google');
+    expect(note().textContent).toContain('Whatever you select to hear goes to Google.');
+    await click(noteButton('Allow'));
+    expect(synth.spoken[0].voice).toBe(GOOGLE_US);
   });
 });
 

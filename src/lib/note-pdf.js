@@ -155,6 +155,9 @@ export async function buildNotePdf(note, options = {}) {
         useCORS: true,
         backgroundColor: '#ffffff',
         logging: false,
+        // A PDF is a page: black on white whatever the app's theme. The capture is made
+        // from a copy of the document, and the copy is put in the light theme.
+        onclone: (copy) => { copy.documentElement.dataset.theme = 'light'; },
         y: captureY,
         height,
       });
