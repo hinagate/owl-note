@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { showSettings } from '../src/app/settings-panel.js';
 import { VOICE_CHOICE_KEY } from '../src/lib/pronounce.js';
 import { THEME_KEY } from '../src/lib/theme.js';
+import { MIC_CHOICE_KEY } from '../src/lib/voice-take.js';
 
 const voice = (name, lang, localService) => ({ name, lang, localService, default: false });
 const MARK = voice('Microsoft Mark', 'en-US', true);
@@ -226,6 +227,194 @@ describe('playing a sample', () => {
     testButton('en').click();
     panel.close();
     expect(synth.cancelled).toBeGreaterThan(0);
+  });
+});
+
+describe('choosing a microphone', () => {
+  const HEADSET = { id: 'a1', label: 'Headset (USB)' };
+  const WEBCAM = { id: 'b2', label: 'Webcam' };
+  // A browser with microphones. It names them only once one has been opened, unless
+  // `allowed` says the page was allowed before.
+  function fakeMics({ devices = [HEADSET, WEBCAM], allowed = true, failWith = null, missing = [] } = {}) {
+    const state = { allowed, opened: [], tracksStopped: 0, contextsClosed: 0, level: 0.1, devices };
+    const media = new EventTarget();
+    media.enumerateDevices = async () => {
+      const name = (label) => (state.allowed ? label : '');
+      const first = state.devices[0];
+      return [
+        ...(first ? [{ kind: 'audioinput', deviceId: state.allowed ? 'default' : '', label: name(`Default - ${first.label}`) }] : []),
+        ...state.devices.map((d) => ({ kind: 'audioinput', deviceId: state.allowed ? d.id : '', label: name(d.label) })),
+        { kind: 'audiooutput', deviceId: 'out', label: name('Speakers') },
+      ];
+    };
+    media.getUserMedia = async (constraints) => {
+      if (failWith) throw failWith;
+      const id = constraints.audio.deviceId?.exact || null;
+      if (id && missing.includes(id)) throw Object.assign(new Error('x'), { name: 'OverconstrainedError' });
+      state.opened.push(id);
+      state.allowed = true;
+      const track = { stop() { state.tracksStopped += 1; } };
+      return { getTracks: () => [track], getAudioTracks: () => [track] };
+    };
+    class Context {
+      createAnalyser() { return { fftSize: 0, getFloatTimeDomainData(samples) { samples.fill(state.level); } }; }
+      createMediaStreamSource() { return { connect() {} }; }
+      close() { state.contextsClosed += 1; return Promise.resolve(); }
+    }
+    return { scope: { navigator: { mediaDevices: media }, AudioContext: Context }, state, media };
+  }
+  async function openWith(mics, storage = fakeStorage()) {
+    const panel = showSettings({ synth: fakeSynth([MARK]), Utterance: FakeUtterance, storage, themeStore: fakeThemeStore(), scope: mics.scope });
+    panels.push(panel);
+    await settle();
+    return { storage, panel };
+  }
+  const micSelect = () => document.getElementById('settings-mic');
+  const micOptions = () => [...micSelect().options].map((o) => o.textContent);
+  const micTest = () => document.querySelector('.settings-mic-test');
+  const micLevel = () => document.querySelector('.settings-mic-level');
+  const micNote = () => micSelect().closest('.settings-group').querySelector('.settings-note');
+  const pick = async (value) => {
+    micSelect().value = value;
+    micSelect().dispatchEvent(new Event('change', { bubbles: true }));
+    await settle();
+  };
+  const moment = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+  it('lists the microphones by name, after the system default', async () => {
+    await openWith(fakeMics());
+    expect(micOptions()).toEqual(['System default (Headset (USB))', 'Headset (USB)', 'Webcam']);
+    expect(micSelect().value).toBe('');
+    expect(micNote().hidden).toBe(true);
+  });
+
+  it('saves the one chosen, on this device, and goes back to the default', async () => {
+    const { storage } = await openWith(fakeMics());
+    await pick('b2');
+    expect(storage.data[MIC_CHOICE_KEY]).toEqual({ id: 'b2', label: 'Webcam' });
+    await pick('');
+    expect(storage.data[MIC_CHOICE_KEY]).toBeNull();
+  });
+
+  it('shows the one chosen before', async () => {
+    await openWith(fakeMics(), fakeStorage({ [MIC_CHOICE_KEY]: { id: 'b2', label: 'Webcam' } }));
+    expect(micSelect().value).toBe('b2');
+  });
+
+  // Unplugged for now is not forgotten: it is used again as soon as it is back.
+  it('keeps a chosen microphone that is not connected just now', async () => {
+    const { storage } = await openWith(fakeMics(), fakeStorage({ [MIC_CHOICE_KEY]: { id: 'z9', label: 'Desk microphone' } }));
+    expect(micOptions()).toEqual(['System default (Headset (USB))', 'Headset (USB)', 'Webcam', 'Desk microphone (not connected now)']);
+    expect(micSelect().value).toBe('z9');
+    // Choosing it again saves its own name, not the note beside it.
+    await pick('z9');
+    expect(storage.data[MIC_CHOICE_KEY]).toEqual({ id: 'z9', label: 'Desk microphone' });
+  });
+
+  it('says why there are no names before the microphone has been allowed', async () => {
+    await openWith(fakeMics({ allowed: false }));
+    expect(micOptions()).toEqual(['System default']);
+    expect(micNote().textContent).toBe('The browser names your microphones once you have allowed OWL-Note to use one. Press the microphone button to allow it.');
+  });
+
+  it('tests the microphone with a level that moves, and can then name them all', async () => {
+    const mics = fakeMics({ allowed: false });
+    await openWith(mics);
+    expect(micLevel().hidden).toBe(true);
+    micTest().click();
+    await settle();
+    expect(mics.state.opened).toEqual([null]);
+    expect(micLevel().hidden).toBe(false);
+    expect(micTest().classList.contains('speaking')).toBe(true);
+    expect(micNote().textContent).toBe('Say something: the bar should move.');
+    await moment(90);
+    expect(parseInt(micLevel().firstElementChild.style.width, 10)).toBe(40); // a level of 0.1
+    mics.state.level = 0.5;
+    await moment(90);
+    expect(micLevel().firstElementChild.style.width).toBe('100%');
+    expect(micOptions()).toEqual(['System default (Headset (USB))', 'Headset (USB)', 'Webcam']);
+    // A second press closes the microphone again.
+    micTest().click();
+    await settle();
+    expect(mics.state.tracksStopped).toBe(1);
+    expect(mics.state.contextsClosed).toBe(1);
+    expect(micLevel().hidden).toBe(true);
+    expect(micTest().classList.contains('speaking')).toBe(false);
+  });
+
+  it('opens the microphone once, however fast the button is pressed twice', async () => {
+    const mics = fakeMics();
+    await openWith(mics);
+    micTest().click();
+    micTest().click();
+    await settle();
+    expect(mics.state.opened).toHaveLength(1);
+  });
+
+  it('tests the one that is chosen', async () => {
+    const mics = fakeMics();
+    await openWith(mics);
+    await pick('b2');
+    micTest().click();
+    await settle();
+    expect(mics.state.opened).toEqual(['b2']);
+  });
+
+  it('closes the microphone by itself after a few seconds', async () => {
+    const mics = fakeMics();
+    await openWith(mics);
+    vi.useFakeTimers();
+    micTest().click();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(micLevel().hidden).toBe(false);
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(mics.state.tracksStopped).toBe(1);
+    expect(micLevel().hidden).toBe(true);
+  });
+
+  it('closes the microphone when Settings closes, or another is chosen', async () => {
+    const mics = fakeMics();
+    const { panel } = await openWith(mics);
+    micTest().click();
+    await settle();
+    await pick('b2');
+    expect(mics.state.tracksStopped).toBe(1);
+    micTest().click();
+    await settle();
+    panel.close();
+    expect(mics.state.tracksStopped).toBe(2);
+  });
+
+  it('says how to allow the microphone when the browser has it blocked', async () => {
+    await openWith(fakeMics({ failWith: Object.assign(new Error('x'), { name: 'NotAllowedError' }) }));
+    micTest().click();
+    await settle();
+    expect(micNote().textContent).toBe('OWL-Note is not allowed to use the microphone. Allow it for this page in the browser\'s site settings, then try again.');
+    expect(micLevel().hidden).toBe(true);
+  });
+
+  it('says so when the chosen one is missing and the default is heard instead', async () => {
+    const mics = fakeMics({ missing: ['z9'] });
+    await openWith(mics, fakeStorage({ [MIC_CHOICE_KEY]: { id: 'z9', label: 'Desk microphone' } }));
+    micTest().click();
+    await settle();
+    expect(mics.state.opened).toEqual([null]);
+    expect(micNote().textContent).toBe('"Desk microphone" was not found, so this is the computer\'s default microphone. Say something: the bar should move.');
+  });
+
+  it('lists a microphone that is plugged in while Settings is open', async () => {
+    const mics = fakeMics();
+    await openWith(mics);
+    mics.state.devices = [HEADSET, WEBCAM, { id: 'c3', label: 'Desk microphone' }];
+    mics.media.dispatchEvent(new Event('devicechange'));
+    await settle();
+    expect(micOptions()).toEqual(['System default (Headset (USB))', 'Headset (USB)', 'Webcam', 'Desk microphone']);
+  });
+
+  it('says so where the browser has no microphone to give', async () => {
+    await openWith({ scope: {} });
+    expect(micOptions()).toEqual(['System default']);
+    expect(micNote().textContent).toBe('This browser gives OWL-Note no microphone to use.');
   });
 });
 

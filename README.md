@@ -74,7 +74,7 @@ All of it is processed on your device.
 - Nested notebooks, pinning, and multi‑select
 - Search from the top bar or the browser address bar, and find text inside a note
 - Photos and file attachments, a sketchpad, and marking up photos
-- **Phonetic Assistance** shows pronunciation above the words: IPA for English, hiragana for Japanese, Jyutping for Cantonese. Select a word to hear it, at normal or slow speed
+- **Phonetic Assistance** shows pronunciation above the words: IPA for English, hiragana for Japanese, Jyutping for Cantonese. Select a word, a sentence or a paragraph to hear it, at normal or slow speed, then say it yourself: the microphone button shows which words were heard and draws the pitch of your voice, with a pointer that follows it as you play your recording back. Settings lets you choose which microphone it listens with
 - Trash you can restore from
 
 ---
@@ -87,6 +87,7 @@ All of it is processed on your device.
 - **A bookmark holds about 8 KB per note.** Larger notes, photos and files stay on that device unless you turn on the optional Google Drive sync, which stores them in your own Drive. A transcript passes 8 KB after roughly 15–20 minutes.
 - **Back up your encryption key.** Without it, your notes can't be opened after a reinstall. Drive sync does this for you, or use **Export → Recovery key**.
 - **Hearing a word** uses a voice on your computer. If it has none for that language, OWL‑Note asks before using your browser's online voice, which sends what you selected to Google or Microsoft. Settings lets you choose the voice for each language from the ones your browser lists, including any a voice add-on installed.
+- **Saying a word back** records you only while you practise and keeps the recording in memory, never in a note. The words are checked by Chrome's on‑device speech recognition.
 - Install OWL‑Note on each device to read your notes there.
 
 Read the full [privacy policy](PRIVACY.md).

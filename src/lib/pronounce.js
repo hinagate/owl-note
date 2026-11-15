@@ -12,6 +12,10 @@ export const MAX_SPOKEN_CHARS = 200;
 // paragraphs, and well inside the 32,767 characters the browser takes in one request.
 export const MAX_PASSAGE_CHARS = 10000;
 
+// What the reader may say back in one take: a paragraph, about three minutes read slowly.
+// Past that a take stops being practice, and its recording is held in memory throughout.
+export const MAX_PRACTICE_CHARS = 1000;
+
 // Chrome's first answer is an empty list. Its own voices and the computer's then arrive
 // separately, in either order: measured at about 100 ms, but on one load the computer's were
 // still missing after 2.5 s. Deciding too early would ask to use an online voice on a

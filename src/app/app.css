@@ -1654,6 +1654,60 @@ body.resizing { user-select: none; cursor: col-resize; }
   background: none; color: var(--text); cursor: pointer;
 }
 .pronounce-play:hover { background: var(--list-bg); }
+/* Saying it back: the microphone beside the speaker, and what a take showed. */
+.pronounce-mic {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; padding: 0; border: 0; border-radius: 50%;
+  background: none; color: var(--text); cursor: pointer;
+}
+.pronounce-mic[hidden] { display: none; }
+.pronounce-mic:hover { background: var(--list-bg); }
+.pronounce-mic .pronounce-icon-stop { display: none; }
+.pronounce-mic.recording { background: var(--danger-bg); color: var(--danger); animation: pronounce-recording 1.2s ease-in-out infinite; }
+.pronounce-mic.recording .pronounce-icon-stop { display: block; }
+.pronounce-mic.recording .pronounce-icon-mic { display: none; }
+@keyframes pronounce-recording { 50% { box-shadow: 0 0 0 4px rgba(185, 28, 28, 0.18); } }
+@media (prefers-reduced-motion: reduce) { .pronounce-mic.recording { animation: none; } }
+.pronounce-bar:has(.pronounce-practice:not([hidden])) { max-width: 440px; }
+/* A paragraph said back is a tall result: it scrolls inside the bar, not off the window. */
+.pronounce-practice { flex-basis: 100%; max-height: min(60vh, 460px); overflow-y: auto; padding: 4px 4px 6px 9px; line-height: 1.45; }
+.pronounce-practice[hidden] { display: none; }
+.practice-status, .practice-summary { color: var(--muted); font-size: 12.5px; }
+.practice-words { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 6px 0 4px; font-size: 15px; }
+.practice-word { display: inline-flex; flex-direction: column; align-items: center; }
+.practice-word-text { padding: 0 2px; border-bottom: 2px solid transparent; }
+.practice-word.heard .practice-word-text { border-bottom-color: var(--accent); }
+.practice-word.different .practice-word-text { border-bottom-color: var(--warn-text); color: var(--warn-text); }
+.practice-word.missed .practice-word-text { border-bottom: 2px dotted var(--danger); color: var(--danger); }
+.practice-heard { max-height: 5.8em; overflow-y: auto; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+.practice-melody { margin-top: 8px; }
+/* The picture, with which way is up written on it. A long take scrolls sideways inside. */
+.practice-melody-frame { position: relative; }
+.practice-melody-scroll { overflow-x: auto; border-radius: 6px; background: var(--list-bg); scrollbar-width: thin; }
+.practice-melody-graph { display: block; width: 100%; height: 80px; cursor: pointer; }
+.practice-melody-high, .practice-melody-low { position: absolute; left: 6px; color: var(--muted); font-size: 10px; line-height: 1; pointer-events: none; }
+.practice-melody-high { top: 4px; }
+.practice-melody-low { top: 66px; }
+/* Across a sound with no pitch (s, t, k): not measured, only joined. */
+.practice-melody-join { fill: none; stroke: var(--accent-text); stroke-width: 2; stroke-dasharray: 0.1 5; stroke-linecap: round; opacity: 0.6; vector-effect: non-scaling-stroke; }
+.practice-melody-key { margin-top: 4px; color: var(--muted); font-size: 12px; }
+.practice-melody-rough { margin-top: 4px; color: var(--warn-text); font-size: 12.5px; }
+/* Where the recording is while it plays. */
+.practice-melody-head { stroke: var(--text); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.practice-melody-middle { stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 4; }
+.practice-melody-line { fill: none; stroke: var(--accent-text); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.practice-melody-words { margin-top: 4px; color: var(--muted); font-size: 12.5px; }
+.practice-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.practice-actions button {
+  display: inline-flex; align-items: center; gap: 4px;
+  border: 1px solid var(--border); border-radius: 6px; padding: 3px 10px;
+  background: var(--bg); color: var(--text); font-size: 12px; cursor: pointer;
+}
+.practice-actions button:hover { background: var(--list-bg); }
+.practice-play .practice-icon-stop { display: none; }
+.practice-play.playing .practice-icon-stop { display: block; }
+.practice-play.playing .practice-icon-play { display: none; }
+
 /* While a passage is being read, the speaker becomes a stop button. */
 .pronounce-play .pronounce-icon-stop { display: none; }
 .pronounce-play.stoppable .pronounce-icon-stop { display: block; }
@@ -1781,6 +1835,10 @@ body.resizing { user-select: none; cursor: col-resize; }
 }
 .settings-voice-test:hover { background: var(--sidebar-bg); }
 .settings-voice-test.speaking { border-color: var(--accent); background: rgba(45, 190, 96, 0.22); }
+/* How loud the microphone hears the room, while it is being tested. */
+.settings-mic-level { height: 8px; margin: 0 0 10px; overflow: hidden; border-radius: 999px; background: var(--sidebar-bg); }
+.settings-mic-level[hidden] { display: none; }
+.settings-mic-level span { display: block; width: 0; height: 100%; border-radius: 999px; background: var(--accent); transition: width 0.06s linear; }
 .settings-note {
   margin: 2px 0 10px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px;
   background: var(--list-bg); font-size: 12.5px; line-height: 1.45;

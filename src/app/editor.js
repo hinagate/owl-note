@@ -651,7 +651,13 @@ export function renderEditor(
   const content = document.createElement('div');
   content.className = 'preview-content';
   // Selecting a word offers to read it aloud, while readings are showing.
-  const pronounce = createPronounceBar({ root: content, isActive: () => content.classList.contains('phonetics') });
+  const pronounce = createPronounceBar({
+    root: content,
+    isActive: () => content.classList.contains('phonetics'),
+    // For saying a selection back: the same dictionary and word-cutting the readings use.
+    readingOf: (word) => phonetics?.readingOf?.(word) || null,
+    segmenter: () => phonetics?.segmenter?.() || null,
+  });
   preview.appendChild(content);
 
   // Zoom bar, pinned to the foot of the preview. Appended after the content so it is the

@@ -10,9 +10,15 @@
 // that voice instead, for as long as the browser still lists it.
 
 import {
-  MAX_PASSAGE_CHARS, MAX_SPOKEN_CHARS, createVoiceSource, languageName, rateFor, readVoiceChoices, selectionLanguage, spokenText,
+  MAX_PASSAGE_CHARS, MAX_PRACTICE_CHARS, MAX_SPOKEN_CHARS, createVoiceSource, languageName, rateFor, readVoiceChoices, selectionLanguage, spokenText,
   voiceProvider,
 } from '../lib/pronounce.js';
+import { compareReadings, compareWords } from '../lib/speech-check.js';
+import { melodyOf, trackVoice } from '../lib/voice-melody.js';
+import {
+  SPEECH_TAGS, decodeTake, installSpeech, readMicChoice, recogniseRecording, speechReadiness, startTake,
+} from '../lib/voice-take.js';
+import { createPracticePanel } from './practice-panel.js';
 
 const SLOW_KEY = 'owl:pronounceSlow';
 const ONLINE_OK_KEY = 'owl:pronounceOnlineOk';
@@ -63,8 +69,46 @@ function stopIcon() {
   return svg;
 }
 
+// The other half of practice: the reader says it, and the bar listens.
+function micIcon() {
+  const SVG = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(SVG, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', '20');
+  svg.setAttribute('height', '20');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.classList.add('pronounce-icon-mic');
+  const capsule = document.createElementNS(SVG, 'rect');
+  capsule.setAttribute('x', '9');
+  capsule.setAttribute('y', '3');
+  capsule.setAttribute('width', '6');
+  capsule.setAttribute('height', '11');
+  capsule.setAttribute('rx', '3');
+  capsule.setAttribute('fill', 'currentColor');
+  const stand = document.createElementNS(SVG, 'path');
+  stand.setAttribute('d', 'M6 11a6 6 0 0 0 12 0M12 17v4');
+  stand.setAttribute('fill', 'none');
+  stand.setAttribute('stroke', 'currentColor');
+  stand.setAttribute('stroke-width', '2');
+  stand.setAttribute('stroke-linecap', 'round');
+  svg.append(capsule, stand);
+  return svg;
+}
+
 // More than a phrase. Only a voice on this device reads one, and it can be stopped.
 const isPassage = (text) => String(text || '').length > MAX_SPOKEN_CHARS;
+
+// Samples a second the take is measured at: all that the pitch of a voice needs.
+const TAKE_RATE = 16000;
+
+// How long a take may run: time to say the words slowly, with room to start late.
+const takeLimitMs = (text) => Math.min(180000, Math.max(6000, 4000 + String(text).length * 180));
+// How long a silence ends the take. A reader part-way through a paragraph stops to breathe
+// between sentences, or to work out a hard word, and must not be cut off there.
+const takeQuietMs = (text) => (isPassage(text) ? 2500 : 1400);
+// A take the recogniser made nothing of is played to it once more, which takes as long as
+// the take did. Past this, that is too long to be kept waiting.
+const SECOND_HEARING_S = 30;
 
 // The same regions annotateRuby leaves alone: no reading is shown there, so there is
 // nothing to practise.
@@ -92,12 +136,20 @@ export function createPronounceBar({
   Utterance = globalThis.SpeechSynthesisUtterance,
   storage = globalThis.chrome?.storage?.local,
   voiceSource = null,
+  // For speaking practice. `readingOf` gives a word's IPA, which is how two spellings of
+  // one spoken word (their, there) are known to be the same; `segmenter` gives the
+  // function that cuts text into words with readings, which Japanese is compared by.
+  readingOf = null,
+  segmenter = null,
+  scope = globalThis,
 }) {
   if (!synth || !Utterance) return UNAVAILABLE;
 
   const voices = voiceSource || voiceSourceFor(synth);
   let bar = null;
   let els = null;
+  let take = null;  // the recording in progress, if the microphone is open
+  let panel = null; // what the last take showed
   let selection = null; // { text, lang } of what the bar is showing for
   let attempt = 0; // a newer click, or a closed bar, abandons whatever was waiting
   let current = null; // Chrome can drop an utterance nothing refers to, and its events with it
@@ -162,12 +214,15 @@ export function createPronounceBar({
     const above = rect.top - height - GAP;
     const below = rect.bottom + GAP;
     const fitsBelow = below + height <= globalThis.innerHeight - GAP;
-    let top = above >= GAP || !fitsBelow ? Math.max(GAP, above) : below;
-    // A passage can begin above what is in view, once the reader scrolls to follow it.
-    // "Above the selection" is then somewhere over the toolbars, so the bar waits at the
-    // top of the preview instead, where Stop can still be reached.
+    // Above the selection where it fits inside the preview, under it where it does not,
+    // and failing both at the top of the preview. "Above" used to mean anywhere on the
+    // page, which put a tall bar (a practice result, or a passage scrolled past its
+    // start) over the toolbars, hiding their buttons.
     const view = visibleArea();
-    if (rect.top < view.top) top = Math.max(GAP, view.top + GAP);
+    const highest = Math.max(GAP, view.top + GAP);
+    let top = highest;
+    if (above >= highest) top = above;
+    else if (fitsBelow) top = below;
     const left = Math.max(GAP, Math.min(rect.left + rect.width / 2 - width / 2, globalThis.innerWidth - width - GAP));
     bar.style.top = `${top}px`;
     bar.style.left = `${left}px`;
@@ -278,6 +333,14 @@ export function createPronounceBar({
       stopSpeaking();
       return;
     }
+    // The voice and the microphone take turns: a take in progress is dropped, not kept
+    // with the voice recorded over it.
+    if (take) {
+      take.stop();
+      take = null;
+      labelMic('Say it yourself', false);
+      panel.clear();
+    }
     attempt += 1;
     const turn = attempt;
     showNote('');
@@ -306,6 +369,137 @@ export function createPronounceBar({
     if (turn !== attempt) return;
     speak(voice, chosen);
   };
+
+  // --- Saying it back ----------------------------------------------------------------
+  // The reader hears the words, then says them. The take is recorded and written down by
+  // the browser's on-device recogniser, and the two are shown against each other.
+
+  const canPractise = (lang) => !!SPEECH_TAGS[lang] && !!scope.navigator?.mediaDevices?.getUserMedia
+    && typeof scope.MediaRecorder === 'function';
+
+  const labelMic = (label, recording) => {
+    if (!els) return;
+    els.mic.classList.toggle('recording', recording);
+    els.mic.title = label;
+    els.mic.setAttribute('aria-label', label);
+  };
+
+  // What was meant against what was heard, in the way each language can be compared.
+  const compare = (text, heard, lang) => {
+    if (lang === 'ja') {
+      const segment = segmenter?.();
+      if (!segment) return null;
+      const kana = segment(heard).map((run) => run.reading || run.text).join('');
+      return compareReadings(segment(text), kana);
+    }
+    const same = readingOf
+      ? (a, b) => { const reading = readingOf(a); return !!reading && reading === readingOf(b); }
+      : undefined;
+    return compareWords(text, heard, same ? { same } : undefined);
+  };
+
+  // Whether the last take had its words checked. "Again" is the same take again, so a
+  // reader who chose to just record is not asked about the speech pack a second time.
+  let lastChecked = true;
+
+  async function practise({ recognise = true } = {}) {
+    if (take) { take.stop(); return; } // while the microphone is open, the same button ends the take
+    lastChecked = recognise;
+    const { text, lang } = selection;
+    if (text.length > MAX_PRACTICE_CHARS) {
+      showNote(`This is too long to say in one go. Select up to ${MAX_PRACTICE_CHARS.toLocaleString('en-US')} characters, about a paragraph.`);
+      return;
+    }
+    stopSpeaking(); // the voice must not be what the microphone hears
+    const turn = attempt;
+    showNote('');
+    panel.clear();
+
+    let ready = 'skip';
+    if (recognise) {
+      ready = await speechReadiness(lang, scope);
+      if (turn !== attempt || !bar) return;
+    }
+    if (ready === 'downloadable') {
+      showNote(`Checking what you say needs Chrome's ${languageName(lang)} speech pack on this computer. `
+        + 'It is downloaded once, and what you say never leaves the device.', [
+        {
+          label: 'Download',
+          primary: true,
+          run: async () => {
+            showNote('Downloading the speech pack…');
+            const installed = await installSpeech(lang, scope);
+            if (turn !== attempt || !bar) return;
+            if (installed) practise();
+            else showNote('The speech pack could not be downloaded.', [{ label: 'Just record', run: () => practise({ recognise: false }) }]);
+          },
+        },
+        { label: 'Just record', run: () => practise({ recognise: false }) },
+      ]);
+      return;
+    }
+    if (ready === 'downloading') {
+      showNote('Chrome is still downloading the speech pack. Try again in a moment.');
+      return;
+    }
+
+    const microphone = await readMicChoice(storage); // the one chosen in Settings, if any
+    if (turn !== attempt || !bar) return;
+    labelMic('Stop', true);
+    panel.listening();
+    place();
+    const mine = startTake({
+      lang,
+      deviceId: microphone?.id || null,
+      recognise: ready === 'available',
+      maxMs: takeLimitMs(text),
+      quietMs: takeQuietMs(text),
+      onInterim: (heard) => { if (take === mine) panel?.listening(heard); },
+      scope,
+    });
+    take = mine;
+    let result = null;
+    let failure = null;
+    try { result = await mine.done; } catch (error) { failure = error; }
+    if (take !== mine) return; // the bar closed, or moved on to another selection
+    take = null;
+    labelMic('Say it yourself', false);
+    if (failure || result.ended === 'nothing') {
+      panel.clear();
+      if (!failure) showNote('Nothing was heard. Check the microphone and try again.');
+      else if (failure.code === 'mic-blocked') showNote('OWL-Note is not allowed to use the microphone. Allow it for this page in the browser\'s site settings, then try again.');
+      else if (failure.code === 'no-mic') showNote('No microphone was found on this computer.');
+      else showNote('The microphone could not be used.');
+      return;
+    }
+    // A recogniser that wrote nothing has not found every word missing: it has failed to
+    // make the take out at all, and saying "0 words heard" would blame the speaker for it.
+    const shown = panel;
+    let heard = result.heard.trim();
+    if (result.recognised && !heard && result.seconds <= SECOND_HEARING_S) {
+      // Not the speaker's doing, so they are not asked to say it again: the recording is
+      // played to the recogniser once more (lib/voice-take.js).
+      shown.working('Listening to the recording…');
+      place();
+      heard = await recogniseRecording(result.blob, lang, { scope });
+      if (panel !== shown || !bar) return;
+    }
+    const comparison = heard ? compare(text, heard, lang) : null;
+    shown.show({ comparison, unclear: result.recognised && !heard, heard, blob: result.blob });
+    // Better a take on the wrong microphone than none, but the reader should know.
+    if (result.usedDefault) {
+      showNote(`"${microphone?.label || 'The microphone chosen in Settings'}" was not found, so the computer's default microphone was used.`);
+    }
+    place();
+
+    // The words are shown at once. The melody takes a moment to measure and follows.
+    try {
+      const samples = await decodeTake(result.blob, { scope });
+      if (panel !== shown || !bar) return;
+      shown.showMelody(melodyOf(trackVoice(samples, TAKE_RATE)), samples.length / TAKE_RATE);
+      place();
+    } catch { /* the recording could not be read back; the words stand on their own */ }
+  }
 
   // Shown only where it applies: the reader has allowed online voices and this selection
   // would use one. Turning it off here is why "ask once" is not "ask once, forever".
@@ -357,8 +551,19 @@ export function createPronounceBar({
     note.className = 'pronounce-note';
     note.hidden = true;
 
-    bar.append(playButton, slowLabel, online, note);
-    els = { play: playButton, slow, online, note };
+    const micButton = document.createElement('button');
+    micButton.type = 'button';
+    micButton.className = 'pronounce-mic';
+    micButton.append(micIcon(), stopIcon());
+    micButton.title = 'Say it yourself';
+    micButton.setAttribute('aria-label', 'Say it yourself');
+    micButton.hidden = true; // shown once the selection's language is known to be one that can be checked
+    micButton.addEventListener('click', () => practise());
+
+    panel = createPracticePanel({ onAgain: () => practise({ recognise: lastChecked }) });
+
+    bar.append(playButton, micButton, slowLabel, online, note, panel.el);
+    els = { play: playButton, mic: micButton, slow, online, note };
     read(SLOW_KEY).then((value) => { if (els?.slow === slow) slow.checked = !!value; });
     document.body.append(bar);
     document.addEventListener('selectionchange', onSelectionChange);
@@ -374,6 +579,10 @@ export function createPronounceBar({
     document.removeEventListener('keydown', onKeydown);
     document.removeEventListener('scroll', place, true);
     globalThis.removeEventListener('resize', hide);
+    take?.stop(); // the microphone closes with the bar
+    take = null;
+    panel?.clear();
+    panel = null;
     bar.remove();
     bar = null;
     els = null;
@@ -412,6 +621,7 @@ export function createPronounceBar({
       hide();
       build();
       selection = { text, lang };
+      els.mic.hidden = !canPractise(lang);
       voices.prime();
       place();
       showOnlineSwitch();

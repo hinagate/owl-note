@@ -1,5 +1,6 @@
-// Settings, opened from the gear at the end of the toolbar: how the app looks, and which
-// voice reads a selection aloud under Phonetic Assistance.
+// Settings, opened from the gear at the end of the toolbar: how the app looks, which voice
+// reads a selection aloud under Phonetic Assistance, and which microphone hears the
+// reader say it back.
 //
 // The voices offered are the ones the browser lists: the computer's own, the browser's
 // online ones, and any that a voice add-on has installed. OWL-Note loads no voice itself.
@@ -8,6 +9,7 @@ import {
   VOICE_CHOICE_KEY, VOICE_LANGS, languageName, pickVoice, readVoiceChoices, voiceProvider, voicesFor,
 } from '../lib/pronounce.js';
 import { readTheme, setTheme } from '../lib/theme.js';
+import { MIC_CHOICE_KEY, listMicrophones, openMicrophone, readMicChoice } from '../lib/voice-take.js';
 
 const THEME_LABELS = [['light', 'Light'], ['dark', 'Dark'], ['system', 'Match system']];
 // A line in each language, so the sample is heard the way a selection would be.
@@ -17,6 +19,7 @@ const SAMPLES = {
   yue: '呢個係廣東話嘅聲音。',
 };
 const START_TIMEOUT_MS = 8000;
+const MIC_TEST_MS = 6000; // long enough to say a few words and watch the level move
 
 let activeClose = null;
 
@@ -34,6 +37,30 @@ function playIcon() {
   return svg;
 }
 
+function micIcon() {
+  const SVG = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(SVG, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', '16');
+  svg.setAttribute('height', '16');
+  svg.setAttribute('aria-hidden', 'true');
+  const capsule = document.createElementNS(SVG, 'rect');
+  capsule.setAttribute('x', '9');
+  capsule.setAttribute('y', '3');
+  capsule.setAttribute('width', '6');
+  capsule.setAttribute('height', '11');
+  capsule.setAttribute('rx', '3');
+  capsule.setAttribute('fill', 'currentColor');
+  const stand = document.createElementNS(SVG, 'path');
+  stand.setAttribute('d', 'M6 11a6 6 0 0 0 12 0M12 17v4');
+  stand.setAttribute('fill', 'none');
+  stand.setAttribute('stroke', 'currentColor');
+  stand.setAttribute('stroke-width', '2');
+  stand.setAttribute('stroke-linecap', 'round');
+  svg.append(capsule, stand);
+  return svg;
+}
+
 const optionLabel = (voice) => {
   if (voice.localService) return voice.name;
   const provider = voiceProvider(voice);
@@ -42,13 +69,15 @@ const optionLabel = (voice) => {
 
 /**
  * @param {{ synth?: SpeechSynthesis, Utterance?: typeof SpeechSynthesisUtterance,
- *   storage?: chrome.storage.StorageArea, themeStore?: Storage }} [options]
+ *   storage?: chrome.storage.StorageArea, themeStore?: Storage, scope?: typeof globalThis }} [options]
+ *   `scope` is where the microphones are found (navigator.mediaDevices, AudioContext)
  */
 export function showSettings({
   synth = globalThis.speechSynthesis,
   Utterance = globalThis.SpeechSynthesisUtterance,
   storage = globalThis.chrome?.storage?.local,
   themeStore = globalThis.localStorage,
+  scope = globalThis,
 } = {}) {
   activeClose?.();
 
@@ -212,9 +241,146 @@ export function showSettings({
     rows.append(row);
   }
 
-  dialog.append(header, appearance, voice);
+  // --- Microphone -------------------------------------------------------------------------
+  const mic = document.createElement('section');
+  mic.className = 'settings-group';
+  const micTitle = document.createElement('h3');
+  micTitle.textContent = 'Microphone';
+  const micIntro = document.createElement('p');
+  micIntro.className = 'settings-hint';
+  micIntro.textContent = 'The microphone that hears you when you say a selection yourself under Phonetic Assistance.';
+  const micRow = document.createElement('div');
+  micRow.className = 'settings-voice-row';
+  const micLabel = document.createElement('label');
+  micLabel.htmlFor = 'settings-mic';
+  micLabel.textContent = 'Device';
+  const micSelect = document.createElement('select');
+  micSelect.id = 'settings-mic';
+  const micTest = document.createElement('button');
+  micTest.type = 'button';
+  micTest.className = 'settings-voice-test settings-mic-test';
+  micTest.title = 'Test this microphone';
+  micTest.setAttribute('aria-label', micTest.title);
+  micTest.append(micIcon());
+  micRow.append(micLabel, micSelect, micTest);
+  // How loud the microphone hears the room, while it is being tested.
+  const micLevel = document.createElement('div');
+  micLevel.className = 'settings-mic-level';
+  micLevel.hidden = true;
+  const micBar = document.createElement('span');
+  micLevel.append(micBar);
+  const micNote = document.createElement('p');
+  micNote.className = 'settings-note';
+  micNote.setAttribute('role', 'status');
+  micNote.hidden = true;
+  mic.append(micTitle, micIntro, micRow, micLevel, micNote);
+  const canRecord = !!scope.navigator?.mediaDevices?.getUserMedia;
+
+  const micSay = (message) => { micNote.textContent = message; micNote.hidden = !message; };
+  let micChoice = null; // { id, label }, or null for the system's default
+  let testing = null;   // { stream, context, timer, end } while the microphone is open
+  let opening = false;  // between the press and the microphone opening: a second press must not open it twice
+
+  const fillMics = async () => {
+    const { devices, named, usual } = await listMicrophones(scope);
+    if (!backdrop.isConnected) return;
+    micSelect.replaceChildren();
+    const usualOption = document.createElement('option');
+    usualOption.value = '';
+    usualOption.textContent = usual ? `System default (${usual})` : 'System default';
+    micSelect.append(usualOption);
+    for (const device of devices) {
+      const option = document.createElement('option');
+      option.value = device.id;
+      option.textContent = device.label;
+      micSelect.append(option);
+    }
+    // A chosen microphone that is unplugged just now stays chosen: it is used again as
+    // soon as it is back, and the default stands in until then.
+    if (micChoice && !devices.some((device) => device.id === micChoice.id)) {
+      const missing = document.createElement('option');
+      missing.value = micChoice.id;
+      missing.textContent = `${micChoice.label || 'The chosen microphone'} (not connected now)`;
+      micSelect.append(missing);
+    }
+    micSelect.value = micChoice?.id || '';
+    // The browser keeps the names to itself until this page has been allowed a microphone.
+    if (!canRecord) micSay('This browser gives OWL-Note no microphone to use.');
+    else if (!named && !testing) micSay('The browser names your microphones once you have allowed OWL-Note to use one. Press the microphone button to allow it.');
+    else if (named && /names your microphones/.test(micNote.textContent)) micSay('');
+  };
+
+  const stopMicTest = () => {
+    if (!testing) return;
+    const { stream, context, timer, end } = testing;
+    testing = null;
+    clearInterval(timer);
+    clearTimeout(end);
+    stream.getTracks().forEach((track) => track.stop());
+    context?.close?.().catch?.(() => {});
+    micTest.classList.remove('speaking');
+    micLevel.hidden = true;
+    micBar.style.width = '0%';
+  };
+
+  micSelect.addEventListener('change', async () => {
+    stopMicTest();
+    micChoice = micSelect.value
+      ? { id: micSelect.value, label: micSelect.selectedOptions[0].textContent.replace(/ \(not connected now\)$/, '') }
+      : null;
+    micSay('');
+    try { await storage?.set({ [MIC_CHOICE_KEY]: micChoice }); } catch { micSay('The choice could not be saved.'); }
+  });
+
+  micTest.addEventListener('click', async () => {
+    if (testing) { stopMicTest(); return; }
+    if (!canRecord || opening) return;
+    micSay('');
+    let opened;
+    opening = true;
+    try {
+      opened = await openMicrophone(micChoice?.id || null, scope);
+    } catch (error) {
+      micSay(error.code === 'mic-blocked'
+        ? 'OWL-Note is not allowed to use the microphone. Allow it for this page in the browser\'s site settings, then try again.'
+        : error.code === 'no-mic' ? 'No microphone was found on this computer.' : 'The microphone could not be used.');
+      return;
+    } finally {
+      opening = false;
+    }
+    if (!backdrop.isConnected) { opened.stream.getTracks().forEach((track) => track.stop()); return; }
+    const context = new scope.AudioContext();
+    const meter = context.createAnalyser();
+    meter.fftSize = 1024;
+    context.createMediaStreamSource(opened.stream).connect(meter);
+    const samples = new Float32Array(meter.fftSize);
+    micLevel.hidden = false;
+    micTest.classList.add('speaking');
+    micSay(opened.usedDefault
+      ? `"${micChoice?.label || 'The chosen microphone'}" was not found, so this is the computer's default microphone. Say something: the bar should move.`
+      : 'Say something: the bar should move.');
+    testing = {
+      stream: opened.stream,
+      context,
+      timer: setInterval(() => {
+        meter.getFloatTimeDomainData(samples);
+        let sum = 0;
+        for (const sample of samples) sum += sample * sample;
+        // Speech sits around 0.05 to 0.3; the bar is full at 0.25.
+        micBar.style.width = `${Math.min(100, Math.round(Math.sqrt(sum / samples.length) * 400))}%`;
+      }, 60),
+      end: setTimeout(() => { stopMicTest(); micSay(''); }, MIC_TEST_MS),
+    };
+    fillMics(); // allowed now, so the browser will name them
+  });
+
+  dialog.append(header, appearance, voice, mic);
   backdrop.append(dialog);
   document.body.append(backdrop);
+
+  readMicChoice(storage).then((saved) => { micChoice = saved; return fillMics(); });
+  // A microphone plugged in or pulled out while Settings is open.
+  scope.navigator?.mediaDevices?.addEventListener?.('devicechange', fillMics);
 
   fillAll();
   readVoiceChoices(storage).then((saved) => { choices = saved; if (backdrop.isConnected) fillAll(); });
@@ -226,7 +392,9 @@ export function showSettings({
   function close() {
     document.removeEventListener('keydown', onKeydown);
     synth?.removeEventListener?.('voiceschanged', fillAll);
+    scope.navigator?.mediaDevices?.removeEventListener?.('devicechange', fillMics);
     stopSample();
+    stopMicTest();
     backdrop.remove();
     if (activeClose === close) activeClose = null;
     previouslyFocused?.focus?.();

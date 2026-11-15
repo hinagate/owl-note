@@ -43,7 +43,7 @@ import { buildOwlNotePackage, parseOwlNotePackage, owlNoteFilename } from '../li
 import { buildNotePdf, notePdfFilename, verifiedPdfBytes, verifiedPdfFile } from '../lib/note-pdf.js';
 import * as driveClient from '../lib/drive/client.js';
 import { retryPendingDriveCleanup } from '../lib/drive-gc.js';
-import { ensureTable } from '../lib/phonetics.js';
+import { ensureTable, lookup as lookupReading } from '../lib/phonetics.js';
 import { makeSegmenter, detectHanScript, hasHan, hasLatin } from '../lib/segment.js';
 import { normalizeZoom, DEFAULT_ZOOM } from './preview-zoom.js';
 import SparkMD5 from 'spark-md5';
@@ -2169,6 +2169,7 @@ function renderCurrentEditor(opts = {}) {
       enabled: ui.phonetics,
       busy: ui.phoneticsBusy,
       segmenter: () => phoneticsSegmenter(ui.current ? ui.current.body : ''),
+      readingOf: (word) => lookupReading(ui.phoneticsTables.en, word),
       onToggle: togglePhonetics,
     },
     previewZoom: { value: ui.previewZoom, onChange: savePreviewZoom },

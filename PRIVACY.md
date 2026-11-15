@@ -1,6 +1,6 @@
 # OWL-Note privacy policy
 
-_Last updated: 2026-11-06_
+_Last updated: 2026-11-15_
 
 OWL-Note stores your notes **as bookmarks in your own browser**. A note's text is
 compressed, **encrypted**, and only then placed inside the bookmark's URL. A local
@@ -145,6 +145,25 @@ is sent, and at most 200 characters of it: a longer selection is read only by a 
 your device. The rest of the note is never sent, and OWL-Note itself receives nothing. Your choice is
 remembered in that browser until you turn it off with **Online voice ✕** in the same bar.
 
+## Saying a selection yourself
+
+With pronunciation readings on, the microphone button beside 🔊 lets you say the selected
+words and see how they came out. Everything it does happens on your device.
+
+- **The microphone** is opened only while you are recording, after your browser has asked
+  you to allow it. The recording is kept in the page's memory so that you can hear it
+  back, and is dropped when you close the bar or select something else. It is never saved
+  into a note, into storage or to Drive, and it is never sent anywhere.
+- **Settings → Microphone** lets you choose which microphone is used, from the ones your
+  browser lists, and test it: the test only moves a level bar and records nothing. Your
+  choice is kept in that browser only.
+- **The words** are written down by Chrome's own on-device speech recognition, the same
+  one Live transcription uses, with `processLocally` enabled. There is no cloud fallback:
+  where Chrome cannot recognise the language on the device, the words are simply not
+  checked. Chrome may download a speech resource for the language, from Google, after you
+  click **Download**.
+- **The pitch line** is worked out from the recording by OWL-Note itself.
+
 ## Explicit export and sharing
 
 - **Share with PDF** creates the PDF entirely on your device and opens the
@@ -162,6 +181,9 @@ remembered in that browser until you turn it off with **Online voice ✕** in th
 - `bookmarks` — to store and read your notes.
 - `storage` and `unlimitedStorage` — for the local backup copy of your notes and
   the cached on-device semantic-search model.
+- The **microphone** is not an extension permission. Your browser asks you for it the
+  first time you press the microphone button, as it would for a web page, and you can
+  take it back in the browser's site settings.
 - `contextMenus` — for the selection, page capture, LLM chat reconstruction, and
   live transcription right-click items.
 - `activeTab` and `scripting` — only after you click one of those right-click
