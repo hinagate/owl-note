@@ -79,7 +79,7 @@ describe('welcome note — fresh first run', () => {
       '**Live Transcription save to OWL-Note**',
       'Save the drawing directly into the note as a PNG attachment',
       '**✏️ Edit** in that view draws, highlights or writes on a photo',
-      'opened ready to mark up',
+      'opened ready to crop or mark up',
       '**⧉ Open in new tab**',
       'Phonetic Assistance',
       'an **arc** under two words joins them',

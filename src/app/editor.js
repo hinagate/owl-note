@@ -1831,8 +1831,9 @@ export function renderEditor(
 
   // Open one of this note's photos in the drawing panel and put the result back in its
   // place. `nth` says which reference to that attachment was opened, so a photo used
-  // twice is replaced only where it was edited.
-  async function editImage(id, { nth = 0, src = null } = {}) {
+  // twice is replaced only where it was edited. `onDeleteNote` comes with a page
+  // capture that has just landed: the panel then offers it when it is left unsaved.
+  async function editImage(id, { nth = 0, src = null, onDeleteNote = null } = {}) {
     if (readOnly || destroyed) return false;
     const att = attById(id);
     if (!att) return false;
@@ -1845,6 +1846,7 @@ export function renderEditor(
         console.warn('Could not put the edited photo back:', error);
         setStatus('Could not save the photo');
       }),
+      ...(onDeleteNote ? { onDeleteNote } : {}),
     });
     return true;
   }
@@ -2109,7 +2111,7 @@ export function renderEditor(
     flush: () => doSave({ auto: true }),
     save: () => doSave({ auto: false }), // as the Save button: stores the text even if unchanged
     // Open a photo of this note in the editor (a fresh full-page capture lands here).
-    editImage: (id) => editImage(id),
+    editImage: (id, { onDeleteNote = null } = {}) => editImage(id, { onDeleteNote }),
     // A file is being read for insertion, or a drawing is open for this note.
     isBusy: () => insertsInFlight > 0 || suggestingTitle || pickerOpen || !!document.querySelector('.draw-backdrop'),
     // discard: the reader threw this text away (the note was deleted, or replaced by

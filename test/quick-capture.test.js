@@ -235,6 +235,99 @@ describe('a full-page capture lands in the photo editor', () => {
     expect(document.querySelector('.draw-photo, .draw-status')).toBeTruthy();
   });
 
+  // Giving up on an edit of a capture may mean giving up on the capture: Discard
+  // then comes with "Delete note too". jsdom loads no images, and the panel takes no
+  // marks until its photo has a size, so Image is stood in for here.
+  describe('discarding changes to the capture', () => {
+    const pointer = (el, type, x, y) => {
+      const ev = new MouseEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0 });
+      Object.defineProperty(ev, 'pointerId', { value: 1, configurable: true });
+      el.dispatchEvent(ev);
+    };
+    const click = (selector) => document.querySelector(selector).dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    // Opening a capture and trashing a note each cross several saves and a repaint:
+    // well inside a second alone, not always beside the rest of the suite.
+    const SLOW = { timeout: 5000 };
+    let confirm;
+    beforeEach(() => {
+      vi.stubGlobal('Image', class {
+        set src(value) { this.naturalWidth = 800; this.naturalHeight = 600; setTimeout(() => this.onload?.(), 0); }
+      });
+      confirm = vi.spyOn(window, 'confirm').mockReturnValue(false); // it would say no, if it were asked
+    });
+    afterEach(() => { confirm.mockRestore(); vi.unstubAllGlobals(); });
+
+    // A capture, open in the editor, with one pen mark on it and Cancel pressed.
+    async function captureMarkedAndCancelled(id) {
+      const root = await bm.ensureRoot();
+      await seedNote(root, { id: 'r1', title: 'Root note', body: 'at root', created: 2 });
+      await app.initUI(root);
+      await settle();
+      await seedCapture(root, id);
+      await signal(id);
+      await vi.waitFor(() => expect(document.querySelector('.draw-zoom-in')?.disabled).toBe(false), SLOW);
+      const canvas = document.querySelector('.draw-canvas');
+      pointer(canvas, 'pointerdown', 400, 300);
+      pointer(canvas, 'pointermove', 430, 320);
+      pointer(canvas, 'pointerup', 430, 320);
+      click('.draw-cancel');
+      expect(document.querySelector('.draw-confirm').hidden).toBe(false);
+      return root;
+    }
+
+    it('"Delete note too" moves the captured note to Trash, without asking a second time', async () => {
+      const root = await captureMarkedAndCancelled('cap4');
+      click('.draw-delete-note');
+      await vi.waitFor(() => expect(document.getElementById('toast').textContent).toBe('Moved to Trash'), SLOW);
+      expect(confirm).not.toHaveBeenCalled();
+      expect(document.querySelector('.draw-backdrop')).toBeNull();
+      expect((await app.loadNotes(root)).map((n) => n.id)).toEqual(['r1']);
+      expect(document.querySelector('#editor .note-title')?.value).not.toBe('Captured page');
+    });
+
+    // Cancel straight after a capture, nothing touched: it still asks about the note.
+    async function captureCancelledUntouched(id) {
+      const root = await bm.ensureRoot();
+      await seedNote(root, { id: 'r1', title: 'Root note', body: 'at root', created: 2 });
+      await app.initUI(root);
+      await settle();
+      await seedCapture(root, id);
+      await signal(id);
+      await vi.waitFor(() => expect(document.querySelector('.draw-zoom-in')?.disabled).toBe(false), SLOW);
+      click('.draw-cancel');
+      expect(document.querySelector('.draw-confirm span').textContent).toBe('Keep the captured note?');
+      return root;
+    }
+
+    it('Cancel with nothing changed asks, and "Delete note" moves the capture to Trash', async () => {
+      const root = await captureCancelledUntouched('cap6');
+      click('.draw-delete-note');
+      await vi.waitFor(() => expect(document.getElementById('toast').textContent).toBe('Moved to Trash'), SLOW);
+      expect(confirm).not.toHaveBeenCalled();
+      expect(document.querySelector('.draw-backdrop')).toBeNull();
+      expect((await app.loadNotes(root)).map((n) => n.id)).toEqual(['r1']);
+    });
+
+    it('Cancel with nothing changed asks, and "Keep note" keeps the capture', async () => {
+      const root = await captureCancelledUntouched('cap7');
+      click('.draw-keep-note');
+      await settle(100);
+      expect(document.querySelector('.draw-backdrop')).toBeNull();
+      expect((await app.loadNotes(root)).map((n) => n.id).sort()).toEqual(['cap7', 'r1']);
+      expect(document.querySelector('#editor .note-title').value).toBe('Captured page');
+    });
+
+    it('"Discard" keeps the captured note as it was', async () => {
+      const root = await captureMarkedAndCancelled('cap5');
+      click('.draw-discard');
+      await settle(100);
+      expect(document.querySelector('.draw-backdrop')).toBeNull();
+      expect((await app.loadNotes(root)).map((n) => n.id).sort()).toEqual(['cap5', 'r1']);
+      expect(document.querySelector('#editor .note-title').value).toBe('Captured page');
+      expect(document.querySelector('textarea.note-body').value).toContain('owl-img:shot1');
+    });
+  });
+
   it('opens a stale capture (left for a later boot) without springing the editor', async () => {
     const root = await bm.ensureRoot();
     await seedCapture(root, 'cap2');

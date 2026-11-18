@@ -62,7 +62,7 @@ Ask in plain words and get the passages that answer, with citations that jump to
 
 **Capture from any page**
 
-- **Capture entire page to OWL‑Note** scrolls and stitches the whole page into one long image, opened ready to mark up.
+- **Capture entire page to OWL‑Note** scrolls and stitches the whole page into one long image, opened ready to crop or mark up.
 - **Save selection to OWL‑Note** keeps the selected text as Markdown, with its headings, lists, links, code blocks and tables.
 
 All of it is processed on your device.
@@ -73,7 +73,7 @@ All of it is processed on your device.
 - Syntax‑highlighted code, KaTeX math, and Mermaid diagrams
 - Nested notebooks, pinning, and multi‑select
 - Search from the top bar or the browser address bar, and find text inside a note
-- Photos and file attachments, a sketchpad, and marking up photos
+- Photos and file attachments, a sketchpad, and cropping and marking up photos
 - **Phonetic Assistance** shows pronunciation above the words: IPA for English, hiragana for Japanese, Jyutping for Cantonese. Select a word, a sentence or a paragraph to hear it, at normal or slow speed, then say it yourself: the microphone button shows which words were heard and draws the pitch of your voice, with a pointer that follows it as you play your recording back. Settings lets you choose which microphone it listens with
 - Trash you can restore from
 

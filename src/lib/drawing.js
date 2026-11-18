@@ -10,6 +10,7 @@
 //   { kind: <shape>,   color, width, fill, x0, y0, x1, y1 }    drag-drawn shapes
 //   { kind: 'image',   src, el, x, y, width, height }          a pasted photo
 //   { kind: 'text',    text, color, size, x, y, width, height } a text box
+//   { kind: 'crop',    x, y, width, height }                    the part that is kept
 // `el` is the decoded HTMLImageElement. It is the one non-plain field, because
 // canvas cannot draw bytes — only a decoded image.
 
@@ -30,6 +31,7 @@ export const STAR = 'star';
 export const SELECT = 'select';
 export const IMAGE = 'image';
 export const TEXT = 'text';
+export const CROP = 'crop';
 
 // Every polygon is stored as vertices in a 0–1 box, so one path routine serves
 // them all and a shape stretches with its bounding box like Paint's do. Regular
@@ -223,7 +225,7 @@ export function snapAngle(x0, y0, x1, y1) {
 
 // Normalized bounding box of any item, since a drag may run right-to-left.
 export function boxOf(item) {
-  if (item.kind === IMAGE || item.kind === TEXT) {
+  if (item.kind === IMAGE || item.kind === TEXT || item.kind === CROP) {
     return { x: item.x, y: item.y, width: item.width, height: item.height };
   }
   if (item.kind === 'stroke') {
@@ -333,7 +335,7 @@ export function addImage(state, { src, el, x, y, width, height }) {
 export function itemAt(state, x, y, pad = 0) {
   for (let i = state.items.length - 1; i >= 0; i--) {
     const item = state.items[i];
-    if (item.mode === ERASE) continue;
+    if (item.mode === ERASE || item.kind === CROP) continue;
     const box = boxOf(item);
     // Test in the item's own frame, so a rotated shape is grabbed where it looks
     // rather than where its unrotated box happens to sit.
@@ -484,7 +486,8 @@ export function endTransform(state) {
 // slot, silently reselects a different object.
 export function bringToFront(state, index) {
   const item = state.items[index];
-  if (!item || index === state.items.length - 1) return index; // already on top
+  // Already on top. A crop is not a mark, so one sitting above it does not count.
+  if (!item || !state.items.some((other, i) => i > index && other.kind !== CROP)) return index;
   const next = state.items.filter((_, i) => i !== index);
   next.push(item);
   commit(state, next);
@@ -493,7 +496,8 @@ export function bringToFront(state, index) {
 
 export function sendToBack(state, index) {
   const item = state.items[index];
-  if (!item || index === 0) return index; // already at the back
+  // Already at the back, by the same rule.
+  if (!item || !state.items.some((other, i) => i < index && other.kind !== CROP)) return index;
   const next = state.items.filter((_, i) => i !== index);
   next.unshift(item);
   commit(state, next);
@@ -503,6 +507,102 @@ export function sendToBack(state, index) {
 export function removeItem(state, index) {
   if (index == null || !state.items[index]) return state;
   return commit(state, state.items.filter((_, i) => i !== index));
+}
+
+/* -------------------------------------------------------------------- crop */
+
+// A crop is an item like any other, so history gets it for free: Undo brings the
+// whole picture back and Redo trims it again. It paints nothing and cannot be
+// selected — it only says which part of the drawing is shown and saved. Nothing
+// outside it is thrown away before Save, so a crop can be widened again later.
+
+// The smallest frame worth keeping, and the least a drag must cover to count as one.
+export const MIN_CROP = 8;
+
+export function cropOf(items) {
+  for (let i = (items || []).length - 1; i >= 0; i--) {
+    const item = items[i];
+    if (item?.kind === CROP) return { x: item.x, y: item.y, width: item.width, height: item.height };
+  }
+  return null;
+}
+
+// Everything in a drawing that paints.
+export function marksOf(items) {
+  return (items || []).filter((item) => item && item.kind !== CROP);
+}
+
+export function hasMarks(state) {
+  return state.items.some((item) => item.kind !== CROP);
+}
+
+// Keep `rect` of the drawing, or all of it when `rect` is null. One undo step,
+// and none at all when that is already the case.
+export function setCrop(state, rect) {
+  const current = cropOf(state.items);
+  const marks = marksOf(state.items);
+  if (!rect) return current ? commit(state, marks) : state;
+  if (current && current.x === rect.x && current.y === rect.y
+    && current.width === rect.width && current.height === rect.height) return state;
+  return commit(state, [...marks, { kind: CROP, x: rect.x, y: rect.y, width: rect.width, height: rect.height }]);
+}
+
+const within = (value, min, max) => Math.max(min, Math.min(max, value));
+
+// The frame dragged out between two points, held inside a width × height drawing.
+export function cropRect(x0, y0, x1, y1, width, height) {
+  const left = within(Math.min(x0, x1), 0, width);
+  const right = within(Math.max(x0, x1), 0, width);
+  const top = within(Math.min(y0, y1), 0, height);
+  const bottom = within(Math.max(y0, y1), 0, height);
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+// Drag a handle of the frame to (x, y): 'n', 'e', 's' and 'w' move one edge, a
+// corner ('nw', …) moves two, and the edges it does not name stay put. An edge
+// pulled past its opposite stops MIN_CROP short of it instead of flipping the frame.
+export function resizeCropRect(box, handle, x, y, width, height) {
+  let left = box.x;
+  let top = box.y;
+  let right = box.x + box.width;
+  let bottom = box.y + box.height;
+  if (handle.includes('w')) left = within(x, 0, right - MIN_CROP);
+  if (handle.includes('e')) right = within(x, left + MIN_CROP, width);
+  if (handle.includes('n')) top = within(y, 0, bottom - MIN_CROP);
+  if (handle.includes('s')) bottom = within(y, top + MIN_CROP, height);
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+// Slide the frame so its corner is at (x, y), without leaving the drawing.
+export function moveCropRect(box, x, y, width, height) {
+  return {
+    x: within(x, 0, Math.max(0, width - box.width)),
+    y: within(y, 0, Math.max(0, height - box.height)),
+    width: box.width,
+    height: box.height,
+  };
+}
+
+// What the pointer would take hold of at (x, y): a handle id, 'move' inside the
+// frame, or null away from it. `grab` is how near counts. An edge can be taken
+// anywhere along its length, not only at a grip in the middle: on a page-long
+// capture the middle of a side is usually off screen.
+export function cropHandleAt(box, x, y, grab = 0) {
+  if (!box) return null;
+  const left = box.x;
+  const right = box.x + box.width;
+  const top = box.y;
+  const bottom = box.y + box.height;
+  if (x < left - grab || x > right + grab || y < top - grab || y > bottom + grab) return null;
+  // Between two edges of a small frame, the nearer one wins.
+  const nearer = (at, a, b) => Math.abs(at - a) <= Math.abs(at - b);
+  const onLeft = Math.abs(x - left) <= grab;
+  const onRight = Math.abs(x - right) <= grab;
+  const onTop = Math.abs(y - top) <= grab;
+  const onBottom = Math.abs(y - bottom) <= grab;
+  const vertical = onTop && (!onBottom || nearer(y, top, bottom)) ? 'n' : onBottom ? 's' : '';
+  const horizontal = onLeft && (!onRight || nearer(x, left, right)) ? 'w' : onRight ? 'e' : '';
+  return vertical + horizontal || 'move';
 }
 
 /* ----------------------------------------------------------------- history */
@@ -522,9 +622,11 @@ export function redo(state) {
 }
 
 // Undoable in one step — that is the whole reason history stores snapshots
-// rather than individual items.
+// rather than individual items. A crop stays: Clear wipes the marks off the
+// page, it does not change which part of the page there is.
 export function clear(state) {
-  return state.items.length ? commit(state, []) : state;
+  const kept = state.items.filter((item) => item.kind === CROP);
+  return kept.length === state.items.length ? state : commit(state, kept);
 }
 
 export function isEmpty(state) { return state.items.length === 0; }
@@ -544,7 +646,7 @@ export function inkBand(items, height) {
   let top = Infinity;
   let bottom = -Infinity;
   for (const item of items || []) {
-    if (!item || item.mode === ERASE) continue;
+    if (!item || item.mode === ERASE || item.kind === CROP) continue;
     const box = boxOf(item);
     const c = centerOf(item);
     const pad = item.kind === TEXT
@@ -713,7 +815,7 @@ export function compositeFor(mode) {
 export function replay(ctx, items) {
   if (!ctx) return; // no 2D context (jsdom) — recording items still works
   for (const item of items || []) {
-    if (!item) continue;
+    if (!item || item.kind === CROP) continue; // a crop frames the picture; it is not in it
     // save/restore per item, so one highlighter stroke's alpha and flat cap
     // cannot leak onto whatever is drawn after it.
     ctx.save();

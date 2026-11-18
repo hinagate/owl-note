@@ -1781,13 +1781,19 @@ async function revealQuickCapture(capture) {
   if (target.localOnly) await openLocalNote(target.id);
   else await openBookmark(target.bookmarkId);
   document.querySelector('#note-list .item.card.active')?.scrollIntoView?.({ block: 'nearest' });
-  // A full-page capture lands in the photo editor. It is already saved, so Cancel
-  // keeps the plain capture and Save swaps the marked-up one into its place.
+  // A full-page capture lands in the photo editor. It is already saved, so Save swaps
+  // the marked-up one into its place, and Cancel asks whether the note is wanted at all.
   const fresh = Date.now() - (Number(capture.at) || 0) < CAPTURE_EDIT_FRESH_MS;
   if (capture.editImage && fresh && ui.current?.id === capture.id) {
     // Not awaited: a screenshot kept in Drive can take a while to fetch, and the
     // capture itself has been delivered either way.
-    Promise.resolve(ui.editor?.editImage?.(capture.editImage)).catch(() => {});
+    Promise.resolve(ui.editor?.editImage?.(capture.editImage, {
+      // The screenshot is the whole note, so leaving the editor without saving may
+      // mean not wanting the capture at all: the editor asks, and offers to delete the
+      // note. That button is the question, so the note goes to Trash without a second
+      // one — and only while it is still the note that is open.
+      onDeleteNote: () => (ui.current?.id === capture.id ? deleteCurrentNote({ ask: false }) : undefined),
+    })).catch(() => {});
   }
 }
 
@@ -2196,17 +2202,18 @@ function renderCurrentEditor(opts = {}) {
 // A Delete still waiting for its note's save: pressing Delete again (nothing seems to
 // happen while it waits) must not ask twice.
 let deleting = false;
-async function deleteCurrentNote() {
+// `ask: false` when the person has already been asked where they clicked.
+async function deleteCurrentNote({ ask = true } = {}) {
   if (!ui.current || deleting) return;
   deleting = true;
   try {
-    await deleteOpenNote();
+    await deleteOpenNote({ ask });
   } finally {
     deleting = false;
   }
 }
 
-async function deleteOpenNote() {
+async function deleteOpenNote({ ask = true } = {}) {
   // Clicking Delete blurred the editor, which started a save. Let it land first: a note
   // trashed mid-save was filed straight back by that save, and a new note "discarded"
   // while its first save ran was created by it anyway.
@@ -2218,7 +2225,7 @@ async function deleteOpenNote() {
   if (!stillThisNote()) return;
   const saved = ui.activeBookmarkId || ui.activeLocalId;
   if (saved) {
-    if (!confirm('Move this note to Trash?')) return;
+    if (ask && !confirm('Move this note to Trash?')) return;
     await trashNotes([{
       id: ui.current.id,
       bookmarkId: ui.activeBookmarkId || null,
@@ -2226,7 +2233,7 @@ async function deleteOpenNote() {
       localOnly: !!ui.activeLocalId,
     }], ui.trashId);
     askIndex.removeNote(ui.current.id); removeSemantic(ui.current.id); // note left the live corpus (lexical + vector)
-  } else if (!confirm('Discard this unsaved note?')) {
+  } else if (ask && !confirm('Discard this unsaved note?')) {
     return;
   }
   ui.current = null;

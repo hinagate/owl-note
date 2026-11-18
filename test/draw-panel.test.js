@@ -653,6 +653,183 @@ describe('draw panel over a photo (Edit photo)', () => {
     expect(document.querySelector('.draw-keep').textContent).toBe('Keep editing');
   });
 
+  // After a page capture the photo is the whole note, so giving up on an edit of it
+  // may mean giving up on the capture. The note's owner passes onDeleteNote for that.
+  it('offers to delete the note too when changes to a fresh capture are discarded', async () => {
+    const onDeleteNote = vi.fn();
+    const onSave = vi.fn();
+    const { canvas, ready } = showDrawPanel({ photo: tall, loadImage: photoOf(400, 300), onDeleteNote, onSave });
+    await ready;
+    draw(canvas, [[300, 200], [320, 220]]);
+    click(document.querySelector('.draw-cancel'));
+    const row = document.querySelector('.draw-confirm');
+    expect(row.hidden).toBe(false);
+    expect(row.querySelector('span').textContent).toBe('Discard your changes to this photo?');
+    expect([...row.querySelectorAll('button')].filter((b) => !b.hidden).map((b) => b.textContent))
+      .toEqual(['Delete note too', 'Keep editing', 'Discard']);
+    expect(onDeleteNote).not.toHaveBeenCalled(); // only offered so far
+    click(document.querySelector('.draw-delete-note'));
+    expect(document.querySelector('.draw-backdrop')).toBeNull();
+    await vi.waitFor(() => expect(onDeleteNote).toHaveBeenCalledTimes(1));
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  // The row appears under a pointer that has just clicked Cancel. The second click of
+  // a double-click lands on it having read nothing, so it may not throw anything away.
+  it('ignores the second click of a double-click on Discard and on Delete note', async () => {
+    const onDeleteNote = vi.fn();
+    const { canvas, ready } = showDrawPanel({ photo: tall, loadImage: photoOf(400, 300), onDeleteNote });
+    await ready;
+    draw(canvas, [[300, 200], [320, 220]]);
+    click(document.querySelector('.draw-cancel'));
+    const second = (el) => el.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 2 }));
+    second(document.querySelector('.draw-discard'));
+    second(document.querySelector('.draw-delete-note'));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(document.querySelector('.draw-backdrop')).toBeTruthy(); // still open, changes intact
+    expect(onDeleteNote).not.toHaveBeenCalled();
+    // A click of its own is an answer.
+    document.querySelector('.draw-delete-note').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+    await vi.waitFor(() => expect(onDeleteNote).toHaveBeenCalledTimes(1));
+  });
+
+  it('puts the button that deletes first, away from where Cancel was clicked', async () => {
+    await showDrawPanel({ photo: tall, loadImage: photoOf(400, 300), onDeleteNote: vi.fn() }).ready;
+    click(document.querySelector('.draw-cancel'));
+    const buttons = [...document.querySelectorAll('.draw-confirm button')];
+    expect(buttons[0].classList.contains('draw-delete-note')).toBe(true);
+    expect(buttons[1].classList.contains('draw-keep')).toBe(true); // what sits where Cancel was
+  });
+
+  it('Discard on a fresh capture still only discards: the note is left alone', async () => {
+    const onDeleteNote = vi.fn();
+    const { canvas, ready } = showDrawPanel({ photo: tall, loadImage: photoOf(400, 300), onDeleteNote });
+    await ready;
+    draw(canvas, [[300, 200], [320, 220]]);
+    click(document.querySelector('.draw-cancel'));
+    click(document.querySelector('.draw-discard'));
+    expect(document.querySelector('.draw-backdrop')).toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(onDeleteNote).not.toHaveBeenCalled();
+  });
+
+  it('Keep editing on a fresh capture goes back to the photo with the changes intact', async () => {
+    const onDeleteNote = vi.fn();
+    const { canvas, ready, state } = showDrawPanel({ photo: tall, loadImage: photoOf(400, 300), onDeleteNote });
+    await ready;
+    draw(canvas, [[300, 200], [320, 220]]);
+    click(document.querySelector('.draw-cancel'));
+    click(document.querySelector('.draw-keep'));
+    expect(document.querySelector('.draw-confirm').hidden).toBe(true);
+    expect(state.items).toHaveLength(1);
+    expect(onDeleteNote).not.toHaveBeenCalled();
+  });
+
+  // Cancel straight after a capture may mean "I do not want this capture", so it asks
+  // even with nothing changed — there is just nothing to discard in the question.
+  const shownButtons = () => [...document.querySelectorAll('.draw-confirm button')]
+    .filter((b) => !b.hidden).map((b) => b.textContent);
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+  it('a fresh capture with nothing changed still asks about the note on Cancel', async () => {
+    const onDeleteNote = vi.fn();
+    const { ready } = showDrawPanel({ photo: tall, loadImage: photoOf(400, 300), onDeleteNote });
+    await ready;
+    click(document.querySelector('.draw-cancel'));
+    expect(document.querySelector('.draw-backdrop')).toBeTruthy(); // not closed: asked
+    expect(document.querySelector('.draw-confirm').hidden).toBe(false);
+    expect(document.querySelector('.draw-confirm span').textContent).toBe('Keep the captured note?');
+    expect(shownButtons()).toEqual(['Delete note', 'Keep editing', 'Keep note']);
+    // The answer that loses nothing has the focus, so Enter is what Cancel used to be.
+    expect(document.activeElement).toBe(document.querySelector('.draw-keep-note'));
+    expect(onDeleteNote).not.toHaveBeenCalled();
+  });
+
+  it('asks the same on ×, Escape and a click outside', async () => {
+    const leave = [
+      () => click(document.querySelector('.draw-close')),
+      () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })),
+      () => click(document.querySelector('.draw-backdrop')),
+    ];
+    for (const way of leave) {
+      await showDrawPanel({ photo: tall, loadImage: photoOf(400, 300), onDeleteNote: vi.fn() }).ready;
+      way();
+      expect(document.querySelector('.draw-backdrop')).toBeTruthy();
+      expect(shownButtons()).toEqual(['Delete note', 'Keep editing', 'Keep note']);
+    }
+  });
+
+  it('"Keep note" closes and leaves the note alone', async () => {
+    const onDeleteNote = vi.fn();
+    await showDrawPanel({ photo: tall, loadImage: photoOf(400, 300), onDeleteNote }).ready;
+    click(document.querySelector('.draw-cancel'));
+    click(document.querySelector('.draw-keep-note'));
+    expect(document.querySelector('.draw-backdrop')).toBeNull();
+    await tick();
+    expect(onDeleteNote).not.toHaveBeenCalled();
+  });
+
+  it('"Delete note" closes and deletes it, with nothing changed either', async () => {
+    const onDeleteNote = vi.fn();
+    await showDrawPanel({ photo: tall, loadImage: photoOf(400, 300), onDeleteNote }).ready;
+    click(document.querySelector('.draw-cancel'));
+    click(document.querySelector('.draw-delete-note'));
+    expect(document.querySelector('.draw-backdrop')).toBeNull();
+    await vi.waitFor(() => expect(onDeleteNote).toHaveBeenCalledTimes(1));
+  });
+
+  it('"Keep editing" goes back to the photo', async () => {
+    await showDrawPanel({ photo: tall, loadImage: photoOf(400, 300), onDeleteNote: vi.fn() }).ready;
+    click(document.querySelector('.draw-cancel'));
+    click(document.querySelector('.draw-keep'));
+    expect(document.querySelector('.draw-confirm').hidden).toBe(true);
+    expect(document.querySelector('.draw-dialog footer:not(.draw-confirm)').hidden).toBe(false);
+  });
+
+  // "Keep note" must never be the button that quietly drops work done after it appeared.
+  it('turns into the discard question if a change is made while it is up, and back', async () => {
+    const { canvas, ready } = showDrawPanel({ photo: tall, loadImage: photoOf(400, 300), onDeleteNote: vi.fn() });
+    await ready;
+    click(document.querySelector('.draw-cancel'));
+    draw(canvas, [[300, 200], [320, 220]]);
+    expect(document.querySelector('.draw-confirm span').textContent).toBe('Discard your changes to this photo?');
+    expect(shownButtons()).toEqual(['Delete note too', 'Keep editing', 'Discard']);
+    click(document.querySelector('.draw-undo'));
+    expect(shownButtons()).toEqual(['Delete note', 'Keep editing', 'Keep note']);
+  });
+
+  it('Save with nothing changed still just closes: saving is keeping', async () => {
+    const onDeleteNote = vi.fn();
+    const { ready, saveButton } = showDrawPanel({ photo: tall, loadImage: photoOf(400, 300), onDeleteNote });
+    await ready;
+    click(saveButton);
+    expect(document.querySelector('.draw-backdrop')).toBeNull();
+    await tick();
+    expect(onDeleteNote).not.toHaveBeenCalled();
+  });
+
+  it('makes no such offer for a photo opened from its note, or for a drawing', async () => {
+    const { canvas, ready } = showDrawPanel({ photo: tall, loadImage: photoOf(400, 300) });
+    await ready;
+    draw(canvas, [[300, 200], [320, 220]]);
+    click(document.querySelector('.draw-cancel'));
+    expect(document.querySelector('.draw-delete-note')).toBeNull();
+    expect(document.querySelector('.draw-discard').textContent).toBe('Discard');
+
+    const blank = showDrawPanel({});
+    draw(blank.canvas, [[10, 10], [40, 40]]);
+    click(document.querySelector('.draw-cancel'));
+    expect(document.querySelector('.draw-delete-note')).toBeNull();
+    expect(document.querySelector('.draw-discard').textContent).toBe('Discard');
+  });
+
+  // The row appears with the pointer already on Discard (it takes Cancel's place), so
+  // its hover colour is the first one seen. A weaker rule let the shared blue win.
+  it('keeps Discard red under the pointer', () => {
+    const css = readFileSync('src/app/app.css', 'utf8');
+    expect(css).toMatch(/\.draw-discard:hover:not\(:disabled\)\s*\{\s*background:\s*#b3261e/);
+  });
+
   it('a blank drawing ignores the wheel', () => {
     const { view } = showDrawPanel({});
     const ev = wheel(document.querySelector('.draw-surface'), 300);

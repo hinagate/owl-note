@@ -150,6 +150,25 @@ describe('editImage (a fresh capture lands here)', () => {
     expect(showDrawPanel.mock.calls[0][0].photo.src).toBe(B.dataUri);
   });
 
+  // The capture is its note's whole content, so the app lends the panel a way to
+  // delete the note when an edit of it is discarded. A photo opened from the viewer
+  // is one of a note's contents, and gets no such thing.
+  it('hands the capture\'s way to delete its note on to the panel', async () => {
+    const onDeleteNote = () => {};
+    await open().editImage('bbb222', { onDeleteNote });
+    expect(showDrawPanel.mock.calls[0][0].onDeleteNote).toBe(onDeleteNote);
+  });
+
+  it('gives the panel no way to delete the note otherwise', async () => {
+    await open().editImage('bbb222');
+    expect(showDrawPanel.mock.calls[0][0]).not.toHaveProperty('onDeleteNote');
+    showDrawPanel.mockReset();
+    click(previewImages()[2]);
+    click(editButton());
+    await vi.waitFor(() => expect(showDrawPanel).toHaveBeenCalled());
+    expect(showDrawPanel.mock.calls[0][0]).not.toHaveProperty('onDeleteNote');
+  });
+
   it('does nothing for an unknown photo or a read-only note', async () => {
     expect(await open().editImage('nope')).toBe(false);
     expect(await open({ readOnly: true }).editImage('aaa111')).toBe(false);

@@ -12,14 +12,16 @@ import {
   isShapeTool, isFreehandTool, isFillable,
   centerOf, rotatePoint, toLocalPoint, setAngle, normalizeAngle, textFontCss, TEXT_FONTS,
   bringToFront, sendToBack, inkBand,
+  setCrop, cropOf, marksOf, hasMarks, cropRect, resizeCropRect, moveCropRect, cropHandleAt, squareBox,
   PEN, HIGHLIGHT, ERASE, SELECT, LINE, ARROW, RECT, ROUND_RECT, ELLIPSE,
-  TRIANGLE, RIGHT_TRIANGLE, DIAMOND, PENTAGON, HEXAGON, STAR, TEXT,
-  LINE_HEIGHT,
+  TRIANGLE, RIGHT_TRIANGLE, DIAMOND, PENTAGON, HEXAGON, STAR, TEXT, CROP,
+  LINE_HEIGHT, MIN_CROP,
 } from '../lib/drawing.js';
 import { shouldFitWidth } from '../lib/image-downscale.js';
 
 const TOOLS = [
   { id: SELECT, className: 'draw-tool-select', glyph: '↖', label: 'Select — move or resize anything you have drawn' },
+  { id: CROP, className: 'draw-tool-crop', glyph: '⌗', label: 'Crop — drag over the part to keep, then press Enter' },
   { id: PEN, className: 'draw-tool-pen', glyph: '✏️', label: 'Pen — hold Shift for a straight line' },
   { id: HIGHLIGHT, className: 'draw-tool-highlight', glyph: '🖍', label: 'Highlighter — hold Shift for a straight line' },
   { id: ERASE, className: 'draw-tool-erase', glyph: '◻️', label: 'Eraser' },
@@ -161,28 +163,42 @@ function canvasToBlob(canvas, type, quality) {
 // onto the fill would cut holes THROUGH it — through the photo, too. The items
 // are composited on a transparent layer which is then stamped onto the opaque one.
 // Under a photo the layer is only as tall as the ink (see inkBand).
-export async function drawingToBlob(items, width, height, scale = 1, { background = null, type = 'image/png', quality = 0.92 } = {}) {
+//
+// `crop` ({ x, y, width, height }, in the drawing's units) keeps only that part.
+// Its edges are rounded to whole output pixels, so a cropped photo is a straight
+// copy of those pixels — never a resample of them.
+export async function drawingToBlob(items, width, height, scale = 1, {
+  background = null, type = 'image/png', quality = 0.92, crop = null,
+} = {}) {
+  const area = crop || { x: 0, y: 0, width, height };
+  const left = Math.round(area.x * scale);
+  const top = Math.round(area.y * scale);
   const flat = document.createElement('canvas');
-  flat.width = Math.max(1, Math.round(width * scale));
-  flat.height = Math.max(1, Math.round(height * scale));
+  flat.width = Math.max(1, Math.round((area.x + area.width) * scale) - left);
+  flat.height = Math.max(1, Math.round((area.y + area.height) * scale) - top);
   const ctx = flat.getContext('2d');
   if (!ctx) throw new Error('no 2d context');
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, flat.width, flat.height);
-  if (background) ctx.drawImage(background, 0, 0, flat.width, flat.height);
+  // The photo is width × height at this scale, so the output's pixels are its own.
+  if (background && crop) ctx.drawImage(background, left, top, flat.width, flat.height, 0, 0, flat.width, flat.height);
+  else if (background) ctx.drawImage(background, 0, 0, flat.width, flat.height);
 
   const band = background ? inkBand(items, height) : { top: 0, bottom: height };
-  if (band) {
-    const top = Math.floor(band.top * scale);
+  const from = band ? Math.max(band.top, area.y) : 0;
+  const to = band ? Math.min(band.bottom, area.y + area.height) : 0;
+  if (to > from) {
+    // Rows of the output, counted from its own top edge.
+    const layerTop = Math.max(0, Math.floor(from * scale) - top);
     const layer = document.createElement('canvas');
     layer.width = flat.width;
-    layer.height = Math.max(1, Math.min(flat.height, Math.ceil(band.bottom * scale)) - top);
+    layer.height = Math.max(1, Math.min(flat.height, Math.ceil(to * scale) - top) - layerTop);
     const layerCtx = layer.getContext('2d');
     if (!layerCtx) throw new Error('no 2d context');
-    if (top) layerCtx.translate(0, -top);
+    if (left || top || layerTop) layerCtx.translate(-left, -(top + layerTop));
     layerCtx.scale(scale, scale);
     replay(layerCtx, items);
-    ctx.drawImage(layer, 0, top);
+    ctx.drawImage(layer, 0, layerTop);
   }
 
   if (typeof flat.toBlob !== 'function') throw new Error('toBlob unsupported');
@@ -223,6 +239,13 @@ const MAX_ZOOM = 8;
 const ZOOM_STEP = 1.15;
 // A scrollbar thumb never shrinks below a size that can still be grabbed.
 const MIN_THUMB = 24;
+// Dragging a crop frame within EDGE_ZONE pixels of the window's edge scrolls the
+// photo: EDGE_GAIN pixels a frame for each pixel further out, EDGE_MAX_STEP at
+// most, and only once the pointer has moved EDGE_SLACK toward that edge.
+const EDGE_ZONE = 36;
+const EDGE_GAIN = 0.6;
+const EDGE_MAX_STEP = 60;
+const EDGE_SLACK = 8;
 
 // The four corners of a box, in the order the resize logic indexes them.
 function cornersOf(box) {
@@ -255,12 +278,18 @@ export function resizeBox(box, corner, x, y, keepAspect = false) {
 // and the eraser only ever touch the marks. Its drawing is the photo's own size
 // (fitted to the window, never enlarged), the view zooms and scrolls over it, and
 // Save hands back the photo at its own pixel size with the marks burned in.
+//
+// `onDeleteNote` is given when the photo is all there is to its note — a page
+// capture that has just landed here. Leaving without saving then always asks about
+// the note, changes or no changes: Cancel straight after a capture may mean "I do
+// not want this capture", and the note would otherwise stay behind unasked.
 export function showDrawPanel({
   onSave = () => {},
   exportBlob = drawingToBlob,
   now = () => new Date(),
   loadImage = loadImageElement,
   photo = null,
+  onDeleteNote = null,
 } = {}) {
   document.querySelector('.draw-backdrop')?.remove();
 
@@ -283,6 +312,12 @@ export function showDrawPanel({
   let frame = 0;
   let editing = null;       // { index, textarea } while a text box is open
   let closed = false;
+  // The frame being chosen with the Crop tool, in drawing units. It is only a
+  // proposal until it is applied — the crop itself is an item, so it has history.
+  let cropDraft = null;
+  let toolBeforeCrop = PEN; // where applying or cancelling a crop returns to
+  let lastPointer = null;   // the pointer's last event, for a frame dragged past the edge
+  let autoPan = 0;
   // The photo once decoded, at its natural size. Until then a photo panel takes
   // no ink: a stroke made against the blank stand-in would land in the wrong place.
   let background = null;
@@ -508,6 +543,17 @@ export function showDrawPanel({
     textColorLabel, textColorRow, textBgLabel, textBgRow,
   );
 
+  // The Crop tool's turn in the options row: the size the frame would save at,
+  // and a button to apply it — touch and pen have no Enter key to press.
+  const cropBar = document.createElement('div');
+  cropBar.className = 'draw-crop-bar';
+  cropBar.hidden = true;
+  const cropInfo = document.createElement('span');
+  cropInfo.className = 'draw-crop-info';
+  const cropApplyButton = button('draw-crop-apply', 'Crop', 'Keep only the framed part (Enter)');
+  const cropResetButton = button('draw-crop-reset', 'Show all', 'Remove the crop and bring the whole picture back');
+  cropBar.append(cropInfo, cropApplyButton, cropResetButton);
+
   // Stacking order is what decides whether a caption sits over a photo or under
   // it, so it belongs to Select — these act on whatever is selected and are dead
   // otherwise, rather than being a mode of their own.
@@ -568,9 +614,20 @@ export function showDrawPanel({
 
   const hint = document.createElement('p');
   hint.className = 'draw-hint';
-  hint.textContent = photo
-    ? 'Scroll to move around · Ctrl+scroll to zoom · Hold Shift to constrain · Select (↖) moves your marks'
-    : 'Hold Shift to constrain · Select (↖) moves and resizes anything · Delete removes it';
+  // A tool is named with its button's own icon beside the word. The hint used to
+  // say "Select (↖)", an arrow the button stopped wearing when it became a dashed
+  // box — so it pointed at nothing on screen.
+  const toolIcon = (name) => {
+    const icon = document.createElement('span');
+    icon.className = `draw-hint-icon draw-hint-${name}`;
+    icon.setAttribute('aria-hidden', 'true');
+    return icon;
+  };
+  hint.append(...(photo
+    ? ['Scroll to move around · Ctrl+scroll to zoom · Hold Shift for straight lines · Crop ', toolIcon('crop'),
+      ' keeps just a part · Select ', toolIcon('select'), ' moves or resizes what you drew']
+    : ['Hold Shift for straight lines and even shapes · Crop ', toolIcon('crop'),
+      ' keeps just a part · Select ', toolIcon('select'), ' moves or resizes what you drew, and Delete removes it']));
 
   const status = document.createElement('div');
   status.className = 'draw-status';
@@ -598,15 +655,32 @@ export function showDrawPanel({
   const confirmText = document.createElement('span');
   confirmText.textContent = photo ? 'Discard your changes to this photo?' : 'Discard this drawing?';
   const keepButton = button('share-link-copy draw-keep', photo ? 'Keep editing' : 'Keep drawing');
+  // Discard keeps its place and its meaning — the changes go, the note stays. The
+  // offer to delete the note is outlined, as the further step it is, and comes
+  // FIRST: this row appears under a pointer that has just clicked Cancel, and what
+  // lands there must be "Keep editing", never the button that deletes.
+  const deleteNoteButton = onDeleteNote
+    ? button('share-link-copy draw-delete-note', 'Delete note too', 'Move this captured note to Trash')
+    : null;
   const discardButton = button('share-link-done danger draw-discard', 'Discard');
-  confirmRow.append(confirmText, keepButton, discardButton);
+  // With nothing changed there is nothing to discard, so the last button is the
+  // plain way out instead: close, and keep the note. Blue, because it loses nothing.
+  const keepNoteButton = onDeleteNote ? button('share-link-done draw-keep-note', 'Keep note') : null;
+  if (keepNoteButton) keepNoteButton.hidden = true;
+  confirmRow.append(
+    confirmText,
+    ...(deleteNoteButton ? [deleteNoteButton] : []),
+    keepButton,
+    ...(keepNoteButton ? [keepNoteButton] : []),
+    discardButton,
+  );
 
-  // The text toolbar and the hint take turns in one row of fixed height. When the
-  // toolbar was a row of its own, picking or leaving the Text tool grew or shrank
-  // the centred dialog, and the drawing jumped by half that row each time.
+  // The text toolbar, the crop bar and the hint take turns in one row of fixed
+  // height. When the toolbar was a row of its own, picking or leaving the Text tool
+  // grew or shrank the centred dialog, and the drawing jumped by half that row each time.
   const optionsRow = document.createElement('div');
   optionsRow.className = 'draw-options';
-  optionsRow.append(textBar, hint);
+  optionsRow.append(textBar, cropBar, hint);
 
   dialog.append(header, tools, optionsRow, surface, status, footer, confirmRow);
   backdrop.appendChild(dialog);
@@ -655,17 +729,33 @@ export function showDrawPanel({
 
   /* ---------------------------------------------------------------- view */
 
+  // The part of the drawing that is shown and will be saved: the crop, or all of
+  // it. The Crop tool shows everything again, so a frame can be dragged back out.
+  function frameRect() {
+    return (tool !== CROP && cropOf(state.items)) || { x: 0, y: 0, width: docWidth, height: docHeight };
+  }
+
   // Keep the photo on screen: centred while it fits, edge to edge once it overflows.
   function clampView() {
-    const width = docWidth * view.zoom;
-    const height = docHeight * view.zoom;
-    view.x = width <= cssWidth ? (cssWidth - width) / 2 : Math.min(0, Math.max(cssWidth - width, view.x));
-    view.y = height <= cssHeight ? (cssHeight - height) / 2 : Math.min(0, Math.max(cssHeight - height, view.y));
+    const kept = frameRect();
+    const width = kept.width * view.zoom;
+    const height = kept.height * view.zoom;
+    const left = kept.x * view.zoom;
+    const top = kept.y * view.zoom;
+    view.x = width <= cssWidth
+      ? (cssWidth - width) / 2 - left
+      : Math.min(0 - left, Math.max(cssWidth - width - left, view.x)); // 0 − left: never −0
+    view.y = height <= cssHeight
+      ? (cssHeight - height) / 2 - top
+      : Math.min(0 - top, Math.max(cssHeight - height - top, view.y));
   }
 
   // Zooming out stops at half the starting size — or, for a capture far taller than
   // the window, at the size that shows all of it, as in the photo viewer.
-  const minZoom = () => Math.min(MIN_ZOOM, cssWidth / docWidth, cssHeight / docHeight);
+  const minZoom = () => {
+    const kept = frameRect();
+    return Math.min(MIN_ZOOM, cssWidth / kept.width, cssHeight / kept.height);
+  };
 
   // `anchor` (canvas coordinates) stays still, so the part under the pointer grows in place.
   function setZoom(value, anchor = { x: cssWidth / 2, y: cssHeight / 2 }) {
@@ -687,12 +777,13 @@ export function showDrawPanel({
     invalidate();
   }
 
-  // The part of the drawing on screen, clipped to the drawing itself.
+  // The part of the drawing on screen, clipped to what is kept of the drawing.
   function visibleRect() {
-    const x0 = Math.max(0, -view.x / view.zoom);
-    const y0 = Math.max(0, -view.y / view.zoom);
-    const x1 = Math.min(docWidth, (cssWidth - view.x) / view.zoom);
-    const y1 = Math.min(docHeight, (cssHeight - view.y) / view.zoom);
+    const kept = frameRect();
+    const x0 = Math.max(kept.x, -view.x / view.zoom);
+    const y0 = Math.max(kept.y, -view.y / view.zoom);
+    const x1 = Math.min(kept.x + kept.width, (cssWidth - view.x) / view.zoom);
+    const y1 = Math.min(kept.y + kept.height, (cssHeight - view.y) / view.zoom);
     return { x: x0, y: y0, width: Math.max(1, x1 - x0), height: Math.max(1, y1 - y0) };
   }
 
@@ -706,7 +797,9 @@ export function showDrawPanel({
     track.appendChild(thumb);
     let grab = null;
     let ratio = 1; // drawing pixels on screen per pixel of thumb travel
-    const span = () => (vertical ? docHeight : docWidth) * view.zoom;
+    // What there is to scroll over is the kept part, which a crop moves and shrinks.
+    const span = () => (vertical ? frameRect().height : frameRect().width) * view.zoom;
+    const start = () => (vertical ? frameRect().y : frameRect().x) * view.zoom;
     const port = () => (vertical ? cssHeight : cssWidth);
     thumb.addEventListener('pointerdown', (event) => {
       event.preventDefault();
@@ -731,7 +824,7 @@ export function showDrawPanel({
       const size = Math.max(MIN_THUMB, length * (port() / span()));
       const travel = Math.max(1, length - size);
       ratio = (span() - port()) / travel;
-      const at = (-(vertical ? view.y : view.x) / (span() - port())) * travel;
+      const at = (-((vertical ? view.y : view.x) + start()) / (span() - port())) * travel;
       thumb.style[vertical ? 'height' : 'width'] = `${size}px`;
       thumb.style.transform = vertical ? `translateY(${at}px)` : `translateX(${at}px)`;
     }
@@ -740,6 +833,15 @@ export function showDrawPanel({
 
   // The DOM half of the view: the photo and the text box move with the canvas.
   function syncView() {
+    // A crop hides what it leaves out. The photo is an element of its own, so it is
+    // clipped here; a blank page IS the canvas, so the canvas is. Either way the
+    // grey of the surface shows through, which marks what will not be saved.
+    const kept = frameRect();
+    const cropped = kept.width < docWidth || kept.height < docHeight;
+    (photo ? photoEl : canvas).style.clipPath = cropped
+      ? `inset(${kept.y}px ${docWidth - kept.x - kept.width}px ${docHeight - kept.y - kept.height}px ${kept.x}px)`
+      : '';
+    surface.classList.toggle('cropped', cropped);
     if (!photo) return;
     const transform = `translate(${view.x}px, ${view.y}px) scale(${view.zoom})`;
     photoEl.style.transform = transform;
@@ -810,6 +912,50 @@ export function showDrawPanel({
     ctx.restore();
   }
 
+  // The frame the Crop tool is proposing: everything outside it goes dim, so what
+  // is left bright is what will be kept.
+  function paintCrop() {
+    if (tool !== CROP || !cropDraft) return;
+    const { x, y, width: w, height: h } = cropDraft;
+    const grip = onScreen(HANDLE);
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = 'rgba(32, 33, 36, 0.55)';
+    ctx.beginPath();
+    ctx.rect(0, 0, docWidth, docHeight);
+    ctx.rect(x, y, w, h);
+    ctx.fill('evenodd');
+    // White under a dashed blue line, so the frame shows on any picture.
+    ctx.lineWidth = onScreen(1.5);
+    ctx.strokeStyle = '#ffffff';
+    ctx.strokeRect(x, y, w, h);
+    ctx.strokeStyle = '#1a73e8';
+    ctx.setLineDash?.([onScreen(6), onScreen(4)]);
+    ctx.strokeRect(x, y, w, h);
+    ctx.setLineDash?.([]);
+    // A grip on each corner and each side. A side's grip sits in the middle of the
+    // part of that side on screen: the true middle of a page-long frame is a long
+    // scroll away, and a grip nobody can see invites nobody to drag it.
+    const seen = visibleRect();
+    const middle = (from, length, seenFrom, seenLength) => {
+      const a = Math.max(from, seenFrom);
+      const b = Math.min(from + length, seenFrom + seenLength);
+      return b > a ? (a + b) / 2 : from + length / 2;
+    };
+    const midX = middle(x, w, seen.x, seen.width);
+    const midY = middle(y, h, seen.y, seen.height);
+    ctx.fillStyle = '#ffffff';
+    ctx.lineWidth = onScreen(1);
+    for (const [gx, gy] of [
+      [x, y], [x + w, y], [x + w, y + h], [x, y + h],
+      [midX, y], [x + w, midY], [midX, y + h], [x, midY],
+    ]) {
+      ctx.fillRect(gx - grip / 2, gy - grip / 2, grip, grip);
+      ctx.strokeRect(gx - grip / 2, gy - grip / 2, grip, grip);
+    }
+    ctx.restore();
+  }
+
   function paint() {
     frame = 0;
     syncView();
@@ -819,18 +965,24 @@ export function showDrawPanel({
     if (photo) {
       ctx.translate(view.x, view.y);
       ctx.scale(view.zoom, view.zoom);
-      // Ink past the photo's edge is not saved, so it is not shown either.
+    }
+    // Ink past the photo's edge, or outside a crop, is not saved, so it is not
+    // shown either.
+    const kept = frameRect();
+    const clipped = photo || kept.width < docWidth || kept.height < docHeight;
+    if (clipped) {
       ctx.save();
       ctx.beginPath();
-      ctx.rect(0, 0, docWidth, docHeight);
+      ctx.rect(kept.x, kept.y, kept.width, kept.height);
       ctx.clip();
     }
     // The box being edited is hidden here: its overlay is already showing it,
     // and painting both stacks the same text twice.
     replay(ctx, paintableItems(state, editing ? editing.index : null));
-    if (photo) ctx.restore();
-    // Chrome only — both are drawn after replay, so neither ever exports.
+    if (clipped) ctx.restore();
+    // Chrome only — all of it is drawn after replay, so none of it ever exports.
     paintSelection();
+    paintCrop();
     paintCursor();
     ctx.restore();
   }
@@ -838,15 +990,17 @@ export function showDrawPanel({
   function syncControls() {
     // An open photo can always be saved: a full-page capture opens here on its own, and
     // someone who only wanted to look at it needs Save to do something. A blank sketch, or
-    // a photo that has not opened, has nothing to save.
-    saveButton.disabled = photo ? !background : isEmpty(state);
+    // a photo that has not opened, has nothing to save — and a crop of a blank page is
+    // still a blank page.
+    saveButton.disabled = photo ? !background : !hasMarks(state);
     undoButton.disabled = !canUndo(state);
     redoButton.disabled = !canRedo(state);
-    clearButton.disabled = isEmpty(state);
+    clearButton.disabled = !hasMarks(state);
     // Hide the OS cursor for brush tools: the ring is the cursor, and showing
     // both reads as two pointers.
     canvas.classList.toggle('brush', isFreehandTool(tool));
     canvas.classList.toggle('texting', tool === TEXT);
+    canvas.classList.toggle('cropping', tool === CROP);
     const fillable = isFillable(tool);
     fillButton.disabled = !fillable;
     fillButton.classList.toggle('active', fill && fillable);
@@ -855,9 +1009,29 @@ export function showDrawPanel({
     fillSwatch.style.borderColor = color;
     syncSize();
     syncTextBar();
+    syncCropBar();
+    syncConfirmRow();
+  }
+
+  // The size shown is the size the saved image would be: the photo's own pixels,
+  // or the screen's for a drawing.
+  function syncCropBar() {
+    cropBar.hidden = tool !== CROP;
+    if (cropBar.hidden) return;
+    const scale = background ? background.width / docWidth : dpr;
+    // Rounded edge by edge, the way the export rounds, so this is the size saved.
+    const pixels = (from, length) => Math.round((from + length) * scale) - Math.round(from * scale);
+    cropInfo.textContent = cropDraft
+      ? `${pixels(cropDraft.x, cropDraft.width)} × ${pixels(cropDraft.y, cropDraft.height)} px · Enter to crop, Esc to cancel`
+      : 'Drag over the part you want to keep';
+    cropApplyButton.disabled = !cropDraft;
+    cropResetButton.hidden = !cropOf(state.items);
   }
 
   function invalidate() {
+    // What is kept can change under the view — a crop applied, undone, or opened
+    // up again by the Crop tool — and the view has to follow it.
+    if (background) clampView();
     syncControls();
     if (!frame) frame = raf(paint);
   }
@@ -901,6 +1075,108 @@ export function showDrawPanel({
     invalidate();
   }
 
+  /* ---------------------------------------------------------------- crop */
+
+  const isCropDrag = () => !!drag && drag.mode.startsWith('crop');
+  const CROP_CURSORS = {
+    n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize',
+    nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize', move: 'move',
+  };
+  const cropHit = (x, y) => cropHandleAt(cropDraft, x, y, onScreen(HANDLE_GRAB));
+
+  // A press on the frame's edge resizes it, inside it moves it, and anywhere else
+  // starts a new one. `at` is the press in canvas pixels, for the edge scrolling.
+  function beginCropDrag(event, x, y) {
+    const at = canvasPoint(event);
+    const hit = cropHit(x, y);
+    if (hit === 'move') {
+      drag = { mode: 'crop-move', offsetX: x - cropDraft.x, offsetY: y - cropDraft.y, at };
+    } else if (hit) {
+      // Hold the edge where it was taken, so it does not jump to meet the pointer.
+      const edgeX = hit.includes('w') ? cropDraft.x : hit.includes('e') ? cropDraft.x + cropDraft.width : x;
+      const edgeY = hit.includes('n') ? cropDraft.y : hit.includes('s') ? cropDraft.y + cropDraft.height : y;
+      drag = { mode: 'crop-resize', handle: hit, box: { ...cropDraft }, dx: x - edgeX, dy: y - edgeY, at };
+    } else {
+      cropDraft = null;
+      drag = { mode: 'crop-new', x0: x, y0: y, at };
+    }
+    lastPointer = event;
+  }
+
+  function updateCropDrag(x, y) {
+    if (drag.mode === 'crop-move') {
+      cropDraft = moveCropRect(cropDraft, x - drag.offsetX, y - drag.offsetY, docWidth, docHeight);
+    } else if (drag.mode === 'crop-resize') {
+      cropDraft = resizeCropRect(drag.box, drag.handle, x - drag.dx, y - drag.dy, docWidth, docHeight);
+    } else {
+      const end = shiftHeld ? squareBox(drag.x0, drag.y0, x, y) : { x1: x, y1: y };
+      const rect = cropRect(drag.x0, drag.y0, end.x1, end.y1, docWidth, docHeight);
+      cropDraft = rect.width > 0 && rect.height > 0 ? rect : null;
+    }
+  }
+
+  // Dragging a frame to the edge of the window scrolls the photo that way, faster
+  // the further past the edge the pointer is. A page-long capture never fits on
+  // screen, so without this a frame could only be as tall as the window. An edge
+  // counts only once the pointer has headed for it: a drag that merely STARTS
+  // near the top must not scroll up while it is being pulled down.
+  function edgePush(at, from, size) {
+    if (at < EDGE_ZONE && at < from - EDGE_SLACK) return -Math.min(EDGE_MAX_STEP, (EDGE_ZONE - at) * EDGE_GAIN);
+    if (at > size - EDGE_ZONE && at > from + EDGE_SLACK) return Math.min(EDGE_MAX_STEP, (at - size + EDGE_ZONE) * EDGE_GAIN);
+    return 0;
+  }
+
+  function stepAutoPan() {
+    autoPan = 0;
+    if (closed || !background || !isCropDrag() || !lastPointer) return;
+    const at = canvasPoint(lastPointer);
+    const dx = edgePush(at.x, drag.at.x, cssWidth);
+    const dy = edgePush(at.y, drag.at.y, cssHeight);
+    if (!dx && !dy) return;
+    const from = { x: view.x, y: view.y };
+    panBy(dx, dy);
+    if (view.x === from.x && view.y === from.y) return; // nothing left to scroll that way
+    followPointer();
+    autoPan = raf(stepAutoPan);
+  }
+
+  // The view moved under a still pointer: the frame being dragged goes with it.
+  function followPointer() {
+    if (!isCropDrag() || !lastPointer) return;
+    const { x, y } = pointAt(lastPointer);
+    updateCropDrag(x, y);
+    invalidate();
+  }
+
+  // Applying is what makes the frame a crop, as one undo step. A frame around the
+  // whole picture is no crop at all, and removes one that was there.
+  function applyCrop() {
+    if (tool !== CROP || !cropDraft) return false;
+    const whole = cropDraft.x <= 0.5 && cropDraft.y <= 0.5
+      && cropDraft.width >= docWidth - 1 && cropDraft.height >= docHeight - 1;
+    const crop = whole ? null : cropDraft;
+    setCrop(state, crop);
+    // What is kept is a new, smaller picture, shown from its top the way a capture
+    // opens — not from wherever the drag that framed it happened to end.
+    if (background && crop) {
+      view.x = -crop.x * view.zoom;
+      view.y = -crop.y * view.zoom;
+    }
+    setTool(toolBeforeCrop); // out of the Crop tool, so the result is what shows
+    return true;
+  }
+
+  // Undo, Redo and Clear can all change the crop under the Crop tool's frame.
+  function stepHistory(step) {
+    selected = null;
+    const before = JSON.stringify(cropOf(state.items));
+    step(state);
+    const crop = cropOf(state.items);
+    // Only when the crop itself changed: undoing a pen stroke leaves the frame be.
+    if (tool === CROP && JSON.stringify(crop) !== before) cropDraft = crop;
+    invalidate();
+  }
+
   /* ------------------------------------------------------------- pointer */
 
   canvas.addEventListener('pointerdown', (event) => {
@@ -910,6 +1186,12 @@ export function showDrawPanel({
     canvas.setPointerCapture?.(event.pointerId);
     shiftHeld = !!event.shiftKey;
     const { x, y } = pointAt(event);
+
+    if (tool === CROP) {
+      beginCropDrag(event, x, y);
+      invalidate();
+      return;
+    }
 
     if (tool === SELECT) {
       if (selected != null && rotateGripAt(x, y)) {
@@ -961,11 +1243,17 @@ export function showDrawPanel({
 
   canvas.addEventListener('pointermove', (event) => {
     shiftHeld = !!event.shiftKey;
+    lastPointer = event;
     const { x, y } = pointAt(event);
     cursor = { x, y };
+    // The cursor says what a press here would do to the frame.
+    if (tool === CROP && !drag) canvas.style.cursor = CROP_CURSORS[cropHit(x, y)] || '';
     if (!drag) { invalidate(); return; } // still repaint, so the ring follows
 
-    if (drag.mode === 'draw') {
+    if (isCropDrag()) {
+      updateCropDrag(x, y);
+      if (!autoPan) autoPan = raf(stepAutoPan);
+    } else if (drag.mode === 'draw') {
       if (isFreehandTool(tool)) {
         if (shiftHeld) straightenStroke(state, { x, y, constrain: true });
         else extendStroke(state, { x, y });
@@ -998,7 +1286,11 @@ export function showDrawPanel({
       canvas.releasePointerCapture(event.pointerId);
     }
     if (!drag) return;
-    if (drag.mode === 'draw') {
+    if (isCropDrag()) {
+      // A click, or a sliver too thin to mean anything, leaves no frame behind.
+      if (drag.mode === 'crop-new' && cropDraft
+        && (cropDraft.width < MIN_CROP || cropDraft.height < MIN_CROP)) cropDraft = null;
+    } else if (drag.mode === 'draw') {
       if (isFreehandTool(tool)) endStroke(state);
       else endShape(state);
     } else {
@@ -1016,6 +1308,12 @@ export function showDrawPanel({
   // and forth over a caption is two quick clicks as well, and it must keep erasing
   // rather than flip to the Text tool and reopen the caption it was rubbing out.
   canvas.addEventListener('dblclick', (event) => {
+    // Inside the crop frame, a double-click applies it — Enter for the mouse hand.
+    if (tool === CROP) {
+      const at = pointAt(event);
+      if (cropHandleAt(cropDraft, at.x, at.y) === 'move') { event.preventDefault(); applyCrop(); }
+      return;
+    }
     if (tool !== SELECT && tool !== TEXT) return;
     const { x, y } = pointAt(event);
     const index = itemAt(state, x, y);
@@ -1081,7 +1379,7 @@ export function showDrawPanel({
   function syncTextBar() {
     const active = tool === TEXT || !!editing;
     textBar.hidden = !active;
-    hint.hidden = active;
+    hint.hidden = active || tool === CROP;
     fontSelect.value = textStyle.font;
     textSizeSelect.value = String(textSize);
     textColorRow.sync();
@@ -1123,7 +1421,8 @@ export function showDrawPanel({
 
   function openTextBox(x, y) {
     commitTextBox();
-    const width = Math.max(60, Math.min(TEXT_BOX_WIDTH, docWidth - x - 8));
+    const kept = frameRect();
+    const width = Math.max(60, Math.min(TEXT_BOX_WIDTH, kept.x + kept.width - x - 8));
     const index = addText(state, {
       x, y, width, height: textSize * LINE_HEIGHT, ...textStyle, color: textColor, size: textSize,
     });
@@ -1232,7 +1531,13 @@ export function showDrawPanel({
 
   function setTool(next) {
     commitTextBox(); // switching tools finishes the text you were typing
+    if (next === CROP && tool !== CROP) toolBeforeCrop = tool;
     tool = next;
+    // The Crop tool opens on the crop already made, ready to be adjusted. A frame
+    // that was never applied goes with the tool: only Enter, the Crop button or
+    // Save turns one into a crop.
+    cropDraft = next === CROP ? cropOf(state.items) : null;
+    canvas.style.cursor = '';
     for (const el of toolButtons) el.classList.toggle('active', el.dataset.tool === next);
     if (next !== SELECT) selected = null;
     invalidate();
@@ -1290,9 +1595,17 @@ export function showDrawPanel({
   frontButton.addEventListener('click', () => reorder(bringToFront));
   backButton.addEventListener('click', () => reorder(sendToBack));
 
-  undoButton.addEventListener('click', () => { selected = null; undo(state); invalidate(); });
-  redoButton.addEventListener('click', () => { selected = null; redo(state); invalidate(); });
-  clearButton.addEventListener('click', () => { selected = null; clear(state); invalidate(); });
+  undoButton.addEventListener('click', () => stepHistory(undo));
+  redoButton.addEventListener('click', () => stepHistory(redo));
+  clearButton.addEventListener('click', () => stepHistory(clear));
+
+  cropApplyButton.addEventListener('click', applyCrop);
+  // Back to the whole picture, and still in the Crop tool to frame it again.
+  cropResetButton.addEventListener('click', () => stepHistory((s) => setCrop(s, null)));
+
+  // Whether closing now would lose anything. A crop of a photo is work; a crop of a
+  // page with nothing on it is not.
+  function hasWork() { return photo ? !isEmpty(state) : hasMarks(state); }
 
   function close() {
     closed = true;
@@ -1301,6 +1614,7 @@ export function showDrawPanel({
     document.removeEventListener('paste', onPaste);
     document.removeEventListener('pointerdown', releaseHold, true);
     if (frame) cancelRaf(frame);
+    if (autoPan) cancelRaf(autoPan);
     resizeObserver?.disconnect();
     backdrop.remove();
     previouslyFocused?.focus?.();
@@ -1311,10 +1625,28 @@ export function showDrawPanel({
   // a blocking browser modal is out of place inside an extension page.
   function requestClose() {
     commitTextBox(); // so "is there work here?" counts what was just typed
-    if (isEmpty(state)) { close(); return; }
+    const changed = hasWork();
+    if (!changed && !onDeleteNote) { close(); return; }
     confirmRow.hidden = false;
     footer.hidden = true;
-    keepButton.focus();
+    syncConfirmRow();
+    // Focus goes to the answer that loses nothing. With no changes that is "Keep
+    // note", so Enter does what Cancel alone used to do.
+    (changed || !keepNoteButton ? keepButton : keepNoteButton).focus();
+  }
+
+  // After a capture the one row asks either question: what to do with the changes,
+  // or — when there are none — only whether the capture is wanted at all. It follows
+  // the drawing while it is up: a photo pasted or a mark undone under an open
+  // question changes which question it is, and "Keep note" must never be the
+  // button that quietly drops changes made after it appeared.
+  function syncConfirmRow() {
+    if (!onDeleteNote || confirmRow.hidden) return;
+    const changed = hasWork();
+    confirmText.textContent = changed ? 'Discard your changes to this photo?' : 'Keep the captured note?';
+    deleteNoteButton.textContent = changed ? 'Delete note too' : 'Delete note';
+    discardButton.hidden = !changed;
+    keepNoteButton.hidden = changed;
   }
   function keepDrawing() {
     confirmRow.hidden = true;
@@ -1326,11 +1658,23 @@ export function showDrawPanel({
     // While a text box is open the textarea owns the keyboard: Backspace must
     // delete a character, not the box, and Ctrl+Z must undo typing, not strokes.
     if (editing) return;
+    if (tool === CROP && event.key === 'Enter' && cropDraft) {
+      // Enter on a focused button belongs to that button — except the Crop tool's
+      // own, which is where the focus is left by the click that picked the tool.
+      const control = event.target?.closest?.('button, input, select, textarea');
+      if (!control || control.dataset?.tool === CROP) {
+        event.preventDefault();
+        applyCrop();
+        return;
+      }
+    }
     if (event.key === 'Escape') {
       event.preventDefault();
       // Escape clears a selection first, so it never means "throw away my work"
-      // when the user only meant to deselect a photo.
+      // when the user only meant to deselect a photo. Out of the Crop tool, by the
+      // same rule, it only backs out of cropping.
       if (selected != null) { selectItem(null); return; }
+      if (tool === CROP) { setTool(toolBeforeCrop); return; }
       requestClose();
       return;
     }
@@ -1343,8 +1687,8 @@ export function showDrawPanel({
     if (background && viewKey(event)) return;
     if (!(event.ctrlKey || event.metaKey)) return;
     const key = String(event.key).toLowerCase();
-    if (key === 'z' && !event.shiftKey) { event.preventDefault(); selected = null; undo(state); invalidate(); }
-    else if ((key === 'z' && event.shiftKey) || key === 'y') { event.preventDefault(); selected = null; redo(state); invalidate(); }
+    if (key === 'z' && !event.shiftKey) { event.preventDefault(); stepHistory(undo); }
+    else if ((key === 'z' && event.shiftKey) || key === 'y') { event.preventDefault(); stepHistory(redo); }
   }
   document.addEventListener('keydown', onKeydown);
 
@@ -1383,6 +1727,7 @@ export function showDrawPanel({
     } else {
       panBy(dx, dy);
     }
+    followPointer(); // a crop frame in mid-drag stretches as the photo scrolls under it
   }, { passive: false });
   zoomOutButton.addEventListener('click', () => setZoom(view.zoom / ZOOM_STEP));
   zoomInButton.addEventListener('click', () => setZoom(view.zoom * ZOOM_STEP));
@@ -1391,14 +1736,28 @@ export function showDrawPanel({
   closeButton.addEventListener('click', requestClose);
   cancelButton.addEventListener('click', requestClose);
   keepButton.addEventListener('click', keepDrawing);
-  discardButton.addEventListener('click', close);
+  // The second click of a double-click on Cancel lands on this row, which was not
+  // there for the first. It has read nothing, so it may not throw anything away:
+  // `detail` counts the clicks of a burst, and only the first is an answer.
+  const deliberate = (event) => !(event.detail > 1);
+  discardButton.addEventListener('click', (event) => { if (deliberate(event)) close(); });
+  keepNoteButton?.addEventListener('click', close);
+  deleteNoteButton?.addEventListener('click', (event) => {
+    if (!deliberate(event)) return;
+    // Close first, as Save does: the note's owner reports how deleting it went.
+    close();
+    Promise.resolve().then(onDeleteNote).catch((error) => console.warn('Could not delete the note:', error));
+  });
   backdrop.addEventListener('click', (event) => { if (event.target === backdrop) requestClose(); });
 
   saveButton.addEventListener('click', async () => {
     commitTextBox(); // never export a half-typed box
-    if (isEmpty(state)) {
-      // No marks, so the photo is already right. Re-encoding it would only make it larger
-      // and softer, so it is left alone, byte for byte.
+    // A frame still on screen is what the person expects to get: the dimmed part
+    // is plainly not in it. Saving the whole picture instead would be the surprise.
+    applyCrop();
+    if (!hasWork()) {
+      // No marks and no crop, so the photo is already right. Re-encoding it would only
+      // make it larger and softer, so it is left alone, byte for byte.
       if (photo) close();
       return;
     }
@@ -1408,11 +1767,18 @@ export function showDrawPanel({
     let blob;
     try {
       // A photo comes back at its own pixel size, in its own format; a drawing at
-      // the screen's density.
+      // the screen's density. Either one only as far as its crop, if it has one.
+      const marks = marksOf(state.items);
+      const crop = cropOf(state.items);
+      const options = {
+        ...(background ? { background: background.el, type: photoOutputType(photo) } : {}),
+        ...(crop ? { crop } : {}),
+      };
       blob = background
-        ? await exportBlob(state.items, docWidth, docHeight, background.width / docWidth,
-          { background: background.el, type: photoOutputType(photo) })
-        : await exportBlob(state.items, docWidth, docHeight, dpr);
+        ? await exportBlob(marks, docWidth, docHeight, background.width / docWidth, options)
+        : crop
+          ? await exportBlob(marks, docWidth, docHeight, dpr, options)
+          : await exportBlob(marks, docWidth, docHeight, dpr);
     } catch {
       status.textContent = photo
         ? 'Could not save the photo. Your marks are still here.'
